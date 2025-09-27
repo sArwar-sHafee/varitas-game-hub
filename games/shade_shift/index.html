@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shade Shift</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
+            background: #1a1a1a;
+            color: #f0f0f0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        canvas {
+            background: #2a2a2a;
+            display: block;
+            border-radius: 10px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // ES6+ JavaScript Game Code
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // --- GAME CONFIGURATION ---
+        const PALETTE = ['#FF3B30', '#FF9500', '#FFCC00', '#4CD964', '#007AFF', '#5856D6'];
+        const PLAYER_SIZE_RATIO = 0.1;
+        const SHAPE_SIZE_RATIO = 0.08;
+        const PARTICLE_COUNT = 30;
+        const INITIAL_SPAWN_RATE = 1500; // ms
+        const INITIAL_SHAPE_SPEED = 0.15;
+        const ACCELERATION = 0.0001;
+        const HIGH_SCORE_KEY = 'shadeShiftHighScore';
+
+        // --- GAME STATE ---
+        let gameState = 'start'; // 'start', 'playing', 'gameOver'
+        let score = 0;
+        let highScore = localStorage.getItem(HIGH_SCORE_KEY) || 0;
+        let canvasSize = { w: 0, h: 0 };
+        let player;
+        let fallingShapes = [];
+        let particles = [];
+        let timeSinceLastSpawn = 0;
+        let currentSpawnRate = INITIAL_SPAWN_RATE;
+        let currentShapeSpeed = INITIAL_SHAPE_SPEED;
+        let lastTime = 0;
+        let backgroundGradientAngle = 0;
+
+        // --- AUDIO CONTEXT for Sound Effects ---
+        let audioCtx;
+        function setupAudio() {
+            if (!audioCtx) {
+                try {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) {
+                    console.error("Web Audio API is not supported in this browser");
+                }
+            }
+        }
+
+        function playSound(type) {
+            if (!audioCtx) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+
+            switch (type) {
+                case 'shift':
+                    oscillator.type = 'triangle';
+                    oscillator.frequency.setValueAtTime(220, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.2);
+                    break;
+                case 'match':
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.1);
+                    gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.2);
+                    break;
+                case 'gameOver':
+                    oscillator.type = 'sawtooth';
+                    oscillator.frequency.setValueAtTime(220, audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(110, audioCtx.currentTime + 0.5);
+                    gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.5);
+                    break;
+                case 'click':
+                     oscillator.type = 'square';
+                    oscillator.frequency.setValueAtTime(300, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.1);
+                    break;
+            }
+
+            oscillator.start(audioCtx.currentTime);
+            oscillator.stop(audioCtx.currentTime + 0.5);
+        }
+
+        // --- CLASSES ---
+        class Player {
+            constructor() {
+                this.size = canvasSize.w * PLAYER_SIZE_RATIO;
+                this.x = canvasSize.w / 2;
+                this.y = canvasSize.h - this.size * 1.5;
+                this.colorIndex = 0;
+                this.targetColor = PALETTE[this.colorIndex];
+                this.displayColor = this.targetColor;
+                this.colorTransition = 0; // 0 to 1
+            }
+
+            draw() {
+                // Color transition logic
+                if (this.colorTransition < 1) {
+                    this.colorTransition += 0.1;
+                    this.displayColor = this.interpolateColor(this.prevColor || this.targetColor, this.targetColor, this.colorTransition);
+                }
+
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.beginPath();
+                ctx.moveTo(0, -this.size / 1.5);
+                ctx.lineTo(this.size / 1.5, this.size / 1.5);
+                ctx.lineTo(-this.size / 1.5, this.size / 1.5);
+                ctx.closePath();
+                ctx.fillStyle = this.displayColor;
+                ctx.shadowColor = this.displayColor;
+                ctx.shadowBlur = 15;
+                ctx.fill();
+                ctx.restore();
+            }
+
+            shiftColor(direction) {
+                this.prevColor = PALETTE[this.colorIndex];
+                this.colorIndex = (this.colorIndex + direction + PALETTE.length) % PALETTE.length;
+                this.targetColor = PALETTE[this.colorIndex];
+                this.colorTransition = 0;
+                playSound('shift');
+            }
+
+            // Simple linear interpolation for colors
+            interpolateColor(color1, color2, factor) {
+                const r1 = parseInt(color1.slice(1, 3), 16);
+                const g1 = parseInt(color1.slice(3, 5), 16);
+                const b1 = parseInt(color1.slice(5, 7), 16);
+                const r2 = parseInt(color2.slice(1, 3), 16);
+                const g2 = parseInt(color2.slice(3, 5), 16);
+                const b2 = parseInt(color2.slice(5, 7), 16);
+
+                const r = Math.round(r1 + factor * (r2 - r1));
+                const g = Math.round(g1 + factor * (g2 - g1));
+                const b = Math.round(b1 + factor * (b2 - b1));
+
+                return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+            }
+
+            resize() {
+                this.size = canvasSize.w * PLAYER_SIZE_RATIO;
+                this.x = canvasSize.w / 2;
+                this.y = canvasSize.h - this.size * 1.5;
+            }
+        }
+
+        class FallingShape {
+            constructor() {
+                this.size = canvasSize.w * SHAPE_SIZE_RATIO;
+                this.x = Math.random() * (canvasSize.w - this.size) + this.size / 2;
+                this.y = -this.size;
+                this.color = PALETTE[Math.floor(Math.random() * PALETTE.length)];
+                this.speed = currentShapeSpeed * canvasSize.h;
+                this.rotation = Math.random() * Math.PI * 2;
+                this.rotationSpeed = (Math.random() - 0.5) * 0.02;
+            }
+
+            update(deltaTime) {
+                this.y += this.speed * (deltaTime / 1000);
+                this.rotation += this.rotationSpeed;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+                ctx.beginPath();
+                ctx.rect(-this.size / 2, -this.size / 2, this.size, this.size);
+                ctx.fillStyle = this.color;
+                ctx.shadowColor = this.color;
+                ctx.shadowBlur = 10;
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.size = Math.random() * 5 + 2;
+                this.life = 1;
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 5 + 1;
+                this.vx = Math.cos(angle) * speed;
+                this.vy = Math.sin(angle) * speed;
+                this.gravity = 0.1;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vy += this.gravity;
+                this.life -= 0.02;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = this.life > 0 ? this.life : 0;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // --- GAME LOGIC ---
+        function init() {
+            score = 0;
+            fallingShapes = [];
+            particles = [];
+            timeSinceLastSpawn = 0;
+            currentSpawnRate = INITIAL_SPAWN_RATE;
+            currentShapeSpeed = INITIAL_SHAPE_SPEED;
+            player = new Player();
+            gameState = 'playing';
+        }
+
+        function spawnShape() {
+            if (timeSinceLastSpawn > currentSpawnRate) {
+                fallingShapes.push(new FallingShape());
+                timeSinceLastSpawn = 0;
+                if (currentSpawnRate > 500) {
+                    currentSpawnRate *= 0.99;
+                }
+            }
+        }
+
+        function update(deltaTime) {
+            if (gameState !== 'playing') return;
+
+            timeSinceLastSpawn += deltaTime;
+            spawnShape();
+
+            currentShapeSpeed += ACCELERATION * (deltaTime / 1000);
+
+            // Update shapes
+            for (let i = fallingShapes.length - 1; i >= 0; i--) {
+                const shape = fallingShapes[i];
+                shape.update(deltaTime);
+
+                // Collision check
+                if (shape.y + shape.size / 2 > player.y - player.size / 1.5) {
+                    if (Math.abs(shape.x - player.x) < player.size / 1.5) {
+                        if (shape.color === player.targetColor) {
+                            // Match
+                            score++;
+                            createParticles(player.x, player.y, shape.color);
+                            playSound('match');
+                        } else {
+                            // Game Over
+                            gameOver();
+                        }
+                        fallingShapes.splice(i, 1);
+                    }
+                }
+                
+                // Remove off-screen shapes
+                if (shape.y > canvasSize.h + shape.size) {
+                    fallingShapes.splice(i, 1);
+                }
+            }
+
+            // Update particles
+            for (let i = particles.length - 1; i >= 0; i--) {
+                particles[i].update();
+                if (particles[i].life <= 0) {
+                    particles.splice(i, 1);
+                }
+            }
+
+            // Update background gradient
+            backgroundGradientAngle += 0.0005;
+        }
+
+        function createParticles(x, y, color) {
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                particles.push(new Particle(x, y, color));
+            }
+        }
+
+        function gameOver() {
+            playSound('gameOver');
+            gameState = 'gameOver';
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem(HIGH_SCORE_KEY, highScore);
+            }
+        }
+
+        // --- DRAWING ---
+        function draw() {
+            // Clear canvas and draw animated background
+            const gradient = ctx.createLinearGradient(0, 0, canvasSize.w, canvasSize.h);
+            const color1 = `hsl(${backgroundGradientAngle * 100 % 360}, 30%, 15%)`;
+            const color2 = `hsl(${(backgroundGradientAngle * 100 + 180) % 360}, 40%, 20%)`;
+            gradient.addColorStop(0, color1);
+            gradient.addColorStop(1, color2);
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvasSize.w, canvasSize.h);
+
+            switch (gameState) {
+                case 'start':
+                    drawStartScreen();
+                    break;
+                case 'playing':
+                    drawGame();
+                    break;
+                case 'gameOver':
+                    drawGameOverScreen();
+                    break;
+            }
+        }
+
+        function drawGame() {
+            player.draw();
+            fallingShapes.forEach(shape => shape.draw());
+            particles.forEach(p => p.draw());
+            drawUI();
+        }
+        
+        function drawUI() {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            ctx.font = `${canvasSize.w * 0.1}px 'Segoe UI', sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.fillText(score, canvasSize.w / 2, 20);
+        }
+
+        function drawStartScreen() {
+            drawText('Shade Shift', canvasSize.w / 2, canvasSize.h * 0.25, canvasSize.w * 0.15, 'white');
+            
+            drawText('Match the falling blocks!', canvasSize.w / 2, canvasSize.h * 0.45, canvasSize.w * 0.05, '#ccc');
+
+            drawText('Controls:', canvasSize.w / 2, canvasSize.h * 0.6, canvasSize.w * 0.04, '#aaa');
+            drawText('⬅️ Left / ➡️ Right Arrow Keys', canvasSize.w / 2, canvasSize.h * 0.67, canvasSize.w * 0.04, '#aaa');
+            drawText('Click / Tap on screen sides', canvasSize.w / 2, canvasSize.h * 0.74, canvasSize.w * 0.04, '#aaa');
+            
+            drawButton('PLAY ▶️', canvasSize.w / 2, canvasSize.h * 0.88, canvasSize.w * 0.4, canvasSize.h * 0.1);
+        }
+
+        function drawGameOverScreen() {
+             drawText('Game Over', canvasSize.w / 2, canvasSize.h * 0.25, canvasSize.w * 0.15, '#FF3B30');
+             
+             drawText(`Score: ${score}`, canvasSize.w / 2, canvasSize.h * 0.45, canvasSize.w * 0.08, 'white');
+             drawText(`High Score: ${highScore}`, canvasSize.w / 2, canvasSize.h * 0.55, canvasSize.w * 0.06, '#FFCC00');
+
+             drawButton('RESTART 🔄', canvasSize.w / 2, canvasSize.h * 0.75, canvasSize.w * 0.5, canvasSize.h * 0.1);
+        }
+
+        function drawText(text, x, y, size, color) {
+            ctx.fillStyle = color;
+            ctx.font = `bold ${size}px 'Segoe UI', sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, x, y);
+        }
+
+        function drawButton(text, x, y, width, height) {
+            const cornerRadius = height / 4;
+            ctx.fillStyle = '#444';
+            ctx.strokeStyle = '#666';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo(x - width/2 + cornerRadius, y - height/2);
+            ctx.arcTo(x + width/2, y - height/2, x + width/2, y + height/2, cornerRadius);
+            ctx.arcTo(x + width/2, y + height/2, x - width/2, y + height/2, cornerRadius);
+            ctx.arcTo(x - width/2, y + height/2, x - width/2, y - height/2, cornerRadius);
+            ctx.arcTo(x - width/2, y - height/2, x + width/2, y - height/2, cornerRadius);
+            ctx.closePath();
+            ctx.stroke();
+            ctx.fill();
+
+            drawText(text, x, y, height * 0.4, 'white');
+        }
+
+        // --- GAME LOOP ---
+        function gameLoop(timestamp) {
+            const deltaTime = timestamp - lastTime;
+            lastTime = timestamp;
+
+            update(deltaTime);
+            draw();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- EVENT HANDLERS ---
+        function handleKeyDown(e) {
+            if (gameState === 'playing') {
+                if (e.key === 'ArrowLeft') {
+                    player.shiftColor(-1);
+                } else if (e.key === 'ArrowRight') {
+                    player.shiftColor(1);
+                }
+            }
+        }
+
+        function handleClick(e) {
+            setupAudio(); // Initialize audio on first user interaction
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            if (gameState === 'playing') {
+                if (x < canvasSize.w / 2) {
+                    player.shiftColor(-1);
+                } else {
+                    player.shiftColor(1);
+                }
+            } else { // 'start' or 'gameOver'
+                // Check if click is on the button
+                const btnW = (gameState === 'start') ? canvasSize.w * 0.4 : canvasSize.w * 0.5;
+                const btnH = canvasSize.h * 0.1;
+                const btnY = (gameState === 'start') ? canvasSize.h * 0.88 : canvasSize.h * 0.75;
+                const btnX = canvasSize.w / 2;
+
+                if (x > btnX - btnW/2 && x < btnX + btnW/2 && y > btnY - btnH/2 && y < btnY + btnH/2) {
+                    playSound('click');
+                    init();
+                }
+            }
+        }
+        
+        // --- RESIZING ---
+        function resizeCanvas() {
+            const aspectRatio = 9 / 16;
+            const screenHeight = window.innerHeight * 0.9;
+            const screenWidth = window.innerWidth * 0.9;
+            
+            if (screenWidth / screenHeight > aspectRatio) {
+                canvasSize.h = screenHeight;
+                canvasSize.w = screenHeight * aspectRatio;
+            } else {
+                canvasSize.w = screenWidth;
+                canvasSize.h = screenWidth / aspectRatio;
+            }
+
+            canvas.width = canvasSize.w;
+            canvas.height = canvasSize.h;
+            
+            if (player) {
+                player.resize();
+            }
+        }
+
+        // --- INITIALIZATION ---
+        window.addEventListener('resize', resizeCanvas);
+        window.addEventListener('keydown', handleKeyDown);
+        canvas.addEventListener('mousedown', handleClick);
+        
+        resizeCanvas();
+        requestAnimationFrame(gameLoop);
+
+    </script>
+</body>
+</html>

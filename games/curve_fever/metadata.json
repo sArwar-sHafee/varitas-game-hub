@@ -1,0 +1,8 @@
+{
+  "name": "Curve Fever",
+  "type": "snake game",
+  "folder": "curve_fever",
+  "description": "A fun snake game game where players can enjoy exciting gameplay!",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
