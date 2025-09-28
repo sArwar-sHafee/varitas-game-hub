@@ -1,0 +1,8 @@
+{
+  "name": "Shape Showdown",
+  "type": "rock paper scissors",
+  "folder": "shape_showdown",
+  "description": "Unleash your move in a lightning-fast duel where a single gesture determines victory. Bluff, predict, and counter your rival in this thrilling, split-second battle of wits",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

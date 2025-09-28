@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shape Showdown</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100%;
+            font-family: 'Arial', 'Helvetica', sans-serif;
+            background: linear-gradient(135deg, #232526 0%, #414345 100%);
+        }
+        canvas {
+            display: block;
+            background: #1a1a1a;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // ES6+ JavaScript Code
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.size = Math.random() * 7 + 3;
+                this.life = 1;
+                this.gravity = 0.2;
+                this.velX = Math.random() * 10 - 5;
+                this.velY = Math.random() * -10 - 2;
+            }
+
+            update(deltaTime) {
+                this.x += this.velX * deltaTime;
+                this.y += this.velY * deltaTime;
+                this.velY += this.gravity * deltaTime;
+                this.life -= 0.02 * deltaTime;
+                this.size -= 0.1 * deltaTime;
+            }
+
+            draw(ctx) {
+                if (this.life > 0 && this.size > 0) {
+                    ctx.save();
+                    ctx.globalAlpha = this.life;
+                    ctx.fillStyle = this.color;
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                }
+            }
+        }
+
+        class Game {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
+                this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                
+                this.gameState = 'start'; // start, countdown, reveal, gameOver
+                this.playerScore = 0;
+                this.cpuScore = 0;
+                this.maxScore = 3;
+
+                this.shapes = [
+                    { name: 'rock', emoji: '✊', beats: 'scissors' },
+                    { name: 'paper', emoji: '✋', beats: 'rock' },
+                    { name: 'scissors', emoji: '✌️', beats: 'paper' }
+                ];
+                
+                this.playerChoice = null;
+                this.cpuChoice = null;
+                this.result = null;
+                
+                this.buttons = [];
+                this.particles = [];
+                
+                this.lastTime = 0;
+                this.timer = 0;
+                this.animation = {
+                    playerY: 0,
+                    cpuY: 0,
+                    scale: 1
+                };
+
+                this.resize();
+                this.initListeners();
+                this.loop = this.loop.bind(this);
+            }
+
+            initListeners() {
+                window.addEventListener('resize', () => this.resize());
+                this.canvas.addEventListener('click', (e) => this.handleClick(e));
+                this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+                window.addEventListener('keydown', (e) => this.handleKeyDown(e));
+            }
+
+            resize() {
+                this.canvas.width = window.innerWidth;
+                this.canvas.height = window.innerHeight;
+                this.updateButtonPositions();
+            }
+
+            updateButtonPositions() {
+                const W = this.canvas.width;
+                const H = this.canvas.height;
+                const buttonWidth = Math.min(W * 0.2, 150);
+                const buttonHeight = buttonWidth;
+                const gap = buttonWidth * 0.3;
+                const totalWidth = this.shapes.length * buttonWidth + (this.shapes.length - 1) * gap;
+                
+                let startX = (W - totalWidth) / 2;
+                
+                this.buttons = this.shapes.map((shape, i) => ({
+                    ...shape,
+                    x: startX + i * (buttonWidth + gap),
+                    y: H * 0.75,
+                    width: buttonWidth,
+                    height: buttonHeight,
+                    isHovered: false
+                }));
+
+                // Add restart button for game over screen
+                this.restartButton = {
+                    text: "Play Again",
+                    x: W / 2 - 150,
+                    y: H * 0.65,
+                    width: 300,
+                    height: 60,
+                    isHovered: false
+                };
+            }
+
+            playSound(type) {
+                if (!this.audioCtx) return;
+
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+                gainNode.connect(this.audioCtx.destination);
+                oscillator.connect(gainNode);
+
+                let freq, duration, vol, attack=0.01, release=0.1;
+
+                switch (type) {
+                    case 'click':
+                        freq = 300; duration = 0.1; vol = 0.3;
+                        oscillator.type = 'triangle';
+                        break;
+                    case 'win':
+                        freq = 600; duration = 0.3; vol = 0.5; release = 0.3;
+                        oscillator.type = 'sine';
+                        break;
+                    case 'lose':
+                        freq = 200; duration = 0.4; vol = 0.4; release = 0.4;
+                        oscillator.type = 'sawtooth';
+                        break;
+                    case 'draw':
+                        freq = 440; duration = 0.2; vol = 0.3;
+                        oscillator.type = 'square';
+                        break;
+                    default: return;
+                }
+                
+                const now = this.audioCtx.currentTime;
+                gainNode.gain.setValueAtTime(0, now);
+                gainNode.gain.linearRampToValueAtTime(vol, now + attack);
+                oscillator.frequency.setValueAtTime(freq, now);
+
+                if (type === 'lose') {
+                    oscillator.frequency.linearRampToValueAtTime(freq / 2, now + duration);
+                }
+                if (type === 'win') {
+                    oscillator.frequency.linearRampToValueAtTime(freq * 1.5, now + duration);
+                }
+
+                gainNode.gain.linearRampToValueAtTime(0, now + duration);
+                oscillator.start(now);
+                oscillator.stop(now + duration);
+            }
+
+            handleKeyDown(e) {
+                if (this.gameState === 'start' && e.key === 'Enter') {
+                    this.startGame();
+                } else if (this.gameState === 'gameOver' && e.key === 'Enter') {
+                    this.resetGame();
+                } else if (this.gameState === 'play') {
+                    if (e.key === '1' || e.key === 'r') this.makeChoice(this.shapes[0]);
+                    if (e.key === '2' || e.key === 'p') this.makeChoice(this.shapes[1]);
+                    if (e.key === '3' || e.key === 's') this.makeChoice(this.shapes[2]);
+                }
+            }
+
+            isMouseOver(rect, mouseX, mouseY) {
+                return mouseX > rect.x && mouseX < rect.x + rect.width &&
+                       mouseY > rect.y && mouseY < rect.y + rect.height;
+            }
+
+            handleMouseMove(e) {
+                const rect = this.canvas.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+                
+                if (this.gameState === 'play') {
+                    this.buttons.forEach(button => button.isHovered = this.isMouseOver(button, mouseX, mouseY));
+                } else if (this.gameState === 'gameOver') {
+                    this.restartButton.isHovered = this.isMouseOver(this.restartButton, mouseX, mouseY);
+                }
+            }
+
+            handleClick(e) {
+                const rect = this.canvas.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+
+                if (this.gameState === 'start') {
+                    this.startGame();
+                } else if (this.gameState === 'play') {
+                    this.buttons.forEach(button => {
+                        if (this.isMouseOver(button, mouseX, mouseY)) {
+                            this.makeChoice(button);
+                        }
+                    });
+                } else if (this.gameState === 'gameOver') {
+                    if (this.isMouseOver(this.restartButton, mouseX, mouseY)) {
+                        this.resetGame();
+                    }
+                }
+            }
+
+            startGame() {
+                this.gameState = 'play';
+                this.playSound('click');
+            }
+
+            resetGame() {
+                this.playerScore = 0;
+                this.cpuScore = 0;
+                this.gameState = 'play';
+                this.playSound('click');
+            }
+
+            makeChoice(choice) {
+                this.playerChoice = choice;
+                this.cpuChoice = this.shapes[Math.floor(Math.random() * this.shapes.length)];
+                this.gameState = 'countdown';
+                this.timer = 3; // 3 second countdown/animation
+                this.animation.playerY = this.canvas.height;
+                this.animation.cpuY = -200;
+                this.playSound('click');
+            }
+            
+            determineWinner() {
+                if (this.playerChoice.name === this.cpuChoice.name) {
+                    this.result = 'DRAW!';
+                    this.playSound('draw');
+                } else if (this.playerChoice.beats === this.cpuChoice.name) {
+                    this.result = 'YOU WIN!';
+                    this.playerScore++;
+                    this.playSound('win');
+                    this.createParticles(this.canvas.width / 4, this.canvas.height / 2, 'gold');
+                } else {
+                    this.result = 'YOU LOSE!';
+                    this.cpuScore++;
+                    this.playSound('lose');
+                    this.createParticles(this.canvas.width * 3 / 4, this.canvas.height / 2, '#777');
+                }
+            }
+
+            createParticles(x, y, color) {
+                for (let i = 0; i < 50; i++) {
+                    this.particles.push(new Particle(x, y, color));
+                }
+            }
+
+            update(deltaTime) {
+                if (this.gameState === 'countdown') {
+                    this.timer -= deltaTime;
+                    
+                    const targetPlayerY = this.canvas.height / 2 - 100;
+                    const targetCpuY = this.canvas.height / 2 - 100;
+                    
+                    // Simple easing (lerp)
+                    this.animation.playerY += (targetPlayerY - this.animation.playerY) * 0.1;
+                    this.animation.cpuY += (targetCpuY - this.animation.cpuY) * 0.1;
+
+                    if (this.timer <= 1) { // Transition to reveal state
+                        this.gameState = 'reveal';
+                        this.determineWinner();
+                        if(this.playerScore >= this.maxScore || this.cpuScore >= this.maxScore) {
+                           this.timer = 3; // Longer pause for game over
+                        } else {
+                           this.timer = 1.5; // Short pause before next round
+                        }
+                    }
+                } else if (this.gameState === 'reveal') {
+                    this.timer -= deltaTime;
+                    this.animation.scale += (1.1 - this.animation.scale) * 0.2;
+                    if(this.timer <= 0) {
+                        if (this.playerScore >= this.maxScore || this.cpuScore >= this.maxScore) {
+                            this.gameState = 'gameOver';
+                        } else {
+                            this.gameState = 'play';
+                        }
+                        this.playerChoice = null;
+                        this.cpuChoice = null;
+                        this.result = null;
+                        this.animation.scale = 1;
+                    }
+                }
+
+                // Update particles
+                this.particles.forEach(p => p.update(deltaTime * 60)); // Normalize deltaTime
+                this.particles = this.particles.filter(p => p.life > 0 && p.size > 0);
+            }
+
+            draw() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                // Draw particles
+                this.particles.forEach(p => p.draw(this.ctx));
+                
+                switch(this.gameState) {
+                    case 'start': this.drawStartScreen(); break;
+                    case 'play': this.drawPlayScreen(); break;
+                    case 'countdown': this.drawCountdownScreen(false); break;
+                    case 'reveal': this.drawCountdownScreen(true); break;
+                    case 'gameOver': this.drawGameOverScreen(); break;
+                }
+            }
+            
+            drawText(text, x, y, size, color, align = 'center') {
+                this.ctx.fillStyle = color;
+                this.ctx.font = `bold ${size}px Arial`;
+                this.ctx.textAlign = align;
+                this.ctx.textBaseline = 'middle';
+                this.ctx.fillText(text, x, y);
+            }
+            
+            drawScores() {
+                const W = this.canvas.width;
+                this.drawText(`Player: ${this.playerScore}`, W * 0.2, 50, 30, '#fff');
+                this.drawText(`CPU: ${this.cpuScore}`, W * 0.8, 50, 30, '#fff');
+            }
+
+            drawStartScreen() {
+                const W = this.canvas.width;
+                const H = this.canvas.height;
+                
+                // Pulsing effect
+                const pulse = Math.sin(Date.now() * 0.002) * 0.05 + 1;
+                
+                this.ctx.save();
+                this.ctx.shadowColor = 'rgba(255, 255, 255, 0.7)';
+                this.ctx.shadowBlur = 20;
+                this.drawText('Shape Showdown', W / 2, H * 0.3, 80, '#fff');
+                this.ctx.restore();
+
+                this.ctx.save();
+                this.ctx.globalAlpha = pulse;
+                this.drawText('Click or Press Enter to Start', W / 2, H * 0.6, 30, '#ddd');
+                this.ctx.restore();
+                
+                this.drawText('Controls: Mouse Click or Keys [1, 2, 3] or [R, P, S]', W/2, H*0.9, 16, '#aaa');
+            }
+
+            drawPlayScreen() {
+                const W = this.canvas.width;
+                const H = this.canvas.height;
+                this.drawScores();
+                this.drawText('Choose your shape!', W / 2, H * 0.2, 40, '#fff');
+                
+                this.buttons.forEach(button => {
+                    this.ctx.save();
+                    if (button.isHovered) {
+                        this.ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+                        this.ctx.strokeStyle = '#fff';
+                        this.ctx.lineWidth = 4;
+                        this.ctx.shadowColor = '#fff';
+                        this.ctx.shadowBlur = 15;
+                    } else {
+                        this.ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+                        this.ctx.strokeStyle = '#888';
+                        this.ctx.lineWidth = 2;
+                    }
+                    this.ctx.beginPath();
+                    this.ctx.roundRect(button.x, button.y, button.width, button.height, 20);
+                    this.ctx.fill();
+                    this.ctx.stroke();
+                    this.ctx.restore();
+                    
+                    this.drawText(button.emoji, button.x + button.width / 2, button.y + button.height / 2, button.width * 0.6, '#fff');
+                });
+            }
+
+            drawCountdownScreen(revealCpu) {
+                const W = this.canvas.width;
+                this.drawScores();
+
+                const playerX = W / 4;
+                const cpuX = W * 3 / 4;
+                const emojiSize = 150;
+
+                // Player's choice
+                this.ctx.save();
+                if (this.result === "YOU WIN!" && revealCpu) {
+                    this.ctx.shadowColor = 'gold';
+                    this.ctx.shadowBlur = 30;
+                }
+                this.drawText(this.playerChoice.emoji, playerX, this.animation.playerY, emojiSize, '#fff');
+                this.ctx.restore();
+
+                // CPU's choice
+                const cpuEmoji = revealCpu ? this.cpuChoice.emoji : '❓';
+                this.ctx.save();
+                if (this.result === "YOU LOSE!" && revealCpu) {
+                    this.ctx.shadowColor = 'red';
+                    this.ctx.shadowBlur = 30;
+                }
+                this.drawText(cpuEmoji, cpuX, this.animation.cpuY, emojiSize, '#fff');
+                this.ctx.restore();
+
+                if (revealCpu) {
+                    let resultColor = '#fff';
+                    if (this.result === 'YOU WIN!') resultColor = 'lime';
+                    if (this.result === 'YOU LOSE!') resultColor = 'tomato';
+                    if (this.result === 'DRAW!') resultColor = 'cyan';
+                    
+                    this.ctx.save();
+                    this.ctx.translate(W/2, this.canvas.height * 0.8);
+                    this.ctx.scale(this.animation.scale, this.animation.scale);
+                    this.drawText(this.result, 0, 0, 60, resultColor);
+                    this.ctx.restore();
+                }
+            }
+
+            drawGameOverScreen() {
+                const W = this.canvas.width;
+                const H = this.canvas.height;
+                const winner = this.playerScore > this.cpuScore ? "You are the Champion!" : "The CPU is Victorious!";
+                
+                this.drawText('Game Over', W / 2, H * 0.3, 80, '#fff');
+                this.drawText(winner, W / 2, H * 0.45, 40, 'gold');
+                this.drawText(`Final Score: ${this.playerScore} - ${this.cpuScore}`, W / 2, H * 0.55, 30, '#ddd');
+                
+                // Draw restart button
+                const btn = this.restartButton;
+                this.ctx.save();
+                if (btn.isHovered) {
+                    this.ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                    this.ctx.strokeStyle = '#fff';
+                    this.ctx.lineWidth = 3;
+                } else {
+                    this.ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+                    this.ctx.strokeStyle = '#aaa';
+                    this.ctx.lineWidth = 2;
+                }
+                this.ctx.beginPath();
+                this.ctx.roundRect(btn.x, btn.y, btn.width, btn.height, 15);
+                this.ctx.fill();
+                this.ctx.stroke();
+                this.ctx.restore();
+
+                this.drawText(btn.text, btn.x + btn.width / 2, btn.y + btn.height / 2, 30, '#fff');
+            }
+
+            loop(timestamp) {
+                const deltaTime = (timestamp - this.lastTime) / 1000;
+                this.lastTime = timestamp;
+
+                this.update(deltaTime);
+                this.draw();
+
+                requestAnimationFrame(this.loop);
+            }
+
+            start() {
+                this.loop(0);
+            }
+        }
+
+        window.onload = () => {
+            const canvas = document.getElementById('gameCanvas');
+            const shapeShowdown = new Game(canvas);
+            shapeShowdown.start();
+        };
+
+    </script>
+</body>
+</html>
