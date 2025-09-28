@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Mind Spark</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100%;
+            font-family: 'Arial', sans-serif;
+            background: #1a1a2e;
+        }
+        canvas {
+            display: block;
+            background: linear-gradient(45deg, #16222A, #3A6073);
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+class Sound {
+    constructor() {
+        this.audioCtx = null;
+    }
+
+    init() {
+        // AudioContext must be created after a user gesture
+        if (!this.audioCtx) {
+            this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+    }
+
+    play(type) {
+        if (!this.audioCtx) return;
+
+        const now = this.audioCtx.currentTime;
+        
+        switch (type) {
+            case 'flip': {
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+                oscillator.type = 'triangle';
+                oscillator.frequency.setValueAtTime(1200, now);
+                gainNode.gain.setValueAtTime(0.1, now);
+                gainNode.gain.exponentialRampToValueAtTime(0.00001, now + 0.1);
+                oscillator.start(now);
+                oscillator.stop(now + 0.1);
+                break;
+            }
+            case 'match': {
+                const osc1 = this.audioCtx.createOscillator();
+                const osc2 = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+                osc1.connect(gainNode);
+                osc2.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+                
+                osc1.type = 'sine';
+                osc2.type = 'sine';
+                osc1.frequency.setValueAtTime(523.25, now); // C5
+                osc2.frequency.setValueAtTime(783.99, now); // G5
+
+                gainNode.gain.setValueAtTime(0.0, now);
+                gainNode.gain.linearRampToValueAtTime(0.1, now + 0.05);
+                gainNode.gain.linearRampToValueAtTime(0.0, now + 0.3);
+
+                osc1.start(now);
+                osc2.start(now);
+                osc1.stop(now + 0.3);
+                osc2.stop(now + 0.3);
+                break;
+            }
+            case 'mismatch': {
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+                oscillator.type = 'square';
+                oscillator.frequency.setValueAtTime(150, now);
+                gainNode.gain.setValueAtTime(0.1, now);
+                gainNode.gain.exponentialRampToValueAtTime(0.00001, now + 0.2);
+                oscillator.start(now);
+                oscillator.stop(now + 0.2);
+                break;
+            }
+            case 'win': {
+                const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+                notes.forEach((note, i) => {
+                    const osc = this.audioCtx.createOscillator();
+                    const gain = this.audioCtx.createGain();
+                    osc.connect(gain);
+                    gain.connect(this.audioCtx.destination);
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(note, now + i * 0.15);
+                    gain.gain.setValueAtTime(0.15, now + i * 0.15);
+                    gain.gain.exponentialRampToValueAtTime(0.00001, now + i * 0.15 + 0.1);
+                    osc.start(now + i * 0.15);
+                    osc.stop(now + i * 0.15 + 0.1);
+                });
+                break;
+            }
+        }
+    }
+}
+
+class Particle {
+    constructor(x, y, color) {
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        this.size = Math.random() * 5 + 2;
+        this.vx = Math.random() * 4 - 2;
+        this.vy = Math.random() * -4 - 1;
+        this.life = 1;
+    }
+
+    update(deltaTime) {
+        this.x += this.vx * deltaTime * 60;
+        this.y += this.vy * deltaTime * 60;
+        this.vy += 0.1 * deltaTime * 60; // gravity
+        this.life -= 0.02 * deltaTime * 60;
+    }
+
+    draw(ctx) {
+        ctx.globalAlpha = Math.max(0, this.life);
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+    }
+}
+
+class Card {
+    constructor(x, y, width, height, emoji) {
+        this.x = x;
+        this.y = y;
+        this.width = width;
+        this.height = height;
+        this.emoji = emoji;
+        
+        this.isFlipped = false;
+        this.isMatched = false;
+        
+        this.flipAnimation = 0; // 0 = back, 1 = front
+        this.isAnimating = false;
+        this.animationSpeed = 0.1;
+
+        this.matchAnimation = 0; // 0 to 1
+        this.isMatchAnimating = false;
+    }
+
+    flip() {
+        if (!this.isAnimating && !this.isMatched) {
+            this.isAnimating = true;
+        }
+    }
+    
+    startMatchAnimation() {
+        this.isMatchAnimating = true;
+    }
+
+    update(deltaTime) {
+        // Flip animation
+        if (this.isAnimating) {
+            const target = this.isFlipped ? 0 : 1;
+            if (this.flipAnimation < target) {
+                this.flipAnimation += this.animationSpeed * deltaTime * 60;
+                if (this.flipAnimation >= target) {
+                    this.flipAnimation = target;
+                    this.isFlipped = !this.isFlipped;
+                    this.isAnimating = false;
+                }
+            } else if (this.flipAnimation > target) {
+                this.flipAnimation -= this.animationSpeed * deltaTime * 60;
+                if (this.flipAnimation <= target) {
+                    this.flipAnimation = target;
+                    this.isFlipped = !this.isFlipped;
+                    this.isAnimating = false;
+                }
+            }
+        }
+
+        // Match animation
+        if(this.isMatchAnimating) {
+            this.matchAnimation += 0.05 * deltaTime * 60;
+            if (this.matchAnimation >= 1) {
+                this.matchAnimation = 1;
+                this.isMatchAnimating = false;
+            }
+        }
+    }
+
+    draw(ctx, isSelected) {
+        ctx.save();
+        
+        const scale = 1 + Math.sin(this.matchAnimation * Math.PI) * 0.2;
+        const scaleX = Math.cos(this.flipAnimation * Math.PI);
+
+        ctx.translate(this.x + this.width / 2, this.y + this.height / 2);
+        ctx.scale(scaleX * scale, scale);
+        
+        if (this.flipAnimation <= 0.5) {
+            // Draw back
+            const gradient = ctx.createLinearGradient(-this.width / 2, -this.height / 2, this.width / 2, this.height / 2);
+            gradient.addColorStop(0, "#4a6d9b");
+            gradient.addColorStop(1, "#2e4a6d");
+            ctx.fillStyle = gradient;
+            ctx.strokeStyle = '#a4c3e8';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.roundRect(-this.width / 2, -this.height / 2, this.width, this.height, this.width * 0.1);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.fillStyle = '#a4c3e8';
+            ctx.font = `${this.width * 0.5}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('?', 0, this.height * 0.05);
+
+        } else {
+            // Draw front
+            const gradient = ctx.createLinearGradient(-this.width / 2, -this.height / 2, this.width / 2, this.height / 2);
+            gradient.addColorStop(0, "#e0eafc");
+            gradient.addColorStop(1, "#cfdef3");
+            ctx.fillStyle = gradient;
+            ctx.strokeStyle = '#4a6d9b';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.roundRect(-this.width / 2, -this.height / 2, this.width, this.height, this.width * 0.1);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.font = `${this.width * 0.6}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(this.emoji, 0, this.height * 0.1);
+        }
+        
+        ctx.restore();
+
+        if (this.isMatched && this.matchAnimation < 1) {
+            ctx.save();
+            ctx.globalAlpha = 1 - this.matchAnimation;
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.beginPath();
+            ctx.roundRect(this.x, this.y, this.width, this.height, this.width * 0.1);
+            ctx.fill();
+            ctx.restore();
+        }
+
+        if (isSelected && !this.isMatched) {
+            ctx.strokeStyle = '#FFFF00';
+            ctx.lineWidth = 4;
+            ctx.lineDashOffset = 5;
+            ctx.beginPath();
+            ctx.roundRect(this.x, this.y, this.width, this.height, this.width * 0.1);
+            ctx.stroke();
+        }
+    }
+}
+
+
+class Game {
+    constructor(canvasId) {
+        this.canvas = document.getElementById(canvasId);
+        this.ctx = this.canvas.getContext('2d');
+
+        this.gameState = 'START'; // START, PLAYING, GAME_OVER
+        this.cards = [];
+        this.flippedCards = [];
+        this.particles = [];
+        
+        this.moves = 0;
+        this.pairsFound = 0;
+        this.totalPairs = 8;
+        this.cols = 4;
+        this.rows = 4;
+        
+        this.selectedCardIndex = 0;
+        this.lastTime = 0;
+
+        this.sound = new Sound();
+        
+        this.buttons = {};
+        
+        this.handleResize();
+        window.addEventListener('resize', () => this.handleResize());
+        
+        this.setupEventListeners();
+        
+        this.gameLoop(0);
+    }
+    
+    setupEventListeners() {
+        this.canvas.addEventListener('click', this.handleClick.bind(this));
+        window.addEventListener('keydown', this.handleKeyDown.bind(this));
+    }
+    
+    handleClick(e) {
+        this.sound.init(); // Initialize audio on first click
+        
+        const rect = this.canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        switch (this.gameState) {
+            case 'START':
+                if (this.isPointerInRect(mouseX, mouseY, this.buttons.start)) {
+                    this.startGame();
+                }
+                break;
+            case 'PLAYING':
+                this.cards.forEach((card, index) => {
+                    if (!card.isFlipped && !card.isMatched && this.isPointerInRect(mouseX, mouseY, card)) {
+                        this.selectedCardIndex = index;
+                        this.flipCard(card);
+                    }
+                });
+                break;
+            case 'GAME_OVER':
+                if (this.isPointerInRect(mouseX, mouseY, this.buttons.restart)) {
+                    this.startGame();
+                }
+                break;
+        }
+    }
+    
+    handleKeyDown(e) {
+        this.sound.init(); // Initialize audio on first key press
+        
+        if (this.gameState === 'PLAYING') {
+            const cols = this.cols;
+            let newIndex = this.selectedCardIndex;
+            switch (e.key) {
+                case 'ArrowRight':
+                    newIndex = (this.selectedCardIndex + 1) % this.cards.length;
+                    break;
+                case 'ArrowLeft':
+                    newIndex = (this.selectedCardIndex - 1 + this.cards.length) % this.cards.length;
+                    break;
+                case 'ArrowDown':
+                    newIndex = (this.selectedCardIndex + cols) % this.cards.length;
+                    break;
+                case 'ArrowUp':
+                    newIndex = (this.selectedCardIndex - cols + this.cards.length) % this.cards.length;
+                    break;
+                case ' ': // Spacebar
+                case 'Enter':
+                    e.preventDefault();
+                    const card = this.cards[this.selectedCardIndex];
+                    if (!card.isFlipped && !card.isMatched) {
+                        this.flipCard(card);
+                    }
+                    break;
+            }
+             // Find next available card if current is matched
+            if(this.cards.length > 0 && this.cards[newIndex].isMatched) {
+                let initial = newIndex;
+                do {
+                    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+                        newIndex = (newIndex - 1 + this.cards.length) % this.cards.length;
+                    } else {
+                        newIndex = (newIndex + 1) % this.cards.length;
+                    }
+                } while(this.cards[newIndex].isMatched && newIndex !== initial);
+            }
+            this.selectedCardIndex = newIndex;
+        } else if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            if (this.gameState === 'START' || this.gameState === 'GAME_OVER') {
+                this.startGame();
+            }
+        }
+    }
+
+    isPointerInRect(px, py, rect) {
+        return px > rect.x && px < rect.x + rect.width && py > rect.y && py < rect.y + rect.height;
+    }
+    
+    startGame() {
+        this.gameState = 'PLAYING';
+        this.moves = 0;
+        this.pairsFound = 0;
+        this.flippedCards = [];
+        this.selectedCardIndex = 0;
+        this.setupCards();
+    }
+
+    setupCards() {
+        const EMOJIS = ['🧠', '⚡️', '💡', '🚀', '⭐', '🎯', '🧪', '⚛️'];
+        let cardEmojis = [...EMOJIS, ...EMOJIS];
+        // Shuffle
+        for (let i = cardEmojis.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [cardEmojis[i], cardEmojis[j]] = [cardEmojis[j], cardEmojis[i]];
+        }
+        
+        this.cards = [];
+        this.layoutCards(cardEmojis);
+    }
+    
+    layoutCards(cardEmojis = null) {
+        const cols = this.cols, rows = this.rows;
+        const topMargin = this.canvas.height * 0.15;
+        const totalBoardHeight = this.canvas.height - topMargin;
+        const availableWidth = this.canvas.width * 0.9;
+        const availableHeight = totalBoardHeight * 0.9;
+
+        const cardSize = Math.min(availableWidth / cols, availableHeight / rows);
+        const gap = cardSize * 0.15;
+        const boardWidth = cols * cardSize + (cols - 1) * gap;
+        const boardHeight = rows * cardSize + (rows - 1) * gap;
+        const startX = (this.canvas.width - boardWidth) / 2;
+        const startY = topMargin + (totalBoardHeight - boardHeight) / 2;
+
+        if (cardEmojis) {
+             for (let i = 0; i < cardEmojis.length; i++) {
+                const row = Math.floor(i / cols);
+                const col = i % cols;
+                const x = startX + col * (cardSize + gap);
+                const y = startY + row * (cardSize + gap);
+                this.cards.push(new Card(x, y, cardSize, cardSize, cardEmojis[i]));
+            }
+        } else {
+            // Just re-layout existing cards
+            this.cards.forEach((card, i) => {
+                const row = Math.floor(i / cols);
+                const col = i % cols;
+                card.x = startX + col * (cardSize + gap);
+                card.y = startY + row * (cardSize + gap);
+                card.width = cardSize;
+                card.height = cardSize;
+            });
+        }
+    }
+
+    handleResize() {
+        this.canvas.width = window.innerWidth;
+        this.canvas.height = window.innerHeight;
+        if(this.cards.length > 0) {
+            this.layoutCards();
+        }
+        this.setupButtons();
+    }
+
+    setupButtons() {
+        const buttonWidth = Math.min(400, this.canvas.width * 0.6);
+        const buttonHeight = Math.min(80, this.canvas.height * 0.1);
+        const centerX = this.canvas.width / 2;
+        const centerY = this.canvas.height / 2;
+
+        this.buttons.start = {
+            x: centerX - buttonWidth / 2,
+            y: centerY + 50,
+            width: buttonWidth,
+            height: buttonHeight,
+            text: 'Start Game'
+        };
+
+        this.buttons.restart = {
+            x: centerX - buttonWidth / 2,
+            y: centerY + 80,
+            width: buttonWidth,
+            height: buttonHeight,
+            text: 'Play Again'
+        };
+    }
+    
+    flipCard(card) {
+        if (this.flippedCards.length < 2 && !card.isFlipped) {
+            card.flip();
+            this.sound.play('flip');
+            this.flippedCards.push(card);
+
+            if (this.flippedCards.length === 2) {
+                this.moves++;
+                this.checkForMatch();
+            }
+        }
+    }
+
+    checkForMatch() {
+        const [card1, card2] = this.flippedCards;
+        if (card1.emoji === card2.emoji) {
+            // It's a match
+            this.sound.play('match');
+            card1.isMatched = true;
+            card2.isMatched = true;
+            card1.startMatchAnimation();
+            card2.startMatchAnimation();
+            this.createParticles(card1);
+            this.createParticles(card2);
+            this.pairsFound++;
+            this.flippedCards = [];
+
+            if (this.pairsFound === this.totalPairs) {
+                setTimeout(() => {
+                    this.gameState = 'GAME_OVER';
+                    this.sound.play('win');
+                }, 1000);
+            }
+        } else {
+            // Not a match
+            this.sound.play('mismatch');
+            setTimeout(() => {
+                card1.flip();
+                card2.flip();
+                this.flippedCards = [];
+            }, 1000);
+        }
+    }
+
+    createParticles(card) {
+        const cardCenterX = card.x + card.width / 2;
+        const cardCenterY = card.y + card.height / 2;
+        for (let i = 0; i < 30; i++) {
+            this.particles.push(new Particle(cardCenterX, cardCenterY, '#FFD700'));
+        }
+    }
+
+    gameLoop(timestamp) {
+        const deltaTime = (timestamp - this.lastTime) / 1000;
+        this.lastTime = timestamp;
+
+        this.update(deltaTime || 0);
+        this.draw();
+
+        requestAnimationFrame(this.gameLoop.bind(this));
+    }
+
+    update(deltaTime) {
+        this.cards.forEach(card => card.update(deltaTime));
+        
+        this.particles.forEach((p, i) => {
+            p.update(deltaTime);
+            if (p.life <= 0) {
+                this.particles.splice(i, 1);
+            }
+        });
+    }
+
+    draw() {
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        
+        // Background
+        const bgGradient = this.ctx.createRadialGradient(
+            this.canvas.width / 2, this.canvas.height / 2, 0,
+            this.canvas.width / 2, this.canvas.height / 2, Math.max(this.canvas.width, this.canvas.height)
+        );
+        bgGradient.addColorStop(0, '#2c3e50');
+        bgGradient.addColorStop(1, '#1a1a2e');
+        this.ctx.fillStyle = bgGradient;
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        switch (this.gameState) {
+            case 'START':
+                this.drawStartScreen();
+                break;
+            case 'PLAYING':
+                this.drawGameScreen();
+                break;
+            case 'GAME_OVER':
+                this.drawGameOverScreen();
+                break;
+        }
+    }
+    
+    drawUIElement(text, x, y, size, color, shadowColor) {
+        this.ctx.font = `bold ${size}px 'Arial', sans-serif`;
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.shadowColor = shadowColor;
+        this.ctx.shadowBlur = 15;
+        this.ctx.fillStyle = color;
+        this.ctx.fillText(text, x, y);
+        this.ctx.shadowBlur = 0;
+    }
+
+    drawButton(button) {
+        const gradient = this.ctx.createLinearGradient(button.x, button.y, button.x, button.y + button.height);
+        gradient.addColorStop(0, '#4a90e2');
+        gradient.addColorStop(1, '#357abd');
+        this.ctx.fillStyle = gradient;
+        this.ctx.strokeStyle = '#FFFFFF';
+        this.ctx.lineWidth = 2;
+        this.ctx.beginPath();
+        this.ctx.roundRect(button.x, button.y, button.width, button.height, 15);
+        this.ctx.fill();
+        this.ctx.stroke();
+
+        this.drawUIElement(button.text, button.x + button.width / 2, button.y + button.height / 2, button.height * 0.4, '#FFFFFF', '#000000');
+    }
+
+    drawStartScreen() {
+        const centerX = this.canvas.width / 2;
+        const centerY = this.canvas.height / 2;
+
+        this.drawUIElement('Mind Spark', centerX, centerY - 150, Math.min(this.canvas.width * 0.1, 80), '#FFFFFF', '#00d4ff');
+        
+        this.ctx.font = `${Math.min(this.canvas.width * 0.03, 22)}px 'Arial'`;
+        this.ctx.fillStyle = '#a4c3e8';
+        this.ctx.textAlign = 'center';
+        
+        const instructions = [
+            "Match the pairs of cards.",
+            "Mouse: Click a card to flip it.",
+            "Keyboard: Use Arrow Keys to navigate.",
+            "Press Space or Enter to flip a selected card."
+        ];
+
+        instructions.forEach((line, i) => {
+            this.ctx.fillText(line, centerX, centerY - 60 + (i * 30));
+        });
+
+        this.drawButton(this.buttons.start);
+    }
+    
+    drawGameScreen() {
+        // Draw cards
+        this.cards.forEach((card, index) => {
+            const isSelected = (index === this.selectedCardIndex);
+            card.draw(this.ctx, isSelected);
+        });
+
+        // Draw particles
+        this.particles.forEach(p => p.draw(this.ctx));
+        
+        // Draw UI
+        const topY = this.canvas.height * 0.08;
+        this.drawUIElement(`Moves: ${this.moves}`, this.canvas.width / 2, topY, Math.min(this.canvas.width * 0.05, 30), '#FFFFFF', '#00d4ff');
+    }
+
+    drawGameOverScreen() {
+        this.drawUIElement('Congratulations!', this.canvas.width / 2, this.canvas.height / 2 - 100, Math.min(this.canvas.width * 0.1, 70), '#00FF00', '#000000');
+        this.drawUIElement(`You won in ${this.moves} moves!`, this.canvas.width / 2, this.canvas.height / 2, Math.min(this.canvas.width * 0.06, 40), '#FFFFFF', '#000000');
+
+        this.drawButton(this.buttons.restart);
+    }
+}
+
+// Entry point
+window.addEventListener('load', () => {
+    // Add roundRect to canvas context if it doesn't exist
+    if (!CanvasRenderingContext2D.prototype.roundRect) {
+        CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+            if (w < 2 * r) r = w / 2;
+            if (h < 2 * r) r = h / 2;
+            this.beginPath();
+            this.moveTo(x+r, y);
+            this.arcTo(x+w, y,   x+w, y+h, r);
+            this.arcTo(x+w, y+h, x,   y+h, r);
+            this.arcTo(x,   y+h, x,   y,   r);
+            this.arcTo(x,   y,   x+w, y,   r);
+            this.closePath();
+            return this;
+        }
+    }
+    
+    new Game('gameCanvas');
+});
+</script>
+</body>
+</html>

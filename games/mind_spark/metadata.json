@@ -1,0 +1,8 @@
+{
+  "name": "Mind Spark",
+  "type": "memory card game",
+  "folder": "mind_spark",
+  "description": "Unleash your memory in a high-voltage race to match electrifying patterns against the clock. Find the pairs faster than your friends to send a winning spark through the competition",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
