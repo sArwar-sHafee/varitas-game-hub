@@ -1,8 +1,8 @@
-name: Daily Game Generation
+name: Automatic Game Generation
 
 on:
   schedule:
-    - cron: '0 0 * * *' # Runs every day at midnight UTC
+    - cron: '0 */3 * * *' # Runs every 3 hours
   workflow_dispatch:
 
 jobs:
@@ -42,6 +42,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "Automated daily game generation"
+            git commit -m "Automated game generation"
             git push
           fi

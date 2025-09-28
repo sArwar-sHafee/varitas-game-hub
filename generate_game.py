@@ -220,10 +220,26 @@ def generate_game():
     game_name = name_response.text.strip().replace('"', '').replace("'", "").replace(":", "").replace("/", "-")
     print(f"Game name: {game_name}")
 
-    # Create folder for the game
-    folder_name = game_name.replace(" ", "_").lower()
+    # Create folder for the game with duplicate name handling
+    base_folder_name = game_name.replace(" ", "_").lower()
+    folder_name = base_folder_name
     game_folder = Path(f"games/{folder_name}")
-    game_folder.mkdir(parents=True, exist_ok=True)
+
+    # Check if folder already exists and append number if needed
+    counter = 2
+    while game_folder.exists():
+        folder_name = f"{base_folder_name}_{counter}"
+        game_folder = Path(f"games/{folder_name}")
+        counter += 1
+
+    # Create the unique folder
+    game_folder.mkdir(parents=True, exist_ok=False)
+
+    # Update game name if it was duplicated
+    if folder_name != base_folder_name:
+        suffix_num = folder_name.split('_')[-1]
+        game_name = f"{game_name} {suffix_num}"
+        print(f"⚠️  Duplicate name detected! Renamed to: {game_name}")
 
     # Generate game code
     code_prompt = f"""Create a complete, playable {game_type} game called "{game_name}" using HTML5 Canvas and JavaScript.
