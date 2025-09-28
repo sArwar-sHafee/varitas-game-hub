@@ -155,7 +155,7 @@ def list_all_games():
     return games
 
 def sync_games_with_webpage():
-    """Sync the webpage with the games folder - add new games and remove deleted ones"""
+    """Sync the webpage with the games folder - display ALL games"""
     games = list_all_games()
 
     # Read the current HTML file
@@ -176,11 +176,9 @@ def sync_games_with_webpage():
     for card in existing_cards:
         card.decompose()
 
-    # Add placeholder cards first
-    placeholder_count = 6  # Number of placeholder cards to maintain
     games_added = 0
 
-    # Add all games from the games folder
+    # Add ALL games from the games folder (no limit)
     for game in games:
         game_card_html = f"""
         <div class="game-card">
@@ -200,18 +198,19 @@ def sync_games_with_webpage():
         games_added += 1
         print(f"✅ Added: {game['name']}")
 
-    # Add placeholder cards to fill remaining slots
-    for i in range(games_added, placeholder_count):
+    # No placeholders - show all actual games only
+    if games_added == 0:
+        # Only add a single placeholder if no games exist at all
         placeholder_html = f"""
         <div class="game-card">
             <a href="#" style="text-decoration: none;">
                 <div class="game-image">
-                    Game {i + 1}
+                    No Games Yet
                 </div>
                 <div class="game-info">
-                    <h2 class="game-title">Coming Soon</h2>
-                    <p class="game-description">New game will be added here soon!</p>
-                    <span class="play-button">Play Now</span>
+                    <h2 class="game-title">Generate Your First Game!</h2>
+                    <p class="game-description">Run generate_game.py to create awesome games!</p>
+                    <span class="play-button">Coming Soon</span>
                 </div>
             </a>
         </div>
@@ -242,16 +241,16 @@ if __name__ == "__main__":
 
     print("\n🔄 Syncing webpage with games folder...")
     print("This will:")
-    print("  • Remove games that no longer exist in the folder")
-    print("  • Add new games from the folder")
-    print("  • Maintain placeholder slots for future games")
+    print("  • Remove outdated game entries")
+    print("  • Add ALL games from the folder (no limit)")
+    print("  • Display every game available")
     print()
 
     games_count = sync_games_with_webpage()
 
     if games_count > 0:
-        print(f"\n✨ Sync complete! {games_count} game(s) on webpage")
+        print(f"\n✨ Sync complete! {games_count} game(s) now displayed on webpage")
     else:
-        print("\n✨ Sync complete! Webpage now shows placeholder cards only")
+        print("\n✨ Sync complete! No games found - showing placeholder")
 
     print("🌐 Open index.html to see your updated gaming hub.")

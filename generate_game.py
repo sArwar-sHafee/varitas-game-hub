@@ -265,6 +265,35 @@ Make sure the game is immediately playable when opened in a browser."""
         f.write(game_code.strip())
     print(f"Game code saved: {game_file}")
 
+    # Validate the generated game code
+    print("\n🔍 Validating game code...")
+    validation_prompt = f"""Please review this HTML game code for "{game_name}" and check if it will work correctly:
+
+{game_code}
+
+Please analyze and fix any issues found. Return the corrected HTML code that:
+1. Has no JavaScript syntax errors
+2. Has proper event listeners and game initialization
+3. Has all required functions defined
+4. Has proper HTML structure
+5. Will actually run when opened in a browser
+
+Return ONLY the complete, corrected HTML code without any markdown formatting or explanations."""
+
+    validation_response = model.generate_content(validation_prompt)
+    validated_code = validation_response.text
+
+    # Extract HTML code from response (in case it's wrapped in markdown)
+    if "```html" in validated_code:
+        validated_code = validated_code.split("```html")[1].split("```")[0]
+    elif "```" in validated_code:
+        validated_code = validated_code.split("```")[1].split("```")[0]
+
+    # Save the validated game HTML file
+    with open(game_file, 'w', encoding='utf-8') as f:
+        f.write(validated_code.strip())
+    print(f"✅ Game code validated and saved: {game_file}")
+
     # Generate game description for cover image
     desc_prompt = f"""Write a brief, exciting description (2 sentences max) for a {game_type} called "{game_name}".
     Focus on the gameplay and what makes it fun. Be creative and engaging."""

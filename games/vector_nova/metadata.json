@@ -1,0 +1,8 @@
+{
+  "name": "Vector Nova",
+  "type": "space shooter",
+  "folder": "vector_nova",
+  "description": "Blast through vibrant, wireframe fleets with weapons that ricochet and chain between targets. Unleash the devastating Nova pulse to detonate your marked enemies in a glorious, screen-shattering cascade of destruction.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
