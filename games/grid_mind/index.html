@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grid Mind - Tic-Tac-Toe with AI</title>
+    <style>
+        :root {
+            --primary-color: #00f2ff;
+            --secondary-color: #ff33a8;
+            --bg-color-1: #1f005c;
+            --bg-color-2: #5b0060;
+            --bg-color-3: #ac255e;
+            --text-color: #f0f0f0;
+            --glow-color: rgba(255, 255, 255, 0.7);
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
+            background: linear-gradient(135deg, var(--bg-color-1), var(--bg-color-2), var(--bg-color-3));
+            color: var(--text-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            background-color: rgba(0, 0, 0, 0.25);
+            border-radius: 20px;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        #game-canvas {
+            border-radius: 10px;
+            cursor: pointer;
+            box-shadow: 0 0 25px var(--glow-color);
+        }
+
+        #ui-container {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            max-width: 500px;
+            margin-bottom: 15px;
+            font-size: 1.5em;
+            font-weight: bold;
+            text-shadow: 0 0 5px #000;
+        }
+
+        #instructions {
+            margin-top: 15px;
+            font-size: 1em;
+            color: #ccc;
+            min-height: 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <div id="ui-container">
+            <div id="player-score">🧑‍💻 You: 0</div>
+            <div id="ai-score">🧠 AI: 0</div>
+        </div>
+        <canvas id="game-canvas"></canvas>
+        <div id="instructions">Click on the grid to make a move.</div>
+    </div>
+
+    <script>
+        class SoundEngine {
+            constructor() {
+                this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+
+            play(type) {
+                if (!this.audioCtx) return;
+
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+
+                const now = this.audioCtx.currentTime;
+                gainNode.gain.setValueAtTime(0, now);
+
+                switch(type) {
+                    case 'playerMove':
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(440, now);
+                        gainNode.gain.linearRampToValueAtTime(0.3, now + 0.05);
+                        gainNode.gain.linearRampToValueAtTime(0, now + 0.2);
+                        break;
+                    case 'aiMove':
+                        oscillator.type = 'triangle';
+                        oscillator.frequency.setValueAtTime(330, now);
+                        gainNode.gain.linearRampToValueAtTime(0.3, now + 0.05);
+                        gainNode.gain.linearRampToValueAtTime(0, now + 0.2);
+                        break;
+                    case 'win':
+                        this.playArpeggio([523.25, 659.25, 783.99], 0.15);
+                        return;
+                    case 'lose':
+                        this.playArpeggio([783.99, 659.25, 523.25], 0.15);
+                        return;
+                    case 'tie':
+                        this.playArpeggio([587.33, 440], 0.2);
+                        return;
+                    case 'start':
+                        this.playArpeggio([261.63, 392, 523.25], 0.1);
+                        return;
+                }
+
+                oscillator.start(now);
+                oscillator.stop(now + 0.2);
+            }
+            
+            playArpeggio(notes, duration) {
+                const now = this.audioCtx.currentTime;
+                notes.forEach((freq, i) => {
+                    const osc = this.audioCtx.createOscillator();
+                    const gain = this.audioCtx.createGain();
+                    osc.connect(gain);
+                    gain.connect(this.audioCtx.destination);
+                    
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, now + i * duration);
+                    gain.gain.setValueAtTime(0.3, now + i * duration);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + (i + 1) * duration);
+                    
+                    osc.start(now + i * duration);
+                    osc.stop(now + (i + 1) * duration);
+                });
+            }
+        }
+
+        class GridMindGame {
+            constructor(canvasId) {
+                this.canvas = document.getElementById(canvasId);
+                this.ctx = this.canvas.getContext('2d');
+                
+                this.playerScoreEl = document.getElementById('player-score');
+                this.aiScoreEl = document.getElementById('ai-score');
+                this.instructionsEl = document.getElementById('instructions');
+
+                this.PLAYER = '🧑‍💻';
+                this.AI = '🧠';
+                this.EMPTY = null;
+
+                this.sound = new SoundEngine();
+                this.gameState = 'start'; // 'start', 'playing', 'gameOver'
+                this.board = this.createBoard();
+                this.currentPlayer = this.PLAYER;
+                this.scores = { [this.PLAYER]: 0, [this.AI]: 0 };
+                this.winnerInfo = null;
+                
+                this.pieceAnimations = [];
+
+                this.init();
+            }
+
+            init() {
+                window.addEventListener('resize', () => this.resizeCanvas());
+                this.canvas.addEventListener('click', (e) => this.handleClick(e));
+                window.addEventListener('keydown', (e) => this.handleKeyPress(e));
+                this.resizeCanvas();
+                this.gameLoop();
+            }
+
+            createBoard() {
+                return Array(3).fill(null).map(() => Array(3).fill(this.EMPTY));
+            }
+
+            resizeCanvas() {
+                const container = document.getElementById('game-container');
+                const size = Math.min(window.innerWidth * 0.8, window.innerHeight * 0.6, 500);
+                this.canvas.width = size;
+                this.canvas.height = size;
+                this.cellSize = this.canvas.width / 3;
+            }
+
+            gameLoop(timestamp = 0) {
+                this.update(timestamp);
+                this.draw();
+                requestAnimationFrame((t) => this.gameLoop(t));
+            }
+
+            update(timestamp) {
+                // Update animations
+                this.pieceAnimations.forEach(anim => {
+                    if(anim.progress < 1) {
+                        anim.progress = Math.min(1, anim.progress + 0.05);
+                    }
+                });
+                
+                if (this.winnerInfo && this.winnerInfo.lineProgress < 1) {
+                     this.winnerInfo.lineProgress = Math.min(1, this.winnerInfo.lineProgress + 0.04);
+                }
+            }
+
+            draw() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                // background gradient
+                const gradient = this.ctx.createRadialGradient(
+                    this.canvas.width / 2, this.canvas.height / 2, 0,
+                    this.canvas.width / 2, this.canvas.height / 2, this.canvas.width
+                );
+                gradient.addColorStop(0, 'rgba(40, 0, 80, 0.8)');
+                gradient.addColorStop(1, 'rgba(20, 0, 40, 0.9)');
+                this.ctx.fillStyle = gradient;
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+                if (this.gameState === 'start') {
+                    this.drawStartScreen();
+                } else {
+                    this.drawGrid();
+                    this.drawPieces();
+                    if (this.gameState === 'gameOver' && this.winnerInfo) {
+                        this.drawWinningLine();
+                    }
+                }
+
+                if (this.gameState === 'gameOver') {
+                    this.drawGameOverScreen();
+                }
+            }
+
+            drawGrid() {
+                this.ctx.strokeStyle = 'rgba(0, 242, 255, 0.5)';
+                this.ctx.lineWidth = 8;
+                this.ctx.lineCap = 'round';
+                this.ctx.shadowColor = 'rgba(0, 242, 255, 1)';
+                this.ctx.shadowBlur = 15;
+
+                for (let i = 1; i < 3; i++) {
+                    // Vertical lines
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(this.cellSize * i, 10);
+                    this.ctx.lineTo(this.cellSize * i, this.canvas.height - 10);
+                    this.ctx.stroke();
+                    // Horizontal lines
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(10, this.cellSize * i);
+                    this.ctx.lineTo(this.canvas.width - 10, this.cellSize * i);
+                    this.ctx.stroke();
+                }
+                this.ctx.shadowBlur = 0; // Reset shadow
+            }
+            
+            drawPieces() {
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                const baseFontSize = this.cellSize * 0.6;
+                
+                this.pieceAnimations.forEach(anim => {
+                    const { row, col, piece } = anim;
+                    const x = col * this.cellSize + this.cellSize / 2;
+                    const y = row * this.cellSize + this.cellSize / 2;
+                    const scale = 0.5 + 0.5 * (1 - Math.pow(1 - anim.progress, 3)); // easeOutCubic
+                    
+                    this.ctx.save();
+                    this.ctx.translate(x, y);
+                    this.ctx.scale(scale, scale);
+                    this.ctx.globalAlpha = anim.progress;
+                    this.ctx.font = `${baseFontSize}px sans-serif`;
+                    this.ctx.shadowColor = piece === this.PLAYER ? 'var(--primary-color)' : 'var(--secondary-color)';
+                    this.ctx.shadowBlur = 20;
+                    this.ctx.fillText(piece, 0, 0);
+                    this.ctx.restore();
+                });
+            }
+
+            drawWinningLine() {
+                if (!this.winnerInfo || !this.winnerInfo.cells) return;
+
+                const { cells, lineProgress } = this.winnerInfo;
+                const startCell = cells[0];
+                const endCell = cells[2];
+
+                const startX = startCell[1] * this.cellSize + this.cellSize / 2;
+                const startY = startCell[0] * this.cellSize + this.cellSize / 2;
+                const endX = endCell[1] * this.cellSize + this.cellSize / 2;
+                const endY = endCell[0] * this.cellSize + this.cellSize / 2;
+                
+                const midX = (startX + endX) / 2;
+                const midY = (startY + endY) / 2;
+
+                const currentStartX = midX + (startX - midX) * lineProgress;
+                const currentStartY = midY + (startY - midY) * lineProgress;
+                const currentEndX = midX + (endX - midX) * lineProgress;
+                const currentEndY = midY + (endY - midY) * lineProgress;
+
+                this.ctx.beginPath();
+                this.ctx.moveTo(currentStartX, currentStartY);
+                this.ctx.lineTo(currentEndX, currentEndY);
+                
+                this.ctx.strokeStyle = this.winnerInfo.winner === this.PLAYER ? 'var(--primary-color)' : 'var(--secondary-color)';
+                this.ctx.lineWidth = 15;
+                this.ctx.lineCap = 'round';
+                this.ctx.shadowColor = this.ctx.strokeStyle;
+                this.ctx.shadowBlur = 20;
+                this.ctx.stroke();
+                this.ctx.shadowBlur = 0;
+            }
+            
+            drawStartScreen() {
+                this.ctx.save();
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                
+                // Title
+                this.ctx.font = `bold ${this.canvas.width * 0.15}px sans-serif`;
+                const gradient = this.ctx.createLinearGradient(0, 0, this.canvas.width, 0);
+                gradient.addColorStop(0, "var(--primary-color)");
+                gradient.addColorStop(1, "var(--secondary-color)");
+                this.ctx.fillStyle = gradient;
+                this.ctx.shadowColor = 'black';
+                this.ctx.shadowBlur = 10;
+                this.ctx.fillText("Grid Mind", this.canvas.width / 2, this.canvas.height / 3);
+                
+                // Pulsating instruction
+                const pulse = Math.sin(Date.now() * 0.005) * 0.5 + 0.5;
+                this.ctx.globalAlpha = 0.6 + pulse * 0.4;
+                this.ctx.fillStyle = 'var(--text-color)';
+                this.ctx.font = `bold ${this.canvas.width * 0.06}px sans-serif`;
+                this.ctx.shadowBlur = 0;
+                this.ctx.fillText("Click to Start", this.canvas.width / 2, this.canvas.height * 0.65);
+                this.ctx.restore();
+            }
+
+            drawGameOverScreen() {
+                this.ctx.save();
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                
+                let message;
+                if (this.winnerInfo && this.winnerInfo.winner) {
+                    message = this.winnerInfo.winner === this.PLAYER ? "You Win! 🏆" : "AI Wins! 🤖";
+                } else {
+                    message = "It's a Tie! 🤝";
+                }
+
+                this.ctx.font = `bold ${this.canvas.width * 0.12}px sans-serif`;
+                this.ctx.fillStyle = this.winnerInfo?.winner === this.PLAYER ? 'var(--primary-color)' : this.winnerInfo?.winner === this.AI ? 'var(--secondary-color)' : 'white';
+                this.ctx.shadowColor = 'black';
+                this.ctx.shadowBlur = 10;
+                this.ctx.fillText(message, this.canvas.width / 2, this.canvas.height / 2);
+                
+                this.ctx.font = `${this.canvas.width * 0.05}px sans-serif`;
+                this.ctx.fillStyle = 'var(--text-color)';
+                this.ctx.fillText("Press 'R' to play again", this.canvas.width / 2, this.canvas.height * 0.65);
+                this.ctx.restore();
+            }
+
+            handleClick(event) {
+                if (this.gameState === 'start') {
+                    this.startGame();
+                    return;
+                }
+                
+                if (this.gameState !== 'playing' || this.currentPlayer !== this.PLAYER) {
+                    return;
+                }
+
+                const rect = this.canvas.getBoundingClientRect();
+                const x = event.clientX - rect.left;
+                const y = event.clientY - rect.top;
+
+                const col = Math.floor(x / this.cellSize);
+                const row = Math.floor(y / this.cellSize);
+
+                if (this.board[row][col] === this.EMPTY) {
+                    this.makeMove(row, col, this.PLAYER);
+                }
+            }
+
+            handleKeyPress(event) {
+                if (event.key.toLowerCase() === 'r' && this.gameState === 'gameOver') {
+                    this.resetGame();
+                }
+            }
+            
+            startGame() {
+                this.gameState = 'playing';
+                this.sound.play('start');
+                this.instructionsEl.textContent = "Your turn. Good luck!";
+                this.resetGame(false); // don't reset scores
+            }
+
+            resetGame(resetScores = true) {
+                this.board = this.createBoard();
+                this.currentPlayer = this.PLAYER;
+                this.gameState = 'playing';
+                this.winnerInfo = null;
+                this.pieceAnimations = [];
+                if (resetScores) {
+                    this.scores = { [this.PLAYER]: 0, [this.AI]: 0 };
+                    this.updateScoreboard();
+                }
+                this.instructionsEl.textContent = "Your turn. Good luck!";
+            }
+            
+            updateScoreboard() {
+                this.playerScoreEl.textContent = `🧑‍💻 You: ${this.scores[this.PLAYER]}`;
+                this.aiScoreEl.textContent = `🧠 AI: ${this.scores[this.AI]}`;
+            }
+
+            makeMove(row, col, player) {
+                this.board[row][col] = player;
+                this.pieceAnimations.push({ row, col, piece: player, progress: 0 });
+                this.sound.play(player === this.PLAYER ? 'playerMove' : 'aiMove');
+
+                const winner = this.checkWinner();
+                if (winner) {
+                    this.endGame(winner.winner, winner.cells);
+                } else if (this.isBoardFull()) {
+                    this.endGame(null);
+                } else {
+                    this.currentPlayer = (this.currentPlayer === this.PLAYER) ? this.AI : this.PLAYER;
+                    if (this.currentPlayer === this.AI) {
+                        this.instructionsEl.textContent = "AI is thinking...";
+                        setTimeout(() => this.aiMove(), 800);
+                    } else {
+                        this.instructionsEl.textContent = "Your turn.";
+                    }
+                }
+            }
+            
+            endGame(winner, winningCells) {
+                this.gameState = 'gameOver';
+                this.winnerInfo = { winner: winner, cells: winningCells, lineProgress: 0 };
+                
+                if (winner) {
+                    this.scores[winner]++;
+                    this.updateScoreboard();
+                    this.instructionsEl.textContent = `${winner === this.PLAYER ? 'You win!' : 'AI wins!'} Press 'R' to restart.`;
+                    this.sound.play(winner === this.PLAYER ? 'win' : 'lose');
+                } else {
+                    this.instructionsEl.textContent = "It's a tie! Press 'R' to restart.";
+                    this.sound.play('tie');
+                }
+            }
+
+            aiMove() {
+                // AI Logic:
+                // 1. Check if AI can win in the next move.
+                for (let r = 0; r < 3; r++) {
+                    for (let c = 0; c < 3; c++) {
+                        if (this.board[r][c] === this.EMPTY) {
+                            this.board[r][c] = this.AI;
+                            if (this.checkWinner()) {
+                                this.makeMove(r, c, this.AI);
+                                return;
+                            }
+                            this.board[r][c] = this.EMPTY; // backtrack
+                        }
+                    }
+                }
+
+                // 2. Check if player can win in the next move, and block them.
+                for (let r = 0; r < 3; r++) {
+                    for (let c = 0; c < 3; c++) {
+                        if (this.board[r][c] === this.EMPTY) {
+                            this.board[r][c] = this.PLAYER;
+                            if (this.checkWinner()) {
+                                this.board[r][c] = this.EMPTY; // backtrack
+                                this.makeMove(r, c, this.AI);
+                                return;
+                            }
+                            this.board[r][c] = this.EMPTY; // backtrack
+                        }
+                    }
+                }
+
+                // 3. Strategy: center, corners, then sides
+                const strategicMoves = [
+                    [1, 1], // Center
+                    [0, 0], [0, 2], [2, 0], [2, 2], // Corners
+                    [0, 1], [1, 0], [1, 2], [2, 1]  // Sides
+                ];
+
+                for (const move of strategicMoves) {
+                    const [r, c] = move;
+                    if (this.board[r][c] === this.EMPTY) {
+                        this.makeMove(r, c, this.AI);
+                        return;
+                    }
+                }
+            }
+
+            checkWinner() {
+                // Check rows
+                for (let r = 0; r < 3; r++) {
+                    if (this.board[r][0] && this.board[r][0] === this.board[r][1] && this.board[r][0] === this.board[r][2]) {
+                        return { winner: this.board[r][0], cells: [[r, 0], [r, 1], [r, 2]] };
+                    }
+                }
+                // Check columns
+                for (let c = 0; c < 3; c++) {
+                    if (this.board[0][c] && this.board[0][c] === this.board[1][c] && this.board[0][c] === this.board[2][c]) {
+                        return { winner: this.board[0][c], cells: [[0, c], [1, c], [2, c]] };
+                    }
+                }
+                // Check diagonals
+                if (this.board[0][0] && this.board[0][0] === this.board[1][1] && this.board[0][0] === this.board[2][2]) {
+                    return { winner: this.board[0][0], cells: [[0, 0], [1, 1], [2, 2]] };
+                }
+                if (this.board[0][2] && this.board[0][2] === this.board[1][1] && this.board[0][2] === this.board[2][0]) {
+                    return { winner: this.board[0][2], cells: [[0, 2], [1, 1], [2, 0]] };
+                }
+                return null;
+            }
+
+            isBoardFull() {
+                return this.board.every(row => row.every(cell => cell !== this.EMPTY));
+            }
+        }
+
+        // Initialize the game when the DOM is ready
+        window.addEventListener('DOMContentLoaded', () => {
+            new GridMindGame('game-canvas');
+        });
+    </script>
+</body>
+</html>

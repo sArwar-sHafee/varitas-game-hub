@@ -1,0 +1,8 @@
+{
+  "name": "Grid Mind",
+  "type": "tic-tac-toe with AI",
+  "folder": "grid_mind",
+  "description": "Challenge a cunning AI that learns your strategy and anticipates your every move. It's a high-speed duel of wits where one wrong placement means the difference between victory and defeat",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
