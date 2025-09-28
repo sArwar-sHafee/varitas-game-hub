@@ -1,0 +1,8 @@
+{
+  "name": "Smash Scramble",
+  "type": "whack-a-mole",
+  "folder": "smash_scramble",
+  "description": "Get ready for a chaotic frenzy as critters don't just pop up\u2014they scramble wildly across the entire board! Smash with lightning-fast reflexes to conquer the delightful pandemonium and rack up an unbeatable high score.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

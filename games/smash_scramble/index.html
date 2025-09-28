@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Smash Scramble</title>
+    <style>
+        :root {
+            --bg-color: #3d405b;
+            --font-color: #f4f1de;
+            --shadow-color: #2c2e40;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            font-family: 'Arial Rounded MT Bold', 'Helvetica Rounded', Arial, sans-serif;
+            color: var(--font-color);
+        }
+
+        #game-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        canvas {
+            background-color: #ffffff;
+            box-shadow: 0 0 30px var(--shadow-color);
+            border-radius: 15px;
+            max-width: 100%;
+            max-height: 100%;
+            touch-action: none; /* Disable double-tap zoom on mobile */
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        // ES6+ JavaScript Game Code
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const gameContainer = document.getElementById('game-container');
+
+        // --- Game Constants ---
+        const GAME_DURATION = 60; // seconds
+        const GRID_SIZE = 3;
+        const MOLE_TYPES = [
+            { emoji: '🐹', score: 10, name: 'Normal Mole' },
+            { emoji: '🐰', score: 20, name: 'Swift Rabbit' },
+            { emoji: '💣', score: -15, name: 'Bomb! Avoid!' },
+            { emoji: '👑', score: 50, name: 'King Mole' },
+        ];
+
+        // --- Game State ---
+        let gameState = 'START'; // START, PLAYING, GAME_OVER
+        let score = 0;
+        let timeLeft = GAME_DURATION;
+        let moles = [];
+        let particles = [];
+        let scaleFactor = 1;
+        let lastTime = 0;
+        let gameTimer = 0;
+        let highscore = localStorage.getItem('smashScrambleHighscore') || 0;
+
+        // --- Audio Context for Programmatic Sound ---
+        let audioCtx;
+        
+        const initAudio = () => {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        };
+
+        const playSound = (type) => {
+            if (!audioCtx) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            const now = audioCtx.currentTime;
+
+            switch(type) {
+                case 'hit':
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(440, now);
+                    oscillator.frequency.linearRampToValueAtTime(880, now + 0.05);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+                    break;
+                case 'miss':
+                    oscillator.type = 'square';
+                    oscillator.frequency.setValueAtTime(200, now);
+                    oscillator.frequency.linearRampToValueAtTime(100, now + 0.1);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+                    break;
+                case 'bomb':
+                    oscillator.type = 'sawtooth';
+                    oscillator.frequency.setValueAtTime(120, now);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+                    break;
+                case 'start':
+                     oscillator.type = 'triangle';
+                     oscillator.frequency.setValueAtTime(261.63, now); // C4
+                     oscillator.frequency.setValueAtTime(329.63, now + 0.1); // E4
+                     oscillator.frequency.setValueAtTime(392.00, now + 0.2); // G4
+                     gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+                    break;
+                case 'gameOver':
+                     oscillator.type = 'sawtooth';
+                     oscillator.frequency.setValueAtTime(392.00, now);
+                     oscillator.frequency.linearRampToValueAtTime(196.00, now + 0.5);
+                     gainNode.gain.exponentialRampToValueAtTime(0.01, now + 1);
+                    break;
+            }
+            
+            oscillator.start(now);
+            oscillator.stop(now + 1);
+        };
+
+        // --- Classes ---
+        class Mole {
+            constructor(x, y, radius) {
+                this.x = x;
+                this.y = y;
+                this.baseY = y;
+                this.radius = radius;
+                this.state = 'DOWN'; // DOWN, RISING, UP, HIT, DESCENDING
+                this.animationProgress = 0; // 0 (down) to 1 (up)
+                this.type = MOLE_TYPES[0];
+                this.timer = this.getRandomTime(3, 7);
+                this.speed = 2.5;
+            }
+
+            getRandomTime(min, max) {
+                return Math.random() * (max - min) + min;
+            }
+
+            pop() {
+                this.state = 'RISING';
+                // Pick a random mole type
+                const rand = Math.random();
+                if (rand < 0.05) this.type = MOLE_TYPES[3]; // King Mole
+                else if (rand < 0.20) this.type = MOLE_TYPES[2]; // Bomb
+                else if (rand < 0.45) this.type = MOLE_TYPES[1]; // Rabbit
+                else this.type = MOLE_TYPES[0]; // Normal Mole
+
+                this.speed = this.type.name.includes('Swift') ? 4 : 2.5;
+            }
+
+            hide() {
+                this.state = 'DESCENDING';
+            }
+            
+            whack() {
+                if (this.state !== 'UP' && this.state !== 'RISING') return false;
+
+                this.state = 'HIT';
+                score += this.type.score;
+                playSound(this.type.emoji === '💣' ? 'bomb' : 'hit');
+                createHitParticles(this.x, this.y - this.radius, this.type.emoji);
+                // Quick hide after hit
+                this.timer = 0.5; 
+                return true;
+            }
+
+            update(deltaTime) {
+                this.timer -= deltaTime;
+
+                switch (this.state) {
+                    case 'DOWN':
+                        if (this.timer <= 0) {
+                            this.pop();
+                        }
+                        break;
+                    case 'RISING':
+                        this.animationProgress += deltaTime * this.speed;
+                        if (this.animationProgress >= 1) {
+                            this.animationProgress = 1;
+                            this.state = 'UP';
+                            this.timer = this.getRandomTime(0.5, 1.5);
+                        }
+                        break;
+                    case 'UP':
+                        if (this.timer <= 0) {
+                            this.hide();
+                        }
+                        break;
+                    case 'HIT':
+                        if (this.timer <= 0) {
+                            this.hide();
+                        }
+                        // Fall-through to descending animation
+                    case 'DESCENDING':
+                        this.animationProgress -= deltaTime * this.speed * 2;
+                        if (this.animationProgress <= 0) {
+                            this.animationProgress = 0;
+                            this.state = 'DOWN';
+                            this.timer = this.getRandomTime(1, 5);
+                        }
+                        break;
+                }
+                
+                // Animate position using easing function
+                const easedProgress = 1 - Math.pow(1 - this.animationProgress, 3); // Ease-out cubic
+                this.y = this.baseY - (this.radius * 1.5 * easedProgress);
+            }
+
+            draw(ctx) {
+                // Draw the hole
+                ctx.fillStyle = '#6b4f3a';
+                ctx.beginPath();
+                ctx.ellipse(this.x, this.baseY + this.radius / 3, this.radius, this.radius / 2.5, 0, 0, 2 * Math.PI);
+                ctx.fill();
+
+                // Draw the mole
+                if (this.animationProgress > 0) {
+                    ctx.save();
+                    ctx.translate(this.x, this.y);
+                    if (this.state === 'HIT') {
+                        ctx.rotate(Math.sin(Date.now() / 50) * 0.2); // Wiggle on hit
+                        ctx.filter = 'saturate(0)';
+                    }
+                    ctx.font = `${this.radius * 2}px Arial`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(this.type.emoji, 0, 0);
+                    ctx.restore();
+                }
+
+                // Draw hole front lip
+                ctx.fillStyle = '#8c6f5a';
+                ctx.beginPath();
+                ctx.ellipse(this.x, this.baseY + this.radius / 2.5, this.radius * 1.05, this.radius / 3, 0, 0, Math.PI);
+                ctx.fill();
+            }
+        }
+        
+        class Particle {
+            constructor(x, y, emoji) {
+                this.x = x;
+                this.y = y;
+                this.emoji = emoji === '💣' ? '💥' : ['✨', '⭐'][Math.floor(Math.random() * 2)];
+                this.size = Math.random() * 20 + 10 * scaleFactor;
+                this.vx = (Math.random() - 0.5) * 5;
+                this.vy = (Math.random() - 0.5) * 5 - 3;
+                this.life = 1; // 1 to 0
+                this.gravity = 0.2;
+            }
+
+            update(deltaTime) {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vy += this.gravity;
+                this.life -= deltaTime * 1.5;
+            }
+            
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.life);
+                ctx.font = `${this.size}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(this.emoji, this.x, this.y);
+                ctx.restore();
+            }
+        }
+        
+        // --- Game Logic ---
+        const resizeCanvas = () => {
+            const { width, height } = gameContainer.getBoundingClientRect();
+            const aspectRatio = 4 / 5;
+            let newWidth, newHeight;
+
+            if (width / height > aspectRatio) {
+                newHeight = height;
+                newWidth = newHeight * aspectRatio;
+            } else {
+                newWidth = width;
+                newHeight = newWidth / aspectRatio;
+            }
+            
+            canvas.width = newWidth * window.devicePixelRatio;
+            canvas.height = newHeight * window.devicePixelRatio;
+            canvas.style.width = `${newWidth}px`;
+            canvas.style.height = `${newHeight}px`;
+            
+            ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+            scaleFactor = newWidth / 800; // Original design width
+            
+            // Re-initialize mole positions on resize
+            if (gameState !== 'START') {
+                setupMoles();
+            }
+        };
+        
+        const setupMoles = () => {
+            moles = [];
+            const padding = canvas.width / window.devicePixelRatio * 0.15;
+            const usableWidth = canvas.width / window.devicePixelRatio - padding * 2;
+            const usableHeight = canvas.height / window.devicePixelRatio - padding * 2.5; // More vertical space
+            const cellWidth = usableWidth / GRID_SIZE;
+            const cellHeight = usableHeight / GRID_SIZE;
+            const moleRadius = Math.min(cellWidth, cellHeight) * 0.4;
+
+            for (let i = 0; i < GRID_SIZE; i++) {
+                for (let j = 0; j < GRID_SIZE; j++) {
+                    const x = padding + cellWidth * (j + 0.5);
+                    const y = (padding * 2) + cellHeight * (i + 0.5);
+                    moles.push(new Mole(x, y, moleRadius));
+                }
+            }
+        };
+
+        const createHitParticles = (x, y, emoji) => {
+            for (let i = 0; i < 15; i++) {
+                particles.push(new Particle(x, y, emoji));
+            }
+        };
+
+        const startGame = () => {
+            initAudio();
+            score = 0;
+            timeLeft = GAME_DURATION;
+            gameState = 'PLAYING';
+            setupMoles();
+            gameTimer = 0;
+            lastTime = 0; // Reset lastTime for the new game's first frame
+            playSound('start');
+        };
+
+        const update = (deltaTime) => {
+            if (gameState !== 'PLAYING') return;
+
+            gameTimer += deltaTime;
+            timeLeft = Math.max(0, GAME_DURATION - gameTimer);
+
+            moles.forEach(mole => mole.update(deltaTime));
+            
+            // Iterate backwards to safely remove particles
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.update(deltaTime);
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                }
+            }
+
+            if (timeLeft <= 0) {
+                gameState = 'GAME_OVER';
+                if (score > highscore) {
+                    highscore = score;
+                    localStorage.setItem('smashScrambleHighscore', highscore);
+                }
+                playSound('gameOver');
+            }
+        };
+
+        const draw = () => {
+            const w = canvas.width / window.devicePixelRatio;
+            const h = canvas.height / window.devicePixelRatio;
+            
+            // Draw background
+            const skyGradient = ctx.createLinearGradient(0, 0, 0, h * 0.6);
+            skyGradient.addColorStop(0, '#87CEEB');
+            skyGradient.addColorStop(1, '#B0E0E6');
+            ctx.fillStyle = skyGradient;
+            ctx.fillRect(0, 0, w, h);
+            
+            const grassGradient = ctx.createLinearGradient(0, h * 0.4, 0, h);
+            grassGradient.addColorStop(0, '#7CFC00');
+            grassGradient.addColorStop(1, '#3CB371');
+            ctx.fillStyle = grassGradient;
+            ctx.fillRect(0, h * 0.4, w, h * 0.6);
+
+            switch (gameState) {
+                case 'START':
+                    drawStartScreen(w, h);
+                    break;
+                case 'PLAYING':
+                    drawGame(w, h);
+                    break;
+                case 'GAME_OVER':
+                    drawGameOverScreen(w, h);
+                    break;
+            }
+        };
+        
+        const drawText = (text, x, y, size, color, align = 'center', shadow = true) => {
+            ctx.font = `bold ${size * scaleFactor}px 'Arial Rounded MT Bold', sans-serif`;
+            ctx.textAlign = align;
+            ctx.textBaseline = 'middle';
+            if (shadow) {
+                ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                ctx.shadowBlur = 5 * scaleFactor;
+                ctx.shadowOffsetX = 2 * scaleFactor;
+                ctx.shadowOffsetY = 2 * scaleFactor;
+            }
+            ctx.fillStyle = color;
+            ctx.fillText(text, x, y);
+            ctx.shadowColor = 'transparent'; // Reset shadow
+        };
+
+        const drawStartScreen = (w, h) => {
+            const titleY = h * 0.3;
+            const titleSize = 100;
+            const wave = Math.sin(Date.now() / 300) * 5 * scaleFactor;
+            
+            drawText('Smash', w / 2 - 130 * scaleFactor, titleY - 30 * scaleFactor + wave, titleSize, '#f28482');
+            drawText('Scramble', w / 2 + 100 * scaleFactor, titleY + 30 * scaleFactor - wave, titleSize, '#84a59d');
+            
+            drawText('Click or Press Enter to Start', w / 2, h * 0.6, 30, '#ffffff');
+            drawText('🖱️ Whack the good moles, avoid the bombs! 💣', w / 2, h * 0.7, 24, '#ffffff');
+            drawText(`High Score: ${highscore}`, w / 2, h * 0.85, 26, '#fefae0');
+        };
+
+        const drawGame = (w, h) => {
+            moles.forEach(mole => mole.draw(ctx));
+            particles.forEach(p => p.draw(ctx));
+
+            // UI
+            drawText(`Score: ${score}`, 20 * scaleFactor, 40 * scaleFactor, 36, '#ffffff', 'left');
+            drawText(`Time: ${Math.ceil(timeLeft)}`, w - 20 * scaleFactor, 40 * scaleFactor, 36, '#ffffff', 'right');
+        };
+        
+        const drawGameOverScreen = (w, h) => {
+            // Dim the background
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(0, 0, w, h);
+            
+            drawText('GAME OVER', w / 2, h * 0.3, 100, '#e63946');
+            drawText(`Final Score: ${score}`, w / 2, h * 0.5, 50, '#f1faee');
+            if (score > 0 && score >= highscore) {
+                 drawText('New High Score!', w / 2, h * 0.6, 35, '#ffca3a');
+            }
+            drawText('Click or Press Enter to Restart', w / 2, h * 0.75, 30, '#a8dadc');
+        };
+
+        const gameLoop = (timestamp) => {
+            // Prevent large deltaTime on the first frame
+            if (!lastTime) {
+                lastTime = timestamp;
+                requestAnimationFrame(gameLoop);
+                return;
+            }
+
+            const deltaTime = (timestamp - lastTime) / 1000;
+            lastTime = timestamp;
+
+            update(deltaTime);
+            draw();
+
+            requestAnimationFrame(gameLoop);
+        };
+
+        // --- Event Listeners ---
+        const handleInput = (clientX, clientY) => {
+             initAudio(); // Ensure audio context is ready on first user interaction
+            
+            if (gameState === 'START' || gameState === 'GAME_OVER') {
+                startGame();
+                return;
+            }
+
+            if (gameState === 'PLAYING') {
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = (canvas.width / window.devicePixelRatio) / rect.width;
+                const scaleY = (canvas.height / window.devicePixelRatio) / rect.height;
+                const canvasX = (clientX - rect.left) * scaleX;
+                const canvasY = (clientY - rect.top) * scaleY;
+                
+                let hit = false;
+                // Iterate backwards to allow whacking moles on top first
+                for (let i = moles.length - 1; i >= 0; i--) {
+                    const mole = moles[i];
+                    const distance = Math.sqrt(Math.pow(canvasX - mole.x, 2) + Math.pow(canvasY - mole.y, 2));
+                    if (distance < mole.radius * 1.2) { // Generous hit-box
+                        if (mole.whack()) {
+                            hit = true;
+                            break; // only whack one mole per click
+                        }
+                    }
+                }
+                if (!hit) {
+                    playSound('miss');
+                }
+            }
+        };
+
+        canvas.addEventListener('mousedown', (e) => {
+            handleInput(e.clientX, e.clientY);
+        });
+
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const touch = e.touches[0];
+            handleInput(touch.clientX, touch.clientY);
+        }, { passive: false });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Enter' || e.code === 'Space') {
+                 e.preventDefault();
+                 initAudio();
+                if (gameState === 'START' || gameState === 'GAME_OVER') {
+                    startGame();
+                }
+            }
+        });
+
+        window.addEventListener('resize', resizeCanvas);
+
+        // --- Initialisation ---
+        resizeCanvas();
+        requestAnimationFrame(gameLoop);
+
+    </script>
+</body>
+</html>
