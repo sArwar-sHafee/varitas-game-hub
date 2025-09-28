@@ -1,0 +1,8 @@
+{
+  "name": "Chroma Burst",
+  "type": "bubble shooter",
+  "folder": "chroma_burst",
+  "description": "Unleash dazzling chain reactions and watch massive combos detonate in a brilliant explosion of color. Every shot is your chance to trigger the ultimate, screen-clearing Chroma Burst",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
