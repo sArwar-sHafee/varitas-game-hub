@@ -44,18 +44,18 @@
             this.audioCtx = null;
         }
 
-        _init() {
+        async _init() {
             if (!this.audioCtx) {
                 this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             }
             // Resume context on user gesture if needed
             if (this.audioCtx.state === 'suspended') {
-                this.audioCtx.resume();
+                await this.audioCtx.resume();
             }
         }
 
-        play(type) {
-            this._init();
+        async play(type) {
+            await this._init();
             if (!this.audioCtx) return;
 
             const oscillator = this.audioCtx.createOscillator();
