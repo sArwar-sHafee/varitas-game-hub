@@ -1,0 +1,8 @@
+{
+  "name": "Echo Match",
+  "type": "memory card game",
+  "folder": "echo_match",
+  "description": "Unleash a thrilling chain reaction with every pair you find, as each match creates an \"Echo\" that lets you flip more cards. Strategize your moves to create the perfect memory cascade and clear the board for a stunning victory",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

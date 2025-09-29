@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Echo Match</title>
+    <style>
+        :root {
+            --bg-grad-start: #1a2a6c;
+            --bg-grad-mid: #b21f1f;
+            --bg-grad-end: #fdbb2d;
+            --canvas-shadow: #00000080;
+            --font-family: 'Arial', 'Helvetica', sans-serif;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: var(--font-family);
+            background: linear-gradient(135deg, var(--bg-grad-start), var(--bg-grad-mid), var(--bg-grad-end));
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 800px;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        canvas {
+            width: 100%;
+            height: auto;
+            aspect-ratio: 4 / 5;
+            background-color: #00000033;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px var(--canvas-shadow);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+    class SoundFX {
+        constructor() {
+            this.audioCtx = null;
+        }
+
+        _init() {
+            if (!this.audioCtx) {
+                this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        play(type) {
+            this._init();
+            if (!this.audioCtx) return;
+
+            switch (type) {
+                case 'flip':
+                    this._playNote(440, 0.1, 'sine'); // A4
+                    break;
+                case 'match':
+                    this._playSequence([
+                        { freq: 523.25, dur: 0.1, time: 0 }, // C5
+                        { freq: 659.25, dur: 0.15, time: 0.1 } // E5
+                    ]);
+                    break;
+                case 'noMatch':
+                    this._playNote(164.81, 0.2, 'sawtooth'); // E3
+                    break;
+                case 'win':
+                     this._playSequence([
+                        { freq: 523.25, dur: 0.1, time: 0 }, // C5
+                        { freq: 587.33, dur: 0.1, time: 0.1 }, // D5
+                        { freq: 659.25, dur: 0.1, time: 0.2 }, // E5
+                        { freq: 783.99, dur: 0.3, time: 0.3 }  // G5
+                    ]);
+                    break;
+                case 'click':
+                    this._playNote(659.25, 0.08, 'triangle'); // E5
+                    break;
+            }
+        }
+
+        _playNote(frequency, duration, type) {
+            const oscillator = this.audioCtx.createOscillator();
+            const gainNode = this.audioCtx.createGain();
+
+            oscillator.type = type;
+            oscillator.frequency.setValueAtTime(frequency, this.audioCtx.currentTime);
+            
+            gainNode.gain.setValueAtTime(1, this.audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + duration);
+
+            oscillator.connect(gainNode);
+            gainNode.connect(this.audioCtx.destination);
+
+            oscillator.start();
+            oscillator.stop(this.audioCtx.currentTime + duration);
+        }
+
+        _playSequence(notes) {
+            notes.forEach(note => {
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(note.freq, this.audioCtx.currentTime + note.time);
+                
+                gainNode.gain.setValueAtTime(1, this.audioCtx.currentTime + note.time);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + note.time + note.dur);
+
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+
+                oscillator.start(this.audioCtx.currentTime + note.time);
+                oscillator.stop(this.audioCtx.currentTime + note.time + note.dur);
+            });
+        }
+    }
+
+    class Card {
+        constructor(value, x, y, width, height) {
+            this.value = value;
+            this.x = x;
+            this.y = y;
+            this.width = width;
+            this.height = height;
+            this.isFlipped = false;
+            this.isMatched = false;
+            this.flipProgress = 0; // 0 = back, 1 = front
+            this.isFlipping = false;
+            this.targetFlip = 0;
+            this.matchAnimation = 0; // For pulsing effect
+        }
+
+        flip() {
+            if (this.isFlipping || this.isMatched) return;
+            this.isFlipping = true;
+            this.targetFlip = this.isFlipped ? 0 : 1;
+        }
+
+        update(deltaTime) {
+            const flipSpeed = 5;
+            if (this.isFlipping) {
+                if (this.targetFlip === 1) {
+                    this.flipProgress += flipSpeed * deltaTime;
+                    if (this.flipProgress >= 1) {
+                        this.flipProgress = 1;
+                        this.isFlipped = true;
+                        this.isFlipping = false;
+                    }
+                } else {
+                    this.flipProgress -= flipSpeed * deltaTime;
+                    if (this.flipProgress <= 0) {
+                        this.flipProgress = 0;
+                        this.isFlipped = false;
+                        this.isFlipping = false;
+                    }
+                }
+            }
+
+            if (this.isMatched) {
+                this.matchAnimation += 4 * deltaTime;
+            }
+        }
+        
+        draw(ctx) {
+            ctx.save();
+            ctx.translate(this.x + this.width / 2, this.y + this.height / 2);
+
+            if (this.isMatched) {
+                const scale = 1 + Math.sin(this.matchAnimation) * 0.1;
+                ctx.scale(scale, scale);
+            }
+
+            const scaleX = Math.cos(this.flipProgress * Math.PI);
+            ctx.scale(scaleX, 1);
+            
+            ctx.shadowColor = 'rgba(0,0,0,0.5)';
+            ctx.shadowBlur = 10;
+            ctx.shadowOffsetX = 3;
+            ctx.shadowOffsetY = 3;
+
+            // Draw card back or front based on flip progress
+            if (this.flipProgress < 0.5) {
+                this.drawBack(ctx);
+            } else {
+                ctx.scale(-1, 1); // Reverse the flip
+                this.drawFront(ctx);
+            }
+
+            ctx.restore();
+        }
+
+        drawBack(ctx) {
+            const cornerRadius = this.width * 0.1;
+            const gradient = ctx.createLinearGradient(0, -this.height / 2, 0, this.height / 2);
+            gradient.addColorStop(0, '#fdbb2d');
+            gradient.addColorStop(1, '#b21f1f');
+            
+            ctx.fillStyle = gradient;
+            this.drawRoundedRect(ctx, -this.width / 2, -this.height / 2, this.width, this.height, cornerRadius);
+            
+            ctx.fillStyle = 'rgba(255,255,255,0.7)';
+            ctx.font = `${this.width * 0.5}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('?', 0, this.height * 0.05);
+        }
+
+        drawFront(ctx) {
+            const cornerRadius = this.width * 0.1;
+            const gradient = ctx.createLinearGradient(-this.width / 2, -this.height / 2, this.width / 2, this.height / 2);
+            gradient.addColorStop(0, '#ffffff');
+            gradient.addColorStop(1, '#e0e0e0');
+
+            ctx.fillStyle = gradient;
+            this.drawRoundedRect(ctx, -this.width / 2, -this.height / 2, this.width, this.height, cornerRadius);
+            
+            ctx.shadowColor = 'transparent'; // No shadow for emoji
+            ctx.font = `${this.width * 0.6}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(this.value, 0, this.height * 0.05);
+        }
+
+        drawRoundedRect(ctx, x, y, width, height, radius) {
+            ctx.beginPath();
+            ctx.moveTo(x + radius, y);
+            ctx.lineTo(x + width - radius, y);
+            ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+            ctx.lineTo(x + width, y + height - radius);
+            ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+            ctx.lineTo(x + radius, y + height);
+            ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+            ctx.lineTo(x, y + radius);
+            ctx.quadraticCurveTo(x, y, x + radius, y);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        isClicked(mouseX, mouseY) {
+            return mouseX > this.x && mouseX < this.x + this.width &&
+                   mouseY > this.y && mouseY < this.y + this.height;
+        }
+    }
+
+    class EchoMatchGame {
+        constructor(canvas) {
+            this.canvas = canvas;
+            this.ctx = canvas.getContext('2d');
+            this.emojis = ['🧠', '🤖', '👻', '👽', '👾', '🚀', '🔥', '💧'];
+            this.sound = new SoundFX();
+            
+            this.gameState = 'start'; // 'start', 'playing', 'gameOver'
+            this.cards = [];
+            this.flippedCards = [];
+            this.moves = 0;
+            this.matchesFound = 0;
+            this.timer = 0;
+            this.startTime = null;
+            this.grid = { rows: 4, cols: 4 };
+            this.keyboardSelector = { row: 0, col: 0 };
+            
+            this.lastTime = 0;
+            this.gameLoop = this.gameLoop.bind(this);
+        }
+        
+        init() {
+            this.registerEventListeners();
+            this.handleResize();
+            this.gameLoop(0);
+        }
+
+        startGame() {
+            this.gameState = 'playing';
+            this.cards = [];
+            this.flippedCards = [];
+            this.moves = 0;
+            this.matchesFound = 0;
+            this.timer = 0;
+            this.startTime = null;
+            this.createCards();
+            this.handleResize(); // Recalculate layout after creating cards
+            this.sound.play('click');
+        }
+
+        createCards() {
+            const cardValues = [...this.emojis, ...this.emojis];
+            this.shuffle(cardValues);
+            
+            for (let i = 0; i < this.grid.rows * this.grid.cols; i++) {
+                this.cards.push(new Card(cardValues[i], 0, 0, 0, 0));
+            }
+        }
+
+        shuffle(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+        }
+
+        registerEventListeners() {
+            window.addEventListener('resize', () => this.handleResize());
+            this.canvas.addEventListener('click', (e) => this.handleMouseClick(e));
+            window.addEventListener('keydown', (e) => this.handleKeyPress(e));
+        }
+
+        handleResize() {
+            const container = this.canvas.parentElement;
+            const style = window.getComputedStyle(container);
+            const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+            const realContainerWidth = container.clientWidth - paddingX;
+            
+            // Respect the CSS aspect-ratio
+            const aspectRatio = 4 / 5;
+            let canvasWidth = realContainerWidth;
+            let canvasHeight = canvasWidth / aspectRatio;
+
+            this.canvas.style.width = canvasWidth + 'px';
+            this.canvas.style.height = canvasHeight + 'px';
+            
+            // Set canvas resolution to match its display size for crisp graphics
+            const dpr = window.devicePixelRatio || 1;
+            this.canvas.width = canvasWidth * dpr;
+            this.canvas.height = canvasHeight * dpr;
+            this.ctx.scale(dpr, dpr);
+            
+            const padding = canvasWidth * 0.05;
+            const availableWidth = canvasWidth - padding * 2;
+            const uiHeight = canvasWidth * 0.2; // Reserve space for UI
+            const availableHeight = canvasHeight - uiHeight - padding * 2;
+
+            const cardWidth = (availableWidth - padding * (this.grid.cols - 1)) / this.grid.cols;
+            const cardHeight = (availableHeight - padding * (this.grid.rows - 1)) / this.grid.rows;
+            
+            this.gridOffset = { x: padding, y: padding + uiHeight };
+
+            this.cards.forEach((card, i) => {
+                const col = i % this.grid.cols;
+                const row = Math.floor(i / this.grid.cols);
+                card.width = cardWidth;
+                card.height = cardHeight;
+                card.x = this.gridOffset.x + col * (cardWidth + padding);
+                card.y = this.gridOffset.y + row * (cardHeight + padding);
+            });
+        }
+
+        handleMouseClick(e) {
+            if (this.sound.audioCtx === null) {
+                this.sound._init();
+            }
+            const rect = this.canvas.getBoundingClientRect();
+            // Scale mouse coordinates to match canvas coordinate system
+            const scaleX = this.canvas.width / (rect.width * (window.devicePixelRatio || 1));
+            const scaleY = this.canvas.height / (rect.height * (window.devicePixelRatio || 1));
+            const mouseX = (e.clientX - rect.left) * scaleX;
+            const mouseY = (e.clientY - rect.top) * scaleY;
+
+            if (this.gameState === 'start' || this.gameState === 'gameOver') {
+                const canvasHeight = this.canvas.height / (window.devicePixelRatio || 1);
+                const buttonY = canvasHeight * 0.65;
+                const buttonHeight = canvasHeight * 0.1;
+                if (mouseY > buttonY && mouseY < buttonY + buttonHeight) {
+                    this.startGame();
+                }
+            } else if (this.gameState === 'playing') {
+                if (this.flippedCards.length >= 2) return;
+
+                for (const card of this.cards) {
+                    if (!card.isFlipped && !card.isMatched && card.isClicked(mouseX, mouseY)) {
+                        this.flipCard(card);
+                        break;
+                    }
+                }
+            }
+        }
+
+        handleKeyPress(e) {
+             if (this.sound.audioCtx === null) {
+                this.sound._init();
+            }
+            if (this.gameState === 'start' || this.gameState === 'gameOver') {
+                if (e.code === 'Space' || e.code === 'Enter') {
+                    this.startGame();
+                }
+            } else if (this.gameState === 'playing') {
+                switch(e.code) {
+                    case 'ArrowUp':
+                        this.keyboardSelector.row = Math.max(0, this.keyboardSelector.row - 1);
+                        break;
+                    case 'ArrowDown':
+                        this.keyboardSelector.row = Math.min(this.grid.rows - 1, this.keyboardSelector.row + 1);
+                        break;
+                    case 'ArrowLeft':
+                        this.keyboardSelector.col = Math.max(0, this.keyboardSelector.col - 1);
+                        break;
+                    case 'ArrowRight':
+                        this.keyboardSelector.col = Math.min(this.grid.cols - 1, this.keyboardSelector.col + 1);
+                        break;
+                    case 'Space':
+                    case 'Enter':
+                        e.preventDefault();
+                        if (this.flippedCards.length >= 2) return;
+                        const index = this.keyboardSelector.row * this.grid.cols + this.keyboardSelector.col;
+                        const card = this.cards[index];
+                        if (card && !card.isFlipped && !card.isMatched) {
+                            this.flipCard(card);
+                        }
+                        break;
+                }
+            }
+        }
+
+        flipCard(card) {
+            if (this.startTime === null) {
+                this.startTime = Date.now();
+            }
+            card.flip();
+            this.sound.play('flip');
+            this.flippedCards.push(card);
+
+            if (this.flippedCards.length === 2) {
+                this.moves++;
+                setTimeout(() => this.checkForMatch(), 800);
+            }
+        }
+
+        checkForMatch() {
+            const [card1, card2] = this.flippedCards;
+            if (card1.value === card2.value) {
+                card1.isMatched = true;
+                card2.isMatched = true;
+                this.matchesFound++;
+                this.sound.play('match');
+                if (this.matchesFound === this.emojis.length) {
+                    this.gameState = 'gameOver';
+                    this.sound.play('win');
+                }
+            } else {
+                card1.flip();
+                card2.flip();
+                this.sound.play('noMatch');
+            }
+            this.flippedCards = [];
+        }
+
+        update(deltaTime) {
+            if (this.gameState !== 'playing') return;
+
+            if(this.startTime) {
+                this.timer = (Date.now() - this.startTime) / 1000;
+            }
+
+            this.cards.forEach(card => card.update(deltaTime));
+        }
+
+        draw() {
+            const canvasWidth = this.canvas.width / (window.devicePixelRatio || 1);
+            const canvasHeight = this.canvas.height / (window.devicePixelRatio || 1);
+
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            this.drawBackground();
+
+            if (this.gameState === 'start') {
+                this.drawStartScreen();
+            } else if (this.gameState === 'playing') {
+                this.drawGameScreen();
+            } else if (this.gameState === 'gameOver') {
+                this.drawGameOverScreen();
+            }
+        }
+        
+        drawBackground() {
+            const canvasWidth = this.canvas.width / (window.devicePixelRatio || 1);
+            const canvasHeight = this.canvas.height / (window.devicePixelRatio || 1);
+            const bgGradient = this.ctx.createRadialGradient(
+                canvasWidth / 2, canvasHeight / 2, 0,
+                canvasWidth / 2, canvasHeight / 2, canvasWidth
+            );
+            bgGradient.addColorStop(0, '#3a5080');
+            bgGradient.addColorStop(1, '#1a2a6c');
+            this.ctx.fillStyle = bgGradient;
+            this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+        }
+
+        drawStartScreen() {
+            const canvasWidth = this.canvas.width / (window.devicePixelRatio || 1);
+            const canvasHeight = this.canvas.height / (window.devicePixelRatio || 1);
+            
+            this.drawText('Echo Match', canvasWidth / 2, canvasHeight * 0.2, canvasWidth * 0.15, '#fdbb2d', 'bold');
+            this.drawText('Find all the matching pairs!', canvasWidth / 2, canvasHeight * 0.35, canvasWidth * 0.05, '#ffffff');
+            this.drawText('Controls:', canvasWidth / 2, canvasHeight * 0.45, canvasWidth * 0.04, '#e0e0e0');
+            this.drawText('Mouse: Click cards to flip', canvasWidth / 2, canvasHeight * 0.50, canvasWidth * 0.04, '#e0e0e0');
+            this.drawText('Keyboard: Arrows, Space/Enter', canvasWidth / 2, canvasHeight * 0.55, canvasWidth * 0.04, '#e0e0e0');
+            this.drawButton('Start Game', canvasHeight * 0.65);
+        }
+        
+        drawGameScreen() {
+            this.cards.forEach(card => card.draw(this.ctx));
+            this.drawUI();
+            this.drawKeyboardSelector();
+        }
+
+        drawGameOverScreen() {
+            const canvasWidth = this.canvas.width / (window.devicePixelRatio || 1);
+            const canvasHeight = this.canvas.height / (window.devicePixelRatio || 1);
+            
+            this.drawText('You Win!', canvasWidth / 2, canvasHeight * 0.25, canvasWidth * 0.15, '#66ff66', 'bold');
+            this.drawText(`Moves: ${this.moves}`, canvasWidth / 2, canvasHeight * 0.4, canvasWidth * 0.06, '#ffffff');
+            this.drawText(`Time: ${this.timer.toFixed(2)}s`, canvasWidth / 2, canvasHeight * 0.48, canvasWidth * 0.06, '#ffffff');
+            this.drawButton('Play Again', canvasHeight * 0.65);
+        }
+
+        drawUI() {
+            const canvasWidth = this.canvas.width / (window.devicePixelRatio || 1);
+            const fontSize = canvasWidth * 0.05;
+            this.ctx.fillStyle = '#ffffff';
+            this.ctx.textBaseline = 'top';
+
+            this.ctx.textAlign = 'left';
+            this.drawText(`Moves: ${this.moves}`, canvasWidth * 0.05, canvasWidth * 0.05, fontSize, '#ffffff', 'normal', 'left', 'middle');
+
+            this.ctx.textAlign = 'right';
+            this.drawText(`Time: ${this.timer.toFixed(1)}`, canvasWidth * 0.95, canvasWidth * 0.05, fontSize, '#ffffff', 'normal', 'right', 'middle');
+        }
+
+        drawKeyboardSelector() {
+            if (this.gameState !== 'playing') return;
+
+            const index = this.keyboardSelector.row * this.grid.cols + this.keyboardSelector.col;
+            const card = this.cards[index];
+
+            if (card) {
+                this.ctx.strokeStyle = '#fdbb2d';
+                this.ctx.lineWidth = 4;
+                this.ctx.shadowColor = '#fdbb2d';
+                this.ctx.shadowBlur = 10;
+                
+                const cornerRadius = card.width * 0.12;
+                const p = 5; // padding
+                const x = card.x - p;
+                const y = card.y - p;
+                const width = card.width + 2 * p;
+                const height = card.height + 2 * p;
+
+                this.ctx.beginPath();
+                this.ctx.moveTo(x + cornerRadius, y);
+                this.ctx.lineTo(x + width - cornerRadius, y);
+                this.ctx.quadraticCurveTo(x + width, y, x + width, y + cornerRadius);
+                this.ctx.lineTo(x + width, y + height - cornerRadius);
+                this.ctx.quadraticCurveTo(x + width, y + height, x + width - cornerRadius, y + height);
+                this.ctx.lineTo(x + cornerRadius, y + height);
+                this.ctx.quadraticCurveTo(x, y + height, x, y + height - cornerRadius);
+                this.ctx.lineTo(x, y + cornerRadius);
+                this.ctx.quadraticCurveTo(x, y, x + cornerRadius, y);
+                this.ctx.closePath();
+                this.ctx.stroke();
+
+                this.ctx.shadowColor = 'transparent';
+                this.ctx.shadowBlur = 0;
+            }
+        }
+
+        drawText(text, x, y, size, color = '#ffffff', weight = 'normal', align = 'center', baseline = 'middle') {
+            const fontFamily = getComputedStyle(document.body).fontFamily || 'sans-serif';
+            this.ctx.font = `${weight} ${size}px ${fontFamily}`;
+            this.ctx.fillStyle = color;
+            this.ctx.textAlign = align;
+            this.ctx.textBaseline = baseline;
+            this.ctx.fillText(text, x, y);
+        }
+        
+        drawButton(text, y) {
+            const canvasWidth = this.canvas.width / (window.devicePixelRatio || 1);
+            const canvasHeight = this.canvas.height / (window.devicePixelRatio || 1);
+            const width = canvasWidth * 0.6;
+            const height = canvasHeight * 0.1;
+            const x = (canvasWidth - width) / 2;
+            const cornerRadius = height / 3;
+
+            const gradient = this.ctx.createLinearGradient(x, y, x + width, y);
+            gradient.addColorStop(0, '#fdbb2d');
+            gradient.addColorStop(1, '#b21f1f');
+            
+            this.ctx.save();
+            this.ctx.fillStyle = gradient;
+            this.ctx.shadowColor = 'rgba(0,0,0,0.5)';
+            this.ctx.shadowBlur = 10;
+            this.ctx.shadowOffsetX = 3;
+            this.ctx.shadowOffsetY = 3;
+
+            this.ctx.beginPath();
+            this.ctx.moveTo(x + cornerRadius, y);
+            this.ctx.lineTo(x + width - cornerRadius, y);
+            this.ctx.quadraticCurveTo(x + width, y, x + width, y + cornerRadius);
+            this.ctx.lineTo(x + width, y + height - cornerRadius);
+            this.ctx.quadraticCurveTo(x + width, y + height, x + width - cornerRadius, y + height);
+            this.ctx.lineTo(x + cornerRadius, y + height);
+            this.ctx.quadraticCurveTo(x, y + height, x, y + height - cornerRadius);
+            this.ctx.lineTo(x, y + cornerRadius);
+            this.ctx.quadraticCurveTo(x, y, x + cornerRadius, y);
+            this.ctx.closePath();
+            this.ctx.fill();
+            this.ctx.restore();
+
+            this.drawText(text, canvasWidth / 2, y + height / 2, height * 0.4, '#ffffff', 'bold');
+        }
+
+        gameLoop(timestamp) {
+            const deltaTime = (timestamp - this.lastTime) / 1000;
+            this.lastTime = timestamp;
+
+            this.update(deltaTime || 0);
+            this.draw();
+
+            requestAnimationFrame(this.gameLoop);
+        }
+    }
+
+    window.addEventListener('load', () => {
+        const canvas = document.getElementById('gameCanvas');
+        const game = new EchoMatchGame(canvas);
+        game.init();
+    });
+    </script>
+
+</body>
+</html>
