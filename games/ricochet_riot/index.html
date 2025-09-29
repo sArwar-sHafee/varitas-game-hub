@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ricochet Riot</title>
+    <style>
+        :root {
+            --glow-color: #00ffff;
+            --primary-bg: #1a1a2e;
+            --secondary-bg: #16213e;
+            --text-color: #e0fbfc;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--primary-bg);
+            color: var(--text-color);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #gameContainer {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            max-width: 800px;
+        }
+
+        #gameCanvas {
+            background-color: var(--secondary-bg);
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
+            max-width: 100%;
+            aspect-ratio: 4 / 3;
+            cursor: none;
+        }
+
+        #ui-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            background-color: rgba(22, 33, 62, 0.85);
+            backdrop-filter: blur(5px);
+            border-radius: 10px;
+            color: var(--text-color);
+            padding: 20px;
+            transition: opacity 0.3s ease-in-out;
+        }
+        
+        #ui-container.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        h1 {
+            font-size: 3rem;
+            text-transform: uppercase;
+            letter-spacing: 4px;
+            text-shadow: 0 0 10px var(--glow-color), 0 0 20px var(--glow-color);
+            margin-bottom: 20px;
+        }
+        
+        p {
+            font-size: 1.2rem;
+            line-height: 1.6;
+            max-width: 500px;
+        }
+
+        .instructions {
+            margin-top: 30px;
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 8px;
+        }
+        
+        .instructions p {
+             font-size: 1rem;
+        }
+
+        button {
+            margin-top: 30px;
+            padding: 15px 30px;
+            font-size: 1.5rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            color: var(--text-color);
+            background: linear-gradient(45deg, #f72585, #7209b7);
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 0 15px rgba(247, 37, 133, 0.5);
+            transition: all 0.2s ease;
+        }
+
+        button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 25px rgba(247, 37, 133, 0.8);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui-container">
+            <div id="start-screen">
+                <h1>Ricochet Riot</h1>
+                <p>Break all the bricks to win. Don't let the ball hit the bottom!</p>
+                <div class="instructions">
+                    <p>⌨️ Move your mouse to control the paddle.</p>
+                    <p>🖱️ Click to launch the ball.</p>
+                </div>
+                <button id="startButton">Start Game</button>
+            </div>
+            <div id="gameover-screen" class="hidden">
+                <h1>Game Over</h1>
+                <p>Final Score: <span id="finalScore">0</span></p>
+                <button id="restartButton">Play Again</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- Basic Setup ---
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+
+            // UI Elements
+            const uiContainer = document.getElementById('ui-container');
+            const startScreen = document.getElementById('start-screen');
+            const gameOverScreen = document.getElementById('gameover-screen');
+            const startButton = document.getElementById('startButton');
+            const restartButton = document.getElementById('restartButton');
+            const finalScoreSpan = document.getElementById('finalScore');
+            
+            let gameState = 'START'; // START, PLAYING, GAMEOVER
+            let score = 0;
+            let lives = 3;
+            let animationFrameId;
+
+            // --- Audio Context for Programmatic Sounds ---
+            let audioCtx;
+            function initAudio() {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+            }
+
+            function playSound(type) {
+                if (!audioCtx) return;
+
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                
+                gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+
+                switch(type) {
+                    case 'hit':
+                        oscillator.type = 'square';
+                        oscillator.frequency.setValueAtTime(440, audioCtx.currentTime); // A4
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
+                        break;
+                    case 'brick':
+                        oscillator.type = 'triangle';
+                        oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // A5
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+                        break;
+                    case 'lose_life':
+                        oscillator.type = 'sawtooth';
+                        oscillator.frequency.setValueAtTime(220, audioCtx.currentTime); // A3
+                        oscillator.frequency.linearRampToValueAtTime(110, audioCtx.currentTime + 0.5);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
+                        break;
+                }
+                
+                oscillator.start(audioCtx.currentTime);
+                oscillator.stop(audioCtx.currentTime + 0.5);
+            }
+            
+            // --- Game Objects & Properties ---
+            let paddle, ball, bricks, particles;
+            let brickRowCount, brickColumnCount;
+
+            // Screen Shake Effect
+            let shakeDuration = 0;
+            let shakeMagnitude = 0;
+
+            // Resize handler
+            function resizeCanvas() {
+                const container = document.getElementById('gameContainer');
+                const containerWidth = container.clientWidth;
+                const aspectRatio = 4 / 3;
+                
+                canvas.width = containerWidth;
+                canvas.height = containerWidth / aspectRatio;
+
+                if (gameState === 'PLAYING' || gameState === 'GAMEOVER') {
+                    resetGame(false); // reset game objects without resetting score/lives
+                }
+            }
+            
+            // --- Classes for Game Objects ---
+            class Paddle {
+                constructor(x, y, width, height, color) {
+                    this.x = x;
+                    this.y = y;
+                    this.width = width;
+                    this.height = height;
+                    this.color = color;
+                }
+
+                draw() {
+                    const gradient = ctx.createLinearGradient(this.x, this.y, this.x + this.width, this.y);
+                    gradient.addColorStop(0, '#7209b7');
+                    gradient.addColorStop(0.5, '#f72585');
+                    gradient.addColorStop(1, '#7209b7');
+                    
+                    ctx.fillStyle = gradient;
+                    ctx.shadowColor = '#f72585';
+                    ctx.shadowBlur = 10;
+                    ctx.fillRect(this.x, this.y, this.width, this.height);
+                    ctx.shadowBlur = 0;
+                }
+            }
+
+            class Ball {
+                constructor(x, y, radius, dx, dy, color) {
+                    this.x = x;
+                    this.y = y;
+                    this.radius = radius;
+                    this.dx = dx;
+                    this.dy = dy;
+                    this.color = color;
+                    this.speed = Math.sqrt(dx*dx + dy*dy);
+                    this.onPaddle = true;
+                }
+
+                draw() {
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                    ctx.fillStyle = this.color;
+                    ctx.shadowColor = this.color;
+                    ctx.shadowBlur = 15;
+                    ctx.fill();
+                    ctx.closePath();
+                    ctx.shadowBlur = 0;
+                }
+
+                update() {
+                    if (this.onPaddle) {
+                        this.x = paddle.x + paddle.width / 2;
+                        this.y = paddle.y - this.radius;
+                    } else {
+                        this.x += this.dx;
+                        this.y += this.dy;
+                    }
+                }
+            }
+            
+            class Brick {
+                constructor(x, y, width, height, color, scoreValue) {
+                    this.x = x;
+                    this.y = y;
+                    this.width = width;
+                    this.height = height;
+                    this.color = color;
+                    this.scoreValue = scoreValue;
+                    this.status = 1; // 1 = alive, 0 = broken
+                }
+                
+                draw() {
+                    if (this.status === 1) {
+                        const gradient = ctx.createLinearGradient(this.x, this.y, this.x + this.width, this.y + this.height);
+                        gradient.addColorStop(0, this.color);
+                        gradient.addColorStop(1, '#fff');
+
+                        ctx.fillStyle = gradient;
+                        ctx.fillRect(this.x, this.y, this.width, this.height);
+                        ctx.strokeStyle = '#16213e';
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(this.x, this.y, this.width, this.height);
+                    }
+                }
+            }
+            
+            class Particle {
+                constructor(x, y, color) {
+                    this.x = x;
+                    this.y = y;
+                    this.color = color;
+                    this.radius = Math.random() * (canvas.width / 400) + 1;
+                    this.dx = (Math.random() - 0.5) * 4;
+                    this.dy = (Math.random() - 0.5) * 4;
+                    this.alpha = 1;
+                    this.decay = 0.02;
+                }
+                
+                update() {
+                    this.x += this.dx;
+                    this.y += this.dy;
+                    this.alpha -= this.decay;
+                }
+
+                draw() {
+                    ctx.save();
+                    ctx.globalAlpha = this.alpha;
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                    ctx.fillStyle = this.color;
+                    ctx.fill();
+                    ctx.restore();
+                }
+            }
+
+            // --- Game Logic ---
+            
+            function createBricks() {
+                bricks = [];
+                brickRowCount = 6;
+                brickColumnCount = 8;
+                const brickPadding = canvas.width / 160;
+                const brickOffsetTop = canvas.height / 15;
+                const brickOffsetLeft = canvas.width / 20;
+                const brickWidth = (canvas.width - 2 * brickOffsetLeft - (brickColumnCount - 1) * brickPadding) / brickColumnCount;
+                const brickHeight = canvas.height / 30;
+                
+                const colors = ['#f94144', '#f3722c', '#f8961e', '#f9c74f', '#90be6d', '#43aa8b'];
+
+                for (let c = 0; c < brickColumnCount; c++) {
+                    bricks[c] = [];
+                    for (let r = 0; r < brickRowCount; r++) {
+                        const brickX = c * (brickWidth + brickPadding) + brickOffsetLeft;
+                        const brickY = r * (brickHeight + brickPadding) + brickOffsetTop;
+                        const color = colors[r % colors.length];
+                        const scoreValue = (brickRowCount - r) * 10;
+                        bricks[c][r] = new Brick(brickX, brickY, brickWidth, brickHeight, color, scoreValue);
+                    }
+                }
+            }
+
+            function createParticles(x, y, color) {
+                 for (let i = 0; i < 20; i++) {
+                    particles.push(new Particle(x, y, color));
+                }
+            }
+            
+            function triggerScreenShake(duration, magnitude) {
+                shakeDuration = duration;
+                shakeMagnitude = magnitude;
+            }
+
+            function handleCollisions() {
+                // Ball and Wall collision
+                if (ball.x + ball.radius > canvas.width || ball.x - ball.radius < 0) {
+                    ball.dx = -ball.dx;
+                    playSound('hit');
+                }
+                if (ball.y - ball.radius < 0) {
+                    ball.dy = -ball.dy;
+                    playSound('hit');
+                } else if (ball.y + ball.radius > canvas.height) {
+                    lives--;
+                    playSound('lose_life');
+                    triggerScreenShake(20, 5);
+                    if (lives <= 0) {
+                        setGameState('GAMEOVER');
+                    } else {
+                        resetAfterLifeLoss();
+                    }
+                }
+
+                // Ball and Paddle collision
+                if (ball.x > paddle.x && ball.x < paddle.x + paddle.width && ball.y + ball.radius > paddle.y && ball.y < paddle.y + paddle.height) {
+                    // Change angle based on where it hits the paddle
+                    let collidePoint = ball.x - (paddle.x + paddle.width / 2);
+                    collidePoint = collidePoint / (paddle.width / 2); // Normalize to -1 to 1
+                    let angle = collidePoint * (Math.PI / 3); // Max 60 degrees
+                    
+                    ball.dx = ball.speed * Math.sin(angle);
+                    ball.dy = -ball.speed * Math.cos(angle);
+                    playSound('hit');
+                }
+                
+                // Ball and Brick collision
+                for (let c = 0; c < brickColumnCount; c++) {
+                    for (let r = 0; r < brickRowCount; r++) {
+                        const b = bricks[c][r];
+                        if (b.status === 1) {
+                            if (ball.x > b.x && ball.x < b.x + b.width && ball.y > b.y && ball.y < b.y + b.height) {
+                                ball.dy = -ball.dy;
+                                b.status = 0;
+                                score += b.scoreValue;
+                                playSound('brick');
+                                createParticles(b.x + b.width/2, b.y + b.height/2, b.color);
+                                
+                                // Check for win
+                                if (bricks.flat().every(brick => brick.status === 0)) {
+                                     setGameState('GAMEOVER'); // You win is a form of game over
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- Game State Management ---
+            function resetGame(fullReset = true) {
+                if (fullReset) {
+                    score = 0;
+                    lives = 3;
+                }
+                
+                const paddleWidth = canvas.width / 6;
+                const paddleHeight = canvas.height / 40;
+                paddle = new Paddle(
+                    (canvas.width - paddleWidth) / 2,
+                    canvas.height - paddleHeight - 10,
+                    paddleWidth,
+                    paddleHeight
+                );
+
+                const ballRadius = canvas.width / 80;
+                const ballSpeed = canvas.height / 150;
+                ball = new Ball(
+                    canvas.width / 2,
+                    paddle.y - ballRadius,
+                    ballRadius,
+                    ballSpeed,
+                    -ballSpeed,
+                    '#00ffff'
+                );
+                
+                particles = [];
+                createBricks();
+            }
+            
+            function resetAfterLifeLoss() {
+                const paddleWidth = canvas.width / 6;
+                const ballRadius = canvas.width / 80;
+                paddle.x = (canvas.width - paddleWidth) / 2;
+                ball.x = canvas.width / 2;
+                ball.y = paddle.y - ballRadius;
+                ball.onPaddle = true;
+            }
+
+            function setGameState(state) {
+                gameState = state;
+                uiContainer.classList.remove('hidden');
+
+                if (state === 'START') {
+                    startScreen.classList.remove('hidden');
+                    gameOverScreen.classList.add('hidden');
+                } else if (state === 'GAMEOVER') {
+                    startScreen.classList.add('hidden');
+                    gameOverScreen.classList.remove('hidden');
+                    finalScoreSpan.textContent = score;
+                    if (bricks.flat().every(brick => brick.status === 0)) {
+                        gameOverScreen.querySelector('h1').textContent = "You Win! 🏆";
+                    } else {
+                        gameOverScreen.querySelector('h1').textContent = "Game Over";
+                    }
+                } else if (state === 'PLAYING') {
+                    uiContainer.classList.add('hidden');
+                    gameLoop();
+                }
+                
+                if (state !== 'PLAYING' && animationFrameId) {
+                    cancelAnimationFrame(animationFrameId);
+                }
+            }
+
+            // --- Drawing Functions ---
+            function drawHUD() {
+                ctx.fillStyle = '#e0fbfc';
+                ctx.font = `${canvas.width / 40}px 'Segoe UI', sans-serif`;
+                
+                // Score
+                ctx.textAlign = 'left';
+                ctx.fillText(`Score: ${score}`, 10, canvas.height - 10);
+                
+                // Lives
+                ctx.textAlign = 'right';
+                const heartEmoji = '❤️';
+                let livesText = '';
+                for (let i = 0; i < lives; i++) {
+                    livesText += heartEmoji;
+                }
+                ctx.fillText(`Lives: ${livesText}`, canvas.width - 10, canvas.height - 10);
+            }
+
+            function draw() {
+                ctx.fillStyle = 'rgba(22, 33, 62, 0.3)'; // Trail effect
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                if (shakeDuration > 0) {
+                    ctx.save();
+                    const dx = (Math.random() - 0.5) * shakeMagnitude;
+                    const dy = (Math.random() - 0.5) * shakeMagnitude;
+                    ctx.translate(dx, dy);
+                }
+
+                paddle.draw();
+                bricks.forEach(column => column.forEach(brick => brick.draw()));
+                ball.draw();
+                particles.forEach((p, index) => {
+                    p.update();
+                    p.draw();
+                    if (p.alpha <= 0) {
+                        particles.splice(index, 1);
+                    }
+                });
+
+                drawHUD();
+
+                if (shakeDuration > 0) {
+                    ctx.restore();
+                    shakeDuration--;
+                }
+            }
+
+            // --- Update Function ---
+            function update() {
+                ball.update();
+                handleCollisions();
+            }
+
+            // --- Main Game Loop ---
+            function gameLoop() {
+                if (gameState !== 'PLAYING') return;
+                
+                update();
+                draw();
+                
+                animationFrameId = requestAnimationFrame(gameLoop);
+            }
+
+            // --- Event Listeners ---
+            function handleMouseMove(e) {
+                const relativeX = e.clientX - canvas.getBoundingClientRect().left;
+                if (relativeX > 0 && relativeX < canvas.width) {
+                    paddle.x = relativeX - paddle.width / 2;
+                }
+            }
+
+            function handleMouseClick() {
+                if (gameState === 'PLAYING' && ball.onPaddle) {
+                    initAudio(); // Ensure audio context is started by user gesture
+                    ball.onPaddle = false;
+                }
+            }
+
+            document.addEventListener('mousemove', handleMouseMove);
+            canvas.addEventListener('click', handleMouseClick);
+            
+            startButton.addEventListener('click', () => {
+                initAudio();
+                resetGame();
+                setGameState('PLAYING');
+            });
+            
+            restartButton.addEventListener('click', () => {
+                resetGame();
+                setGameState('PLAYING');
+            });
+
+            window.addEventListener('resize', resizeCanvas);
+            
+            // --- Initial Setup Call ---
+            resizeCanvas();
+            setGameState('START');
+            // Draw initial state for start screen background
+            resetGame();
+            draw();
+        });
+    </script>
+
+</body>
+</html>
