@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grid Genius</title>
+    <style>
+        :root {
+            --bg-color: #1a1a2e;
+            --primary-color: #e94560;
+            --secondary-color: #0f3460;
+            --accent-color: #16213e;
+            --font-color: #ffffff;
+            --player-color: #4deeea;
+            --ai-color: #f08a5d;
+            --line-color: rgba(255, 255, 255, 0.2);
+            --glow-color: rgba(77, 238, 234, 0.5);
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(45deg, var(--accent-color), var(--bg-color), var(--secondary-color));
+            background-size: 400% 400%;
+            animation: gradientBG 15s ease infinite;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            color: var(--font-color);
+        }
+
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        #game-container {
+            width: 100%;
+            max-width: 95vmin;
+            max-height: 95vmin;
+            aspect-ratio: 1 / 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        canvas {
+            background-color: var(--accent-color);
+            border-radius: 20px;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
+            cursor: pointer;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        class SoundEngine {
+            constructor() {
+                this.audioCtx = null;
+            }
+
+            _init() {
+                if (!this.audioCtx) {
+                    try {
+                        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    } catch (e) {
+                        console.error("Web Audio API is not supported in this browser.");
+                    }
+                }
+            }
+
+            play(soundType) {
+                this._init();
+                if (!this.audioCtx || this.audioCtx.state === 'suspended') {
+                    this.audioCtx.resume();
+                }
+                if (!this.audioCtx) return;
+
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+                
+                gainNode.gain.setValueAtTime(0.2, this.audioCtx.currentTime);
+
+                switch (soundType) {
+                    case 'place':
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(440.0, this.audioCtx.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.00001, this.audioCtx.currentTime + 0.2);
+                        break;
+                    case 'win':
+                        oscillator.type = 'triangle';
+                        oscillator.frequency.setValueAtTime(523.25, this.audioCtx.currentTime); // C5
+                        oscillator.frequency.linearRampToValueAtTime(1046.50, this.audioCtx.currentTime + 0.3); // C6
+                        gainNode.gain.exponentialRampToValueAtTime(0.00001, this.audioCtx.currentTime + 0.4);
+                        break;
+                    case 'lose':
+                        oscillator.type = 'sawtooth';
+                        oscillator.frequency.setValueAtTime(220.0, this.audioCtx.currentTime); // A3
+                        oscillator.frequency.linearRampToValueAtTime(110.0, this.audioCtx.currentTime + 0.4); // A2
+                        gainNode.gain.exponentialRampToValueAtTime(0.00001, this.audioCtx.currentTime + 0.5);
+                        break;
+                    case 'draw':
+                        oscillator.type = 'square';
+                        oscillator.frequency.setValueAtTime(349.23, this.audioCtx.currentTime); // F4
+                        gainNode.gain.exponentialRampToValueAtTime(0.00001, this.audioCtx.currentTime + 0.3);
+                        break;
+                    case 'click':
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(600.0, this.audioCtx.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.00001, this.audioCtx.currentTime + 0.1);
+                        break;
+                }
+
+                oscillator.start(this.audioCtx.currentTime);
+                oscillator.stop(this.audioCtx.currentTime + 0.5);
+            }
+        }
+
+        class GridGeniusGame {
+            constructor(canvasId) {
+                this.canvas = document.getElementById(canvasId);
+                this.ctx = this.canvas.getContext('2d');
+                this.sound = new SoundEngine();
+                
+                this.gameState = 'START_SCREEN'; // START_SCREEN, PLAYER_TURN, AI_TURN, GAME_OVER
+                this.board = Array(9).fill(null);
+                this.scores = { player: 0, ai: 0, draws: 0 };
+
+                this.cellSize = 0;
+                this.boardSize = 0;
+                this.margin = 0;
+                
+                this.animations = [];
+                this.lastTime = 0;
+
+                this.hoveredCell = -1;
+                this.selectedCell = 4; // Keyboard selection
+
+                this.winner = null;
+                this.winningLine = null;
+                
+                this.colors = {};
+
+                this.init();
+            }
+
+            init() {
+                this._loadColors();
+                this.handleResize();
+                window.addEventListener('resize', () => this.handleResize());
+                this.canvas.addEventListener('click', (e) => this.handleClick(e));
+                this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+                window.addEventListener('keydown', (e) => this.handleKeyDown(e));
+
+                requestAnimationFrame((time) => this.gameLoop(time));
+            }
+
+            _loadColors() {
+                const style = getComputedStyle(document.documentElement);
+                this.colors = {
+                    font: style.getPropertyValue('--font-color').trim(),
+                    player: style.getPropertyValue('--player-color').trim(),
+                    ai: style.getPropertyValue('--ai-color').trim(),
+                    line: style.getPropertyValue('--line-color').trim(),
+                    glow: style.getPropertyValue('--glow-color').trim(),
+                };
+            }
+
+            handleResize() {
+                const container = document.getElementById('game-container');
+                const size = Math.min(container.clientWidth, container.clientHeight);
+                this.canvas.width = size;
+                this.canvas.height = size;
+
+                this.boardSize = size * 0.8;
+                this.cellSize = this.boardSize / 3;
+                this.margin = (size - this.boardSize) / 2;
+            }
+
+            gameLoop(currentTime) {
+                const deltaTime = currentTime - this.lastTime;
+                this.lastTime = currentTime;
+
+                this.update(deltaTime);
+                this.draw();
+
+                requestAnimationFrame((time) => this.gameLoop(time));
+            }
+
+            update(deltaTime) {
+                // Update animations
+                this.animations = this.animations.filter(anim => {
+                    anim.progress += (deltaTime / anim.duration);
+                    return anim.progress < 1;
+                });
+            }
+
+            draw() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+                if (this.gameState === 'START_SCREEN') {
+                    this.drawStartScreen();
+                } else {
+                    this.drawUI();
+                    this.drawBoard();
+                    this.drawHover();
+                    this.drawMarks();
+                    if (this.gameState === 'GAME_OVER') {
+                        this.drawWinningLine();
+                        this.drawGameOverScreen();
+                    }
+                }
+            }
+            
+            // --- DRAWING METHODS ---
+            
+            drawUI() {
+                this.ctx.fillStyle = this.colors.font;
+                const fontSize = this.canvas.width * 0.05;
+                this.ctx.font = `bold ${fontSize}px 'Segoe UI', sans-serif`;
+                
+                // Scores
+                this.ctx.textAlign = 'left';
+                this.ctx.fillText(`👤 You: ${this.scores.player}`, this.margin, this.margin / 2);
+                this.ctx.textAlign = 'right';
+                this.ctx.fillText(`🤖 AI: ${this.scores.ai}`, this.canvas.width - this.margin, this.margin / 2);
+
+                // Turn indicator / Instructions
+                this.ctx.textAlign = 'center';
+                const statusY = this.canvas.height - this.margin / 2;
+                if (this.gameState === 'PLAYER_TURN') {
+                    this.ctx.fillText("Your Turn", this.canvas.width / 2, statusY);
+                } else if (this.gameState === 'AI_TURN') {
+                    this.ctx.fillText("Grid Genius is thinking...", this.canvas.width / 2, statusY);
+                } else if (this.gameState === 'GAME_OVER') {
+                     this.ctx.fillText("Press 'R' or Click to play again", this.canvas.width / 2, statusY);
+                }
+            }
+
+            drawBoard() {
+                this.ctx.strokeStyle = this.colors.line;
+                this.ctx.lineWidth = this.cellSize * 0.05;
+                this.ctx.lineCap = 'round';
+
+                for (let i = 1; i < 3; i++) {
+                    // Vertical lines
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(this.margin + i * this.cellSize, this.margin);
+                    this.ctx.lineTo(this.margin + i * this.cellSize, this.margin + this.boardSize);
+                    this.ctx.stroke();
+
+                    // Horizontal lines
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(this.margin, this.margin + i * this.cellSize);
+                    this.ctx.lineTo(this.margin + this.boardSize, this.margin + i * this.cellSize);
+                    this.ctx.stroke();
+                }
+            }
+            
+            drawHover() {
+                const cellIndex = (this.gameState === 'PLAYER_TURN' && this.board[this.hoveredCell] === null) ? this.hoveredCell : this.selectedCell;
+                
+                if (cellIndex !== -1 && this.board[cellIndex] === null) {
+                    const col = cellIndex % 3;
+                    const row = Math.floor(cellIndex / 3);
+                    const x = this.margin + col * this.cellSize;
+                    const y = this.margin + row * this.cellSize;
+                    
+                    this.ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+                    this.ctx.strokeStyle = this.colors.player;
+                    this.ctx.lineWidth = 2;
+                    this.ctx.beginPath();
+                    // Use standard rect for wider compatibility if roundRect is an issue
+                    if (this.ctx.roundRect) {
+                        this.ctx.roundRect(x + this.cellSize * 0.1, y + this.cellSize * 0.1, this.cellSize * 0.8, this.cellSize * 0.8, 10);
+                    } else {
+                        this.ctx.rect(x + this.cellSize * 0.1, y + this.cellSize * 0.1, this.cellSize * 0.8, this.cellSize * 0.8);
+                    }
+                    this.ctx.fill();
+                    this.ctx.stroke();
+                }
+            }
+
+            drawMarks() {
+                this.board.forEach((player, i) => {
+                    if (player) {
+                        const animation = this.animations.find(a => a.type === 'mark' && a.index === i);
+                        const progress = animation ? Math.min(1, animation.progress) : 1;
+                        if (player === 'X') this.drawX(i, progress);
+                        if (player === 'O') this.drawO(i, progress);
+                    }
+                });
+            }
+
+            drawX(index, progress) {
+                const col = index % 3;
+                const row = Math.floor(index / 3);
+                const x = this.margin + col * this.cellSize;
+                const y = this.margin + row * this.cellSize;
+                const padding = this.cellSize * 0.2;
+
+                this.ctx.strokeStyle = this.colors.player;
+                this.ctx.lineWidth = this.cellSize * 0.1;
+                this.ctx.lineCap = 'round';
+                
+                this.ctx.shadowColor = this.colors.glow;
+                this.ctx.shadowBlur = 15;
+
+                // First line
+                if (progress > 0) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(x + padding, y + padding);
+                    this.ctx.lineTo(
+                        x + padding + (this.cellSize - 2 * padding) * Math.min(1, progress * 2),
+                        y + padding + (this.cellSize - 2 * padding) * Math.min(1, progress * 2)
+                    );
+                    this.ctx.stroke();
+                }
+
+                // Second line
+                if (progress > 0.5) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(x + this.cellSize - padding, y + padding);
+                    this.ctx.lineTo(
+                        x + this.cellSize - padding - (this.cellSize - 2 * padding) * Math.min(1, (progress - 0.5) * 2),
+                        y + padding + (this.cellSize - 2 * padding) * Math.min(1, (progress - 0.5) * 2)
+                    );
+                    this.ctx.stroke();
+                }
+                
+                this.ctx.shadowBlur = 0;
+            }
+
+            drawO(index, progress) {
+                const col = index % 3;
+                const row = Math.floor(index / 3);
+                const centerX = this.margin + col * this.cellSize + this.cellSize / 2;
+                const centerY = this.margin + row * this.cellSize + this.cellSize / 2;
+                const radius = this.cellSize * 0.3;
+
+                this.ctx.strokeStyle = this.colors.ai;
+                this.ctx.lineWidth = this.cellSize * 0.1;
+                this.ctx.lineCap = 'round';
+                
+                this.ctx.shadowColor = this.colors.ai;
+                this.ctx.shadowBlur = 15;
+                
+                this.ctx.beginPath();
+                this.ctx.arc(centerX, centerY, radius, -Math.PI / 2, -Math.PI / 2 + (2 * Math.PI) * progress);
+                this.ctx.stroke();
+                
+                this.ctx.shadowBlur = 0;
+            }
+            
+            drawWinningLine() {
+                if (!this.winningLine) return;
+                
+                const animation = this.animations.find(a => a.type === 'win-line');
+                const progress = animation ? Math.min(1, animation.progress) : 1;
+                if(progress < 0.2) return; // Small delay before drawing line
+                
+                const adjustedProgress = (progress - 0.2) / 0.8;
+
+                const [start, end] = this.winningLine.map(index => {
+                    const col = index % 3;
+                    const row = Math.floor(index / 3);
+                    return {
+                        x: this.margin + col * this.cellSize + this.cellSize / 2,
+                        y: this.margin + row * this.cellSize + this.cellSize / 2
+                    };
+                });
+                
+                const currentX = start.x + (end.x - start.x) * adjustedProgress;
+                const currentY = start.y + (end.y - start.y) * adjustedProgress;
+
+                this.ctx.strokeStyle = this.winner === 'X' ? this.colors.player : this.colors.ai;
+                this.ctx.lineWidth = this.cellSize * 0.15;
+                this.ctx.lineCap = 'round';
+                this.ctx.shadowColor = this.winner === 'X' ? this.colors.player : this.colors.ai;
+                this.ctx.shadowBlur = 20;
+
+                this.ctx.beginPath();
+                this.ctx.moveTo(start.x, start.y);
+                this.ctx.lineTo(currentX, currentY);
+                this.ctx.stroke();
+                
+                this.ctx.shadowBlur = 0;
+            }
+            
+            drawStartScreen() {
+                this.drawOverlay(0.8);
+                this.ctx.textAlign = 'center';
+                
+                const titleSize = this.canvas.width * 0.12;
+                this.ctx.font = `bold ${titleSize}px 'Segoe UI', sans-serif`;
+                
+                const gradient = this.ctx.createLinearGradient(0, 0, this.canvas.width, 0);
+                gradient.addColorStop(0, this.colors.player);
+                gradient.addColorStop(1, this.colors.ai);
+                this.ctx.fillStyle = gradient;
+                
+                this.ctx.fillText("Grid Genius", this.canvas.width / 2, this.canvas.height / 2 - 50);
+
+                const instructionsSize = this.canvas.width * 0.04;
+                this.ctx.font = `${instructionsSize}px 'Segoe UI', sans-serif`;
+                this.ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                this.ctx.fillText("Click or Press Enter to Start", this.canvas.width / 2, this.canvas.height / 2 + 30);
+                
+                this.ctx.fillText("Use Mouse or Arrow Keys + Enter to play", this.canvas.width / 2, this.canvas.height * 0.8);
+            }
+            
+            drawGameOverScreen() {
+                const animation = this.animations.find(a => a.type === 'game-over');
+                const alpha = animation ? Math.min(1, animation.progress) : 1;
+                if (alpha < 0.2) return; // Wait for win-line animation
+                
+                this.drawOverlay(0.8 * ((alpha - 0.2)/0.8));
+
+                this.ctx.textAlign = 'center';
+                this.ctx.fillStyle = this.colors.font;
+
+                let message = '';
+                let emoji = '';
+                if (this.winner === 'draw') {
+                    message = "It's a Draw!";
+                    emoji = '🤝';
+                } else if (this.winner === 'X') {
+                    message = "You Win!";
+                    emoji = '🎉';
+                } else {
+                    message = "You Lose!";
+                    emoji = '😔';
+                }
+
+                const titleSize = this.canvas.width * 0.1;
+                this.ctx.font = `bold ${titleSize}px 'Segoe UI', sans-serif`;
+                this.ctx.fillText(message, this.canvas.width / 2, this.canvas.height / 2 - 30);
+                
+                const emojiSize = this.canvas.width * 0.12;
+                this.ctx.font = `${emojiSize}px 'Segoe UI', sans-serif`;
+                this.ctx.fillText(emoji, this.canvas.width / 2, this.canvas.height / 2 + 60);
+            }
+            
+            drawOverlay(alpha) {
+                this.ctx.fillStyle = `rgba(26, 26, 46, ${alpha})`;
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+            }
+
+
+            // --- GAME LOGIC & EVENT HANDLERS ---
+            
+            startGame() {
+                this.gameState = 'PLAYER_TURN';
+                this.resetGame(false); // don't set game state again
+                this.sound.play('click');
+            }
+            
+            resetGame(isNewRound = true) {
+                this.board = Array(9).fill(null);
+                this.winner = null;
+                this.winningLine = null;
+                this.animations = [];
+                this.selectedCell = 4;
+                if (isNewRound) {
+                    this.gameState = 'PLAYER_TURN';
+                }
+            }
+            
+            handleClick(e) {
+                if (this.gameState === 'START_SCREEN') {
+                    this.startGame();
+                    return;
+                }
+                if (this.gameState === 'GAME_OVER') {
+                    this.resetGame();
+                    this.sound.play('click');
+                    return;
+                }
+                if (this.gameState !== 'PLAYER_TURN') return;
+
+                const rect = this.canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+
+                if (x > this.margin && x < this.margin + this.boardSize &&
+                    y > this.margin && y < this.margin + this.boardSize) {
+                    const col = Math.floor((x - this.margin) / this.cellSize);
+                    const row = Math.floor((y - this.margin) / this.cellSize);
+                    const index = row * 3 + col;
+                    this.playerMove(index);
+                }
+            }
+            
+            handleMouseMove(e) {
+                if (this.gameState !== 'PLAYER_TURN') {
+                    this.hoveredCell = -1;
+                    return;
+                };
+
+                const rect = this.canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+
+                if (x > this.margin && x < this.margin + this.boardSize &&
+                    y > this.margin && y < this.margin + this.boardSize) {
+                    const col = Math.floor((x - this.margin) / this.cellSize);
+                    const row = Math.floor((y - this.margin) / this.cellSize);
+                    this.hoveredCell = row * 3 + col;
+                } else {
+                    this.hoveredCell = -1;
+                }
+            }
+            
+            handleKeyDown(e) {
+                if (this.gameState === 'START_SCREEN') {
+                    if (e.key === 'Enter') this.startGame();
+                    return;
+                }
+                if (e.key === 'r' || e.key === 'R') {
+                    this.resetGame();
+                    this.sound.play('click');
+                    return;
+                }
+                if (this.gameState === 'GAME_OVER') {
+                    if (e.key === 'Enter') {
+                        this.resetGame();
+                        this.sound.play('click');
+                    }
+                    return;
+                }
+                
+                if (this.gameState === 'PLAYER_TURN') {
+                    let { row, col } = { row: Math.floor(this.selectedCell / 3), col: this.selectedCell % 3 };
+                    switch(e.key) {
+                        case 'ArrowUp': row = (row > 0) ? row - 1 : 2; e.preventDefault(); break;
+                        case 'ArrowDown': row = (row < 2) ? row + 1 : 0; e.preventDefault(); break;
+                        case 'ArrowLeft': col = (col > 0) ? col - 1 : 2; e.preventDefault(); break;
+                        case 'ArrowRight': col = (col < 2) ? col + 1 : 0; e.preventDefault(); break;
+                        case 'Enter':
+                        case ' ':
+                            e.preventDefault();
+                            this.playerMove(this.selectedCell);
+                            break;
+                    }
+                    this.selectedCell = row * 3 + col;
+                    this.hoveredCell = -1; // Disable mouse hover when using keyboard
+                }
+            }
+
+            playerMove(index) {
+                if (this.board[index] === null && this.gameState === 'PLAYER_TURN') {
+                    this.makeMove(index, 'X');
+                    if (this.gameState !== 'GAME_OVER') {
+                        this.gameState = 'AI_TURN';
+                        setTimeout(() => this.aiMove(), 500);
+                    }
+                }
+            }
+
+            makeMove(index, player) {
+                this.board[index] = player;
+                this.animations.push({ type: 'mark', index: index, progress: 0, duration: 300 });
+                this.sound.play('place');
+                this.checkGameState();
+            }
+
+            checkGameState() {
+                const lines = [
+                    [0, 1, 2], [3, 4, 5], [6, 7, 8], // rows
+                    [0, 3, 6], [1, 4, 7], [2, 5, 8], // cols
+                    [0, 4, 8], [2, 4, 6]  // diags
+                ];
+
+                for (const line of lines) {
+                    const [a, b, c] = line;
+                    if (this.board[a] && this.board[a] === this.board[b] && this.board[a] === this.board[c]) {
+                        this.endGame(this.board[a], line);
+                        return;
+                    }
+                }
+
+                if (!this.board.includes(null)) {
+                    this.endGame('draw');
+                }
+            }
+            
+            endGame(winner, line = null) {
+                this.gameState = 'GAME_OVER';
+                this.winner = winner;
+                this.winningLine = line;
+                
+                this.animations.push({ type: 'game-over', progress: 0, duration: 500});
+
+                if (winner === 'draw') {
+                    this.scores.draws++;
+                    this.sound.play('draw');
+                } else if (winner === 'X') {
+                    this.scores.player++;
+                    this.sound.play('win');
+                    this.animations.push({ type: 'win-line', progress: 0, duration: 500});
+                } else {
+                    this.scores.ai++;
+                    this.sound.play('lose');
+                    this.animations.push({ type: 'win-line', progress: 0, duration: 500});
+                }
+            }
+
+            aiMove() {
+                if (this.gameState !== 'AI_TURN') return;
+
+                let move = -1;
+
+                // 1. Check if AI can win
+                for (let i = 0; i < 9; i++) {
+                    if (this.board[i] === null) {
+                        this.board[i] = 'O';
+                        if (this.isWinner('O')) {
+                            move = i;
+                        }
+                        this.board[i] = null;
+                        if (move !== -1) break;
+                    }
+                }
+
+                // 2. Check if player can win and block
+                if (move === -1) {
+                    for (let i = 0; i < 9; i++) {
+                        if (this.board[i] === null) {
+                            this.board[i] = 'X';
+                            if (this.isWinner('X')) {
+                                move = i;
+                            }
+                            this.board[i] = null;
+                            if (move !== -1) break;
+                        }
+                    }
+                }
+
+                // 3. Take center
+                if (move === -1 && this.board[4] === null) {
+                    move = 4;
+                }
+
+                // 4. Take opposite corner
+                if (move === -1) {
+                    const opposites = { 0: 8, 8: 0, 2: 6, 6: 2 };
+                    for (const corner in opposites) {
+                        if (this.board[corner] === 'X' && this.board[opposites[corner]] === null) {
+                             move = opposites[corner];
+                             break;
+                        }
+                    }
+                }
+
+                // 5. Take empty corner
+                if (move === -1) {
+                    const corners = [0, 2, 6, 8];
+                    const emptyCorners = corners.filter(i => this.board[i] === null);
+                    if (emptyCorners.length > 0) {
+                        move = emptyCorners[Math.floor(Math.random() * emptyCorners.length)];
+                    }
+                }
+
+                // 6. Take any empty side
+                if (move === -1) {
+                    const sides = [1, 3, 5, 7];
+                    const emptySides = sides.filter(i => this.board[i] === null);
+                    if (emptySides.length > 0) {
+                        move = emptySides[Math.floor(Math.random() * emptySides.length)];
+                    }
+                }
+                
+                if (move !== -1) {
+                    this.makeMove(move, 'O');
+                }
+
+                // If game is not over, it's player's turn
+                if (this.gameState !== 'GAME_OVER') {
+                    this.gameState = 'PLAYER_TURN';
+                }
+            }
+            
+            isWinner(player) {
+                const lines = [
+                    [0, 1, 2], [3, 4, 5], [6, 7, 8],
+                    [0, 3, 6], [1, 4, 7], [2, 5, 8],
+                    [0, 4, 8], [2, 4, 6]
+                ];
+                for (const line of lines) {
+                    if (line.every(i => this.board[i] === player)) return true;
+                }
+                return false;
+            }
+        }
+
+        window.onload = () => {
+            new GridGeniusGame('gameCanvas');
+        };
+    </script>
+</body>
+</html>

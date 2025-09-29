@@ -1,0 +1,8 @@
+{
+  "name": "Grid Genius",
+  "type": "tic-tac-toe with AI",
+  "folder": "grid_genius",
+  "description": "Challenge a brilliant AI that adapts to your every move in a deceptively simple duel of Xs and Os. Every match is a fast-paced, strategic battle of wits where you must fight for grid supremacy.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
