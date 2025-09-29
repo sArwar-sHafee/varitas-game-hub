@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Word Weave</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+        }
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #1a2a3a;
+            background-image: linear-gradient(135deg, #1a2a3a 0%, #3a506b 100%);
+            color: #fff;
+        }
+        #game-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        canvas {
+            background-color: #0d1b2a;
+            display: block;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            max-width: 100vw;
+            max-height: 100vh;
+            touch-action: none; /* Prevents browser gestures like pull-to-refresh */
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        class SoundFX {
+            constructor() {
+                this.audioCtx = null;
+                this.isMuted = false;
+            }
+
+            init() {
+                if (!this.audioCtx && (window.AudioContext || window.webkitAudioContext)) {
+                    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+            }
+
+            _createOscillator(type, freq, detune) {
+                if (!this.audioCtx) return null;
+                const oscillator = this.audioCtx.createOscillator();
+                oscillator.type = type;
+                oscillator.frequency.setValueAtTime(freq, this.audioCtx.currentTime);
+                oscillator.detune.setValueAtTime(detune, this.audioCtx.currentTime);
+                return oscillator;
+            }
+
+            _createGain(startValue, endValue, duration) {
+                if (!this.audioCtx) return null;
+                const gainNode = this.audioCtx.createGain();
+                gainNode.gain.setValueAtTime(startValue, this.audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(endValue, this.audioCtx.currentTime + duration);
+                return gainNode;
+            }
+
+            play(type, freq, duration, detune = 0, startGain = 0.3, endGain = 0.0001) {
+                if (!this.audioCtx || this.isMuted) return;
+
+                const oscillator = this._createOscillator(type, freq, detune);
+                const gainNode = this._createGain(startGain, endGain, duration);
+                
+                if (oscillator && gainNode) {
+                    oscillator.connect(gainNode);
+                    gainNode.connect(this.audioCtx.destination);
+                    oscillator.start();
+                    oscillator.stop(this.audioCtx.currentTime + duration);
+                }
+            }
+
+            click() { this.play('sine', 440, 0.1, 0, 0.2); }
+            success() {
+                this.play('triangle', 523.25, 0.1); // C5
+                setTimeout(() => this.play('triangle', 659.25, 0.1), 100); // E5
+                setTimeout(() => this.play('triangle', 783.99, 0.15), 200); // G5
+            }
+            error() { this.play('sawtooth', 220, 0.2, 0, 0.15); }
+            shuffle() { this.play('square', 150, 0.1, 0, 0.1); }
+            gameOver() { this.play('sawtooth', 300, 0.5, 0, 0.2); setTimeout(() => this.play('sawtooth', 200, 0.8), 200); }
+        }
+
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.size = Math.random() * 5 + 2;
+                this.speedX = Math.random() * 6 - 3;
+                this.speedY = Math.random() * -8 - 3;
+                this.life = 1;
+                this.gravity = 0.2;
+            }
+
+            update(dt) {
+                const dtFactor = dt * 60; // Normalize to 60fps
+                this.x += this.speedX * dtFactor;
+                this.y += this.speedY * dtFactor;
+                this.speedY += this.gravity * dtFactor;
+                this.life -= 0.02 * dtFactor;
+                if(this.size > 0.1) this.size -= 0.1 * dtFactor;
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        class WordWeaveGame {
+            constructor(canvasId) {
+                this.canvas = document.getElementById(canvasId);
+                this.ctx = this.canvas.getContext('2d');
+
+                this.BASE_WIDTH = 800;
+                this.BASE_HEIGHT = 600;
+                this.scale = 1;
+
+                this.gameState = 'START'; // START, PLAY, GAME_OVER
+                this.puzzles = this.createPuzzles();
+                this.currentPuzzle = null;
+                
+                this.scrambledLetters = [];
+                this.currentGuess = [];
+                this.foundWords = [];
+                
+                this.score = 0;
+                this.timer = 120; // 2 minutes
+                this.lastTime = 0;
+                
+                this.particles = [];
+                this.message = { text: '', alpha: 0, color: '#ffffff' };
+
+                this.buttons = {};
+                this.mouse = { x: 0, y: 0, down: false, clicked: false };
+
+                this.sfx = new SoundFX();
+
+                window.addEventListener('resize', this.resize.bind(this));
+                this.canvas.addEventListener('pointerdown', this.handlePointerDown.bind(this));
+                this.canvas.addEventListener('pointermove', this.handlePointerMove.bind(this));
+                this.canvas.addEventListener('pointerup', this.handlePointerUp.bind(this));
+                window.addEventListener('keydown', this.handleKeyDown.bind(this));
+                
+                this.resize();
+                requestAnimationFrame(this.gameLoop.bind(this));
+            }
+
+            createPuzzles() {
+                return [
+                    { base: "REACTIVE", words: ["ACE", "ACT", "ARE", "ART", "ATE", "CAR", "CAT", "EAT", "ERA", "ICE", "RAT", "TIE", "TEA", "VET", "CARE", "CART", "CITE", "RACE", "RATE", "RITE", "TEAR", "TIER", "TIRE", "ACRE", "CATER", "CRATE", "REACT", "TRACE", "ACTIVE", "CREATE", "REACTIVE"] },
+                    { base: "WEAVING", words: ["GIN", "VAN", "VOW", "WAG", "WAN", "WAVE", "WIN", "WINE", "WING", "GAVE", "VIEW", "VINE", "WAGE", "WANE", "GIVE", "GIVEN", "WAVING", "WEAVING"] },
+                    { base: "CANVASES", words: ["ACE", "CAN", "CASE", "VAN", "VANS", "SAVE", "SEA", "SEN", "ASS", "ACES", "CANE", "CANES", "VANE", "VASE", "SCAN", "SANE", "SAVES", "VASES", "CANVAS", "CANVASES"] },
+                    { base: "JAVASCRIPT",  words: ["ACT", "APT", "ARC", "ART", "CAR", "CAT", "JAR", "JARS", "JAP", "PAR", "PAT", "RAP", "RAT", "RIP", "SAP", "SAT", "SIP", "SIR", "SPA", "SPAR", "SPAT", "STIR", "TAP", "TAPS", "TAR", "TRAP", "TRIP", "VATS", "CARP", "CART", "JAVA", "PART", "PAST", "PICA", "RATS", "SCAR", "SCRIPT", "STAIR", "STRAP", "TRAPS", "VAST", "AVAST", "STRIP", "TRAVIS", "JAVASCRIPT"]}
+                ];
+            }
+
+            resize() {
+                const aspectRatio = this.BASE_WIDTH / this.BASE_HEIGHT;
+                const container = document.getElementById('game-container');
+                let newWidth = container.clientWidth;
+                let newHeight = container.clientHeight;
+                
+                if (newWidth / newHeight > aspectRatio) {
+                    newWidth = newHeight * aspectRatio;
+                } else {
+                    newHeight = newWidth / aspectRatio;
+                }
+
+                this.canvas.width = newWidth;
+                this.canvas.height = newHeight;
+                this.scale = this.canvas.width / this.BASE_WIDTH;
+            }
+
+            // --- Game State Management ---
+            startGame() {
+                this.gameState = 'PLAY';
+                this.score = 0;
+                this.timer = 120;
+                this.currentPuzzle = this.puzzles[Math.floor(Math.random() * this.puzzles.length)];
+                this.foundWords = [];
+                this.currentGuess = [];
+                this.setupScrambledLetters();
+            }
+
+            gameOver() {
+                this.gameState = 'GAME_OVER';
+                this.sfx.gameOver();
+            }
+
+            // --- Game Logic ---
+            setupScrambledLetters() {
+                const letters = this.shuffleArray([...this.currentPuzzle.base]);
+                const radius = 150; // Use base coordinates
+                const centerX = this.BASE_WIDTH / 2;
+                const centerY = this.BASE_HEIGHT - 130;
+                const angleStep = (Math.PI * 2) / letters.length;
+
+                this.scrambledLetters = letters.map((char, i) => {
+                    const angle = i * angleStep;
+                    return {
+                        char: char,
+                        x: centerX + Math.cos(angle) * radius,
+                        y: centerY + Math.sin(angle) * radius,
+                        size: 30,
+                        isUsed: false,
+                        shake: 0,
+                        pop: 1
+                    };
+                });
+            }
+
+            shuffleLetters() {
+                this.sfx.shuffle();
+                const unusedLetters = this.scrambledLetters.filter(l => !l.isUsed);
+                const shuffledChars = this.shuffleArray(unusedLetters.map(l => l.char));
+                let charIndex = 0;
+                this.scrambledLetters.forEach(l => {
+                    if (!l.isUsed) {
+                        l.char = shuffledChars[charIndex++];
+                    }
+                });
+            }
+
+            shuffleArray(array) {
+                for (let i = array.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [array[i], array[j]] = [array[j], array[i]];
+                }
+                return array;
+            }
+
+            submitWord() {
+                if (this.currentGuess.length === 0) return;
+
+                const guessedWord = this.currentGuess.map(l => l.char).join('');
+                if (this.foundWords.includes(guessedWord)) {
+                    this.showMessage("Already found!", '#ffc107');
+                    this.sfx.error();
+                    this.resetGuess(true);
+                } else if (this.currentPuzzle.words.includes(guessedWord)) {
+                    this.foundWords.push(guessedWord);
+                    this.score += guessedWord.length * 10;
+                    this.showMessage("Great!", '#28a745');
+                    this.sfx.success();
+                    this.createParticlesForWord();
+                    this.currentGuess.forEach(l => l.isUsed = false); // Reset letters for reuse
+                    this.currentGuess = [];
+                } else {
+                    this.showMessage("Not a word", '#dc3545');
+                    this.sfx.error();
+                    this.resetGuess(true);
+                }
+            }
+
+            resetGuess(isError = false) {
+                if (isError) {
+                    this.currentGuess.forEach(l => l.shake = 10);
+                }
+                setTimeout(() => {
+                    this.currentGuess.forEach(l => l.isUsed = false);
+                    this.currentGuess = [];
+                }, isError ? 200 : 0);
+            }
+            
+            showMessage(text, color) {
+                this.message = { text, color, alpha: 1 };
+            }
+
+            createParticlesForWord() {
+                const guessLength = this.currentGuess.length;
+                if (guessLength === 0) return;
+
+                const tileWidth = 60;
+                const totalWidth = guessLength * tileWidth;
+                const spawnAreaStartX = this.BASE_WIDTH / 2 - totalWidth / 2;
+                const y = this.BASE_HEIGHT / 2 - 20;
+
+                for (let i = 0; i < 50; i++) {
+                    const x = spawnAreaStartX + Math.random() * totalWidth;
+                    const color = `hsl(${Math.random() * 60 + 200}, 100%, 70%)`;
+                    this.particles.push(new Particle(x, y, color));
+                }
+            }
+
+            // --- Input Handlers ---
+            getMousePos(evt) {
+                const rect = this.canvas.getBoundingClientRect();
+                return {
+                    x: (evt.clientX - rect.left) / this.scale,
+                    y: (evt.clientY - rect.top) / this.scale,
+                };
+            }
+
+            handlePointerDown(e) {
+                e.preventDefault();
+                this.sfx.init(); // Initialize audio on first user interaction
+                this.mouse.down = true;
+                this.mouse.clicked = true;
+                const pos = this.getMousePos(e.touches ? e.touches[0] : e);
+                this.mouse.x = pos.x;
+                this.mouse.y = pos.y;
+            }
+
+            handlePointerMove(e) {
+                e.preventDefault();
+                const pos = this.getMousePos(e.touches ? e.touches[0] : e);
+                this.mouse.x = pos.x;
+                this.mouse.y = pos.y;
+            }
+
+            handlePointerUp(e) {
+                e.preventDefault();
+                this.mouse.down = false;
+            }
+
+            handleKeyDown(e) {
+                this.sfx.init();
+                if (this.gameState !== 'PLAY') {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        this.startGame();
+                    }
+                    return;
+                }
+                
+                if (e.key === 'Enter') {
+                    this.submitWord();
+                } else if (e.key === 'Backspace') {
+                    if (this.currentGuess.length > 0) {
+                        const lastLetter = this.currentGuess.pop();
+                        lastLetter.isUsed = false;
+                        this.sfx.click();
+                    }
+                } else if (e.key === ' ') { // Use space to shuffle
+                    e.preventDefault();
+                    this.shuffleLetters();
+                } else if (e.key.length === 1 && e.key.match(/[a-z]/i)) {
+                    const letter = e.key.toUpperCase();
+                    const availableLetter = this.scrambledLetters.find(l => l.char === letter && !l.isUsed);
+                    if (availableLetter) {
+                        availableLetter.isUsed = true;
+                        this.currentGuess.push(availableLetter);
+                        this.sfx.click();
+                    }
+                }
+            }
+
+            checkButtonClick() {
+                if (!this.mouse.clicked) return;
+
+                for (const key in this.buttons) {
+                    const btn = this.buttons[key];
+                    if (this.mouse.x > btn.x && this.mouse.x < btn.x + btn.w &&
+                        this.mouse.y > btn.y && this.mouse.y < btn.y + btn.h) {
+                        btn.action();
+                        return;
+                    }
+                }
+
+                if (this.gameState === 'PLAY') {
+                    this.scrambledLetters.forEach(l => {
+                        if (!l.isUsed) {
+                            const dist = Math.hypot(this.mouse.x - l.x, this.mouse.y - l.y);
+                            if (dist < l.size) {
+                                l.isUsed = true;
+                                this.currentGuess.push(l);
+                                this.sfx.click();
+                            }
+                        }
+                    });
+                }
+            }
+
+            // --- Update ---
+            update(dt) {
+                if (this.gameState === 'PLAY') {
+                    this.timer -= dt;
+                    if (this.timer <= 0) {
+                        this.timer = 0;
+                        this.gameOver();
+                    }
+                }
+
+                if (this.message.alpha > 0) {
+                    this.message.alpha -= 2 * dt;
+                }
+
+                this.scrambledLetters.forEach(l => {
+                    if (l.shake > 0) l.shake -= 20 * dt; else l.shake = 0;
+                    if (l.pop < 1) l.pop += 2 * dt; else l.pop = 1;
+                });
+                
+                this.particles.forEach((p, i) => {
+                    p.update(dt);
+                    if (p.life <= 0) this.particles.splice(i, 1);
+                });
+
+                this.checkButtonClick();
+                this.mouse.clicked = false;
+            }
+            
+            // --- Drawing ---
+            draw() {
+                this.ctx.save();
+                this.ctx.scale(this.scale, this.scale);
+                this.ctx.clearRect(0, 0, this.BASE_WIDTH, this.BASE_HEIGHT);
+
+                const bgGrad = this.ctx.createLinearGradient(0, 0, 0, this.BASE_HEIGHT);
+                bgGrad.addColorStop(0, '#1d2f41');
+                bgGrad.addColorStop(1, '#0d1b2a');
+                this.ctx.fillStyle = bgGrad;
+                this.ctx.fillRect(0, 0, this.BASE_WIDTH, this.BASE_HEIGHT);
+
+                if (this.gameState === 'START') this.drawStartScreen();
+                else if (this.gameState === 'PLAY') this.drawPlayScreen();
+                else if (this.gameState === 'GAME_OVER') this.drawGameOverScreen();
+
+                this.particles.forEach(p => p.draw(this.ctx));
+                this.drawMessage();
+
+                this.ctx.restore();
+            }
+
+            drawStartScreen() {
+                this.drawText('Word Weave', this.BASE_WIDTH / 2, 200, 80, '#fff', 'center', 'bold');
+                this.drawText('Unscramble words from the given letters.', this.BASE_WIDTH / 2, 280, 24, '#a9c1d9', 'center');
+                this.drawText('Click or Press Enter to start', this.BASE_WIDTH / 2, 400, 30, '#fca311', 'center');
+                this.drawText('Keyboard: Type letters, Enter to submit, Space to shuffle', this.BASE_WIDTH / 2, 500, 16, '#a9c1d9', 'center');
+                this.drawText('Mouse/Touch: Tap letters and buttons', this.BASE_WIDTH / 2, 530, 16, '#a9c1d9', 'center');
+            }
+
+            drawPlayScreen() {
+                this.drawText(`Score: ${this.score}`, 20, 40, 24, '#fff');
+                const minutes = Math.floor(this.timer / 60);
+                const seconds = Math.floor(this.timer % 60);
+                const timeColor = this.timer < 10 ? '#dc3545' : '#fff';
+                this.drawText(`Time: ${minutes}:${seconds.toString().padStart(2, '0')}`, this.BASE_WIDTH - 20, 40, 24, timeColor, 'right');
+
+                this.drawFoundWords();
+                this.drawCurrentGuess();
+                this.drawScrambledLetters();
+                this.drawButtons();
+            }
+
+            drawGameOverScreen() {
+                this.drawText('Game Over', this.BASE_WIDTH / 2, 100, 80, '#dc3545', 'center', 'bold');
+                this.drawText(`Final Score: ${this.score}`, this.BASE_WIDTH / 2, 180, 40, '#fca311', 'center');
+                
+                this.drawText('You missed:', this.BASE_WIDTH / 2, 240, 24, '#a9c1d9', 'center');
+                const missedWords = this.currentPuzzle.words.filter(w => !this.foundWords.includes(w));
+                this.ctx.font = '16px Helvetica Neue, Arial, sans-serif';
+                this.ctx.fillStyle = '#fff';
+                this.ctx.textAlign = 'center';
+                const wordsPerRow = 8;
+                for (let i = 0; i < missedWords.length; i += wordsPerRow) {
+                    const chunk = missedWords.slice(i, i + wordsPerRow);
+                    this.ctx.fillText(chunk.join(', '), this.BASE_WIDTH / 2, 280 + (i / wordsPerRow) * 25);
+                }
+
+                this.buttons = {};
+                this.buttons['playAgain'] = {
+                    x: this.BASE_WIDTH / 2 - 100, y: 450, w: 200, h: 50,
+                    text: 'Play Again',
+                    action: () => this.startGame()
+                };
+                this.drawButton(this.buttons['playAgain']);
+            }
+
+            // --- Helper Draw Functions ---
+            drawText(text, x, y, size, color, align = 'left', weight = 'normal') {
+                this.ctx.font = `${weight} ${size}px 'Helvetica Neue', Arial, sans-serif`;
+                this.ctx.fillStyle = color;
+                this.ctx.textAlign = align;
+                this.ctx.textBaseline = 'middle';
+                this.ctx.fillText(text, x, y);
+            }
+
+            drawFoundWords() {
+                const box = { x: 20, y: 60, w: 200, h: 480 };
+                this.drawRoundedRect(box.x, box.y, box.w, box.h, 10, 'rgba(255,255,255,0.05)');
+                this.drawText(`Found: ${this.foundWords.length} / ${this.currentPuzzle.words.length}`, box.x + 10, box.y + 20, 18, '#a9c1d9');
+
+                this.ctx.font = '16px "Helvetica Neue", Arial, sans-serif';
+                this.ctx.fillStyle = '#fff';
+                this.ctx.textAlign = 'left';
+                let col = 0, row = 0;
+                this.foundWords.slice().sort((a,b) => a.length - b.length || a.localeCompare(b)).forEach((word) => {
+                    const yPos = box.y + 50 + row * 22;
+                    if(yPos > box.y + box.h - 20){
+                        row = 0;
+                        col++;
+                    }
+                    this.ctx.fillText(word, box.x + 15 + col * 90, box.y + 50 + row * 22);
+                    row++;
+                });
+            }
+
+            drawCurrentGuess() {
+                const guessLength = this.currentGuess.length;
+                if (guessLength === 0) return;
+
+                const tileWidth = 60;
+                const totalWidth = guessLength * tileWidth;
+                const startX = (this.BASE_WIDTH / 2) - (totalWidth / 2) + (tileWidth / 2);
+                const y = this.BASE_HEIGHT / 2 - 20;
+
+                for (let i = 0; i < guessLength; i++) {
+                    const letter = this.currentGuess[i];
+                    const x = startX + i * tileWidth;
+                    const shakeX = Math.sin(letter.shake) * 5;
+                    this.drawRoundedRect(x - 25 + shakeX, y - 25, 50, 50, 10, '#3a506b', '#5b7a9d');
+                    this.drawText(letter.char, x + shakeX, y, 32, '#fff', 'center', 'bold');
+                }
+            }
+
+            drawScrambledLetters() {
+                this.scrambledLetters.forEach(l => {
+                    if (!l.isUsed) {
+                        const popSize = l.size * l.pop;
+                        const grad = this.ctx.createRadialGradient(l.x, l.y, 0, l.x, l.y, popSize);
+                        grad.addColorStop(0, '#fca311');
+                        grad.addColorStop(1, '#e85d04');
+                        
+                        this.ctx.fillStyle = grad;
+                        this.ctx.beginPath();
+                        this.ctx.arc(l.x, l.y, popSize, 0, Math.PI * 2);
+                        this.ctx.fill();
+                        
+                        this.drawText(l.char, l.x, l.y, 30, '#fff', 'center', 'bold');
+                    }
+                });
+            }
+
+            drawButtons() {
+                this.buttons = {};
+                const btnY = this.BASE_HEIGHT - 60;
+                this.buttons['shuffle'] = { x: 250, y: btnY, w: 100, h: 40, text: '🔄 Shuffle', action: () => this.shuffleLetters() };
+                this.buttons['clear'] = { x: 360, y: btnY, w: 80, h: 40, text: '⏪ Clear', action: () => this.resetGuess() };
+                this.buttons['submit'] = { x: 450, y: btnY, w: 100, h: 40, text: '✅ Submit', action: () => this.submitWord() };
+                
+                for(const key in this.buttons) {
+                    this.drawButton(this.buttons[key]);
+                }
+            }
+            
+            drawButton(btn) {
+                const isHover = this.mouse.x > btn.x && this.mouse.x < btn.x + btn.w &&
+                                this.mouse.y > btn.y && this.mouse.y < btn.y + btn.h;
+                const bgColor = isHover ? '#fca311' : '#145da0';
+                this.drawRoundedRect(btn.x, btn.y, btn.w, btn.h, 8, bgColor);
+                this.drawText(btn.text, btn.x + btn.w / 2, btn.y + btn.h / 2, 18, '#fff', 'center', 'bold');
+            }
+
+            drawRoundedRect(x, y, w, h, r, fill, stroke) {
+                this.ctx.beginPath();
+                this.ctx.moveTo(x + r, y);
+                this.ctx.lineTo(x + w - r, y);
+                this.ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+                this.ctx.lineTo(x + w, y + h - r);
+                this.ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+                this.ctx.lineTo(x + r, y + h);
+                this.ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+                this.ctx.lineTo(x, y + r);
+                this.ctx.quadraticCurveTo(x, y, x + r, y);
+                this.ctx.closePath();
+                if (fill) {
+                    this.ctx.fillStyle = fill;
+                    this.ctx.fill();
+                }
+                if (stroke) {
+                    this.ctx.strokeStyle = stroke;
+                    this.ctx.lineWidth = 2;
+                    this.ctx.stroke();
+                }
+            }
+
+            drawMessage() {
+                if (this.message.alpha > 0) {
+                    this.ctx.save();
+                    this.ctx.globalAlpha = this.message.alpha;
+                    this.drawText(this.message.text, this.BASE_WIDTH / 2, this.BASE_HEIGHT / 2 + 40, 40, this.message.color, 'center', 'bold');
+                    this.ctx.restore();
+                }
+            }
+
+            // --- Main Loop ---
+            gameLoop(timestamp) {
+                const dt = (timestamp - this.lastTime) / 1000;
+                this.lastTime = timestamp;
+
+                this.update(dt || 0); // Use 0 for dt on the first frame
+                this.draw();
+
+                requestAnimationFrame(this.gameLoop.bind(this));
+            }
+        }
+
+        window.addEventListener('load', () => {
+            new WordWeaveGame('gameCanvas');
+        });
+    </script>
+</body>
+</html>

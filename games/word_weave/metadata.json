@@ -1,0 +1,8 @@
+{
+  "name": "Word Weave",
+  "type": "word scramble game",
+  "folder": "word_weave",
+  "description": "Unscramble a chaotic web of letters to form brilliant words against the clock. Each level is a fast-paced puzzle that lets you weave your vocabulary into a stunning victory",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
