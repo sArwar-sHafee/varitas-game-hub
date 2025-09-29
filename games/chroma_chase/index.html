@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chroma Chase</title>
+    <style>
+        :root {
+            --bg-color: #1a1a2e;
+            --font-color: #e0e0e0;
+            --primary-color: #0f3460;
+            --glow-color: rgba(255, 255, 255, 0.7);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            color: var(--font-color);
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .game-container {
+            position: relative;
+            width: 95vmin;
+            height: 95vmin;
+            max-width: 800px;
+            max-height: 800px;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            background-color: var(--primary-color);
+            border-radius: 50%;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5), inset 0 0 50px rgba(0,0,0,0.3);
+            cursor: pointer;
+        }
+
+        .ui-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(26, 26, 46, 0.85);
+            backdrop-filter: blur(5px);
+            border-radius: 50%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            color: white;
+            transition: opacity 0.5s ease;
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        .ui-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .ui-overlay h1 {
+            font-size: clamp(2rem, 10vmin, 5rem);
+            text-shadow: 0 0 10px var(--glow-color);
+            margin-bottom: 0.5em;
+        }
+        
+        .ui-overlay h1 .emoji {
+            display: block;
+            font-size: 0.8em;
+        }
+
+        .ui-overlay p {
+            font-size: clamp(1rem, 4vmin, 1.5rem);
+            margin-bottom: 1.5em;
+            max-width: 80%;
+        }
+
+        .ui-overlay button {
+            font-size: clamp(1.2rem, 5vmin, 2rem);
+            padding: 0.5em 1.5em;
+            border: 2px solid white;
+            border-radius: 50px;
+            background-color: transparent;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            font-weight: bold;
+        }
+
+        .ui-overlay button:hover {
+            background-color: white;
+            color: var(--bg-color);
+            transform: scale(1.1);
+            box-shadow: 0 0 20px var(--glow-color);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="uiOverlay" class="ui-overlay">
+            <h1 id="uiTitle">Chroma Chase <span class="emoji">🎮</span></h1>
+            <p id="uiMessage">Memorize the sequence of colors and sounds. Repeat it to score. Good luck!</p>
+            <button id="startButton">Start Game</button>
+        </div>
+    </div>
+
+    <script>
+        // ES6+ JavaScript
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        const uiOverlay = document.getElementById('uiOverlay');
+        const uiTitle = document.getElementById('uiTitle');
+        const uiMessage = document.getElementById('uiMessage');
+        const startButton = document.getElementById('startButton');
+
+        // --- Game State and Constants ---
+        const GAME_STATE = {
+            START_SCREEN: 'START_SCREEN',
+            COMPUTER_TURN: 'COMPUTER_TURN',
+            PLAYER_TURN: 'PLAYER_TURN',
+            GAME_OVER: 'GAME_OVER',
+        };
+
+        let currentState = GAME_STATE.START_SCREEN;
+        let sequence = [];
+        let playerSequence = [];
+        let score = 0;
+        let highScore = localStorage.getItem('chromaChaseHighScore') || 0;
+        
+        let activeSegment = -1; // -1 means no segment is active
+        let lastTime = 0;
+        let animationTime = 0;
+
+        const COMPUTER_TURN_DELAY = 600; // ms between flashes
+        const FLASH_DURATION = 300; // ms for a single flash
+
+        // --- Audio Context ---
+        let audioCtx;
+        const sounds = [
+            { freq: 261.63 }, // C4
+            { freq: 329.63 }, // E4
+            { freq: 392.00 }, // G4
+            { freq: 440.00 }, // A4
+        ];
+        
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        function playSound(index) {
+            if (!audioCtx) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(sounds[index].freq, audioCtx.currentTime);
+            
+            gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.4);
+            
+            oscillator.start(audioCtx.currentTime);
+            oscillator.stop(audioCtx.currentTime + 0.4);
+        }
+
+        // --- Game Segments (Buttons) ---
+        const segments = [
+            { color: 'hsl(0, 80%, 60%)', litColor: 'hsl(0, 80%, 80%)', key: 'Q' },   // Red (Top-Left)
+            { color: 'hsl(210, 80%, 60%)', litColor: 'hsl(210, 80%, 80%)', key: 'W' }, // Blue (Top-Right)
+            { color: 'hsl(60, 80%, 60%)', litColor: 'hsl(60, 80%, 80%)', key: 'A' },  // Yellow (Bottom-Right)
+            { color: 'hsl(120, 80%, 60%)', litColor: 'hsl(120, 80%, 80%)', key: 'S' }, // Green (Bottom-Left)
+        ];
+
+        // --- Canvas and Drawing ---
+        let size, centerX, centerY, outerRadius, innerRadius;
+
+        function resizeCanvas() {
+            const container = document.querySelector('.game-container');
+            const canvasSize = Math.min(container.clientWidth, container.clientHeight);
+            canvas.width = canvasSize;
+            canvas.height = canvasSize;
+            
+            size = canvas.width;
+            centerX = size / 2;
+            centerY = size / 2;
+            outerRadius = size / 2 * 0.9;
+            innerRadius = size / 2 * 0.4;
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, size, size);
+
+            const segmentAngles = [
+                { start: 5 * Math.PI / 4, end: 7 * Math.PI / 4 }, // 0: Top-Left (Red)
+                { start: 7 * Math.PI / 4, end: 1 * Math.PI / 4 }, // 1: Top-Right (Blue)
+                { start: 1 * Math.PI / 4, end: 3 * Math.PI / 4 }, // 2: Bottom-Right (Yellow)
+                { start: 3 * Math.PI / 4, end: 5 * Math.PI / 4 }  // 3: Bottom-Left (Green)
+            ];
+
+            // Draw segments
+            for (let i = 0; i < 4; i++) {
+                const startAngle = segmentAngles[i].start;
+                const endAngle = segmentAngles[i].end;
+                
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, outerRadius, startAngle, endAngle);
+                ctx.arc(centerX, centerY, innerRadius, endAngle, startAngle, true);
+                ctx.closePath();
+                
+                const isActive = (activeSegment === i);
+                ctx.fillStyle = isActive ? segments[i].litColor : segments[i].color;
+                
+                if (isActive) {
+                    ctx.shadowColor = segments[i].litColor;
+                    ctx.shadowBlur = 20;
+                } else {
+                    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                    ctx.shadowBlur = 10;
+                }
+                ctx.fill();
+            }
+             // Reset shadow for other drawings
+            ctx.shadowBlur = 0;
+
+            // Draw center circle
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, innerRadius * 0.95, 0, 2 * Math.PI);
+            ctx.fillStyle = '#1a1a2e';
+            ctx.fill();
+            
+            // Draw text in center
+            ctx.fillStyle = 'white';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            if (currentState === GAME_STATE.PLAYER_TURN || currentState === GAME_STATE.COMPUTER_TURN) {
+                 ctx.font = `bold ${size * 0.15}px sans-serif`;
+                 ctx.fillText(score, centerX, centerY);
+            }
+
+            // Draw key hints
+            ctx.font = `bold ${size * 0.05}px sans-serif`;
+            const keyDisplayOrder = [
+                { x: centerX - outerRadius*0.7, y: centerY - outerRadius*0.7, key: segments[0].key}, // Red/Q
+                { x: centerX + outerRadius*0.7, y: centerY - outerRadius*0.7, key: segments[1].key}, // Blue/W
+                { x: centerX + outerRadius*0.7, y: centerY + outerRadius*0.7, key: segments[2].key}, // Yellow/A
+                { x: centerX - outerRadius*0.7, y: centerY + outerRadius*0.7, key: segments[3].key}, // Green/S
+            ];
+            
+            keyDisplayOrder.forEach(pos => {
+                ctx.fillStyle = 'rgba(255,255,255,0.7)';
+                ctx.fillText(pos.key, pos.x, pos.y);
+            });
+        }
+
+        // --- Game Logic ---
+        function startGame() {
+            sequence = [];
+            playerSequence = [];
+            score = 0;
+            currentState = GAME_STATE.COMPUTER_TURN;
+            uiOverlay.classList.add('hidden');
+            setTimeout(addToSequence, 500);
+        }
+
+        function addToSequence() {
+            sequence.push(Math.floor(Math.random() * 4));
+            playSequence();
+        }
+
+        function playSequence() {
+            currentState = GAME_STATE.COMPUTER_TURN;
+            let i = 0;
+            const intervalId = setInterval(() => {
+                if (i >= sequence.length) {
+                    clearInterval(intervalId);
+                    currentState = GAME_STATE.PLAYER_TURN;
+                    playerSequence = [];
+                    return;
+                }
+                flashSegment(sequence[i]);
+                i++;
+            }, COMPUTER_TURN_DELAY);
+        }
+
+        function flashSegment(index) {
+            activeSegment = index;
+            playSound(index);
+            animationTime = FLASH_DURATION;
+        }
+        
+        function handlePlayerInput(segmentIndex) {
+            if (currentState !== GAME_STATE.PLAYER_TURN) return;
+
+            flashSegment(segmentIndex);
+            playerSequence.push(segmentIndex);
+
+            const lastInputIndex = playerSequence.length - 1;
+            if (playerSequence[lastInputIndex] !== sequence[lastInputIndex]) {
+                gameOver();
+                return;
+            }
+
+            if (playerSequence.length === sequence.length) {
+                score++;
+                currentState = GAME_STATE.COMPUTER_TURN;
+                setTimeout(addToSequence, 1000);
+            }
+        }
+
+        function gameOver() {
+            playSound(3);
+            setTimeout(() => playSound(2), 150);
+            setTimeout(() => playSound(1), 300);
+
+            currentState = GAME_STATE.GAME_OVER;
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('chromaChaseHighScore', highScore);
+                uiTitle.innerHTML = `New High Score! <span class="emoji">🏆</span>`;
+            } else {
+                uiTitle.innerHTML = `Game Over <span class="emoji">😥</span>`;
+            }
+            uiMessage.innerHTML = `Your score: ${score}<br>High score: ${highScore}<br><br>Click or use keys [Q, W, A, S]`;
+            startButton.textContent = 'Play Again';
+            uiOverlay.classList.remove('hidden');
+        }
+
+
+        // --- Update Loop ---
+        function update(timestamp) {
+            const deltaTime = timestamp - lastTime;
+            lastTime = timestamp;
+
+            if (animationTime > 0) {
+                animationTime -= deltaTime;
+                if (animationTime <= 0) {
+                    activeSegment = -1;
+                }
+            }
+        }
+
+        function gameLoop(timestamp) {
+            update(timestamp);
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- Event Listeners ---
+        function getSegmentFromCoordinates(x, y) {
+            const dx = x - centerX;
+            const dy = y - centerY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist > innerRadius && dist < outerRadius) {
+                let angle = Math.atan2(dy, dx);
+                if (angle < 0) angle += 2 * Math.PI; // Normalize to 0-2PI
+
+                if (angle >= (5 * Math.PI / 4) && angle < (7 * Math.PI / 4)) return 0; // Top-Left (Red)
+                if (angle >= (7 * Math.PI / 4) || angle < (Math.PI / 4)) return 1;    // Top-Right (Blue)
+                if (angle >= (Math.PI / 4) && angle < (3 * Math.PI / 4)) return 2;    // Bottom-Right (Yellow)
+                if (angle >= (3 * Math.PI / 4) && angle < (5 * Math.PI / 4)) return 3;    // Bottom-Left (Green)
+            }
+            return -1;
+        }
+
+        canvas.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            // Scale click coordinates to match canvas resolution
+            const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+            const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+            const segmentIndex = getSegmentFromCoordinates(x, y);
+
+            if (segmentIndex !== -1) {
+                handlePlayerInput(segmentIndex);
+            }
+        });
+        
+        window.addEventListener('keydown', (e) => {
+            const key = e.key.toUpperCase();
+            const keyMap = {
+                'Q': 0, 'W': 1, 'A': 2, 'S': 3
+            };
+            if(keyMap.hasOwnProperty(key)) {
+                handlePlayerInput(keyMap[key]);
+            }
+        });
+
+        startButton.addEventListener('click', () => {
+            initAudio(); // Initialize audio on first user interaction
+            startGame();
+        });
+
+        window.addEventListener('resize', resizeCanvas);
+        
+        // --- Initialization ---
+        resizeCanvas();
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>

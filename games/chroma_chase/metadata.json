@@ -1,0 +1,8 @@
+{
+  "name": "Chroma Chase",
+  "type": "simon says memory game",
+  "folder": "chroma_chase",
+  "description": "Chase the accelerating pulse of vibrant colors in a hypnotic test of your memory and reflexes. Perfectly repeat the ever-growing patterns or get consumed by the dazzling chaos",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
