@@ -167,10 +167,19 @@
                 
                 this.pieceAnimations = [];
 
+                this.colors = {};
                 this.init();
             }
 
             init() {
+                // We need to fetch the CSS variables to use them in the canvas
+                const style = getComputedStyle(document.documentElement);
+                this.colors = {
+                    primary: style.getPropertyValue('--primary-color').trim(),
+                    secondary: style.getPropertyValue('--secondary-color').trim(),
+                    text: style.getPropertyValue('--text-color').trim()
+                };
+
                 window.addEventListener('resize', () => this.resizeCanvas());
                 this.canvas.addEventListener('click', (e) => this.handleClick(e));
                 window.addEventListener('keydown', (e) => this.handleKeyPress(e));
@@ -275,7 +284,7 @@
                     this.ctx.scale(scale, scale);
                     this.ctx.globalAlpha = anim.progress;
                     this.ctx.font = `${baseFontSize}px sans-serif`;
-                    this.ctx.shadowColor = piece === this.PLAYER ? 'var(--primary-color)' : 'var(--secondary-color)';
+                    this.ctx.shadowColor = piece === this.PLAYER ? this.colors.primary : this.colors.secondary;
                     this.ctx.shadowBlur = 20;
                     this.ctx.fillText(piece, 0, 0);
                     this.ctx.restore();
@@ -306,7 +315,7 @@
                 this.ctx.moveTo(currentStartX, currentStartY);
                 this.ctx.lineTo(currentEndX, currentEndY);
                 
-                this.ctx.strokeStyle = this.winnerInfo.winner === this.PLAYER ? 'var(--primary-color)' : 'var(--secondary-color)';
+                this.ctx.strokeStyle = this.winnerInfo.winner === this.PLAYER ? this.colors.primary : this.colors.secondary;
                 this.ctx.lineWidth = 15;
                 this.ctx.lineCap = 'round';
                 this.ctx.shadowColor = this.ctx.strokeStyle;
@@ -326,8 +335,8 @@
                 // Title
                 this.ctx.font = `bold ${this.canvas.width * 0.15}px sans-serif`;
                 const gradient = this.ctx.createLinearGradient(0, 0, this.canvas.width, 0);
-                gradient.addColorStop(0, "var(--primary-color)");
-                gradient.addColorStop(1, "var(--secondary-color)");
+                gradient.addColorStop(0, this.colors.primary);
+                gradient.addColorStop(1, this.colors.secondary);
                 this.ctx.fillStyle = gradient;
                 this.ctx.shadowColor = 'black';
                 this.ctx.shadowBlur = 10;
@@ -336,7 +345,7 @@
                 // Pulsating instruction
                 const pulse = Math.sin(Date.now() * 0.005) * 0.5 + 0.5;
                 this.ctx.globalAlpha = 0.6 + pulse * 0.4;
-                this.ctx.fillStyle = 'var(--text-color)';
+                this.ctx.fillStyle = this.colors.text;
                 this.ctx.font = `bold ${this.canvas.width * 0.06}px sans-serif`;
                 this.ctx.shadowBlur = 0;
                 this.ctx.fillText("Click to Start", this.canvas.width / 2, this.canvas.height * 0.65);
@@ -359,13 +368,13 @@
                 }
 
                 this.ctx.font = `bold ${this.canvas.width * 0.12}px sans-serif`;
-                this.ctx.fillStyle = this.winnerInfo?.winner === this.PLAYER ? 'var(--primary-color)' : this.winnerInfo?.winner === this.AI ? 'var(--secondary-color)' : 'white';
+                this.ctx.fillStyle = this.winnerInfo?.winner === this.PLAYER ? this.colors.primary : this.winnerInfo?.winner === this.AI ? this.colors.secondary : 'white';
                 this.ctx.shadowColor = 'black';
                 this.ctx.shadowBlur = 10;
                 this.ctx.fillText(message, this.canvas.width / 2, this.canvas.height / 2);
                 
                 this.ctx.font = `${this.canvas.width * 0.05}px sans-serif`;
-                this.ctx.fillStyle = 'var(--text-color)';
+                this.ctx.fillStyle = this.colors.text;
                 this.ctx.fillText("Press 'R' to play again", this.canvas.width / 2, this.canvas.height * 0.65);
                 this.ctx.restore();
             }
