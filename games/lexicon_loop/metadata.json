@@ -1,0 +1,8 @@
+{
+  "name": "Lexicon Loop",
+  "type": "word scramble game",
+  "folder": "lexicon_loop",
+  "description": "Untangle a looping chaos of letters and spell your way to victory. Find words at lightning speed as the puzzle twists and shifts with every correct answer",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
