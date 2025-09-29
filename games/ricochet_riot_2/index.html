@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ricochet Riot 2</title>
+    <style>
+        :root {
+            --primary-color: #00ffff;
+            --secondary-color: #ff00ff;
+            --background-color: #1a0537;
+            --text-color: #ffffff;
+            --ui-background: rgba(0, 0, 0, 0.7);
+        }
+
+        * {
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            background: var(--background-color);
+            background-image: linear-gradient(135deg, #1a0537 0%, #3a0d78 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: var(--text-color);
+        }
+
+        #game-container {
+            position: relative;
+            width: 100%;
+            max-width: 800px;
+            aspect-ratio: 4 / 3;
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.5);
+            border: 2px solid var(--primary-color);
+            border-radius: 10px;
+            background: #000;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            border-radius: 8px;
+        }
+
+        .ui-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: var(--ui-background);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 20px;
+            z-index: 10;
+            border-radius: 8px;
+            backdrop-filter: blur(5px);
+            animation: fadeIn 0.5s ease-in-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        h1 {
+            font-size: clamp(2rem, 10vw, 4rem);
+            margin: 0;
+            color: var(--primary-color);
+            text-shadow: 0 0 10px var(--primary-color), 0 0 20px var(--secondary-color);
+            letter-spacing: 2px;
+        }
+
+        p {
+            font-size: clamp(0.8rem, 4vw, 1.2rem);
+            margin: 20px 0;
+            max-width: 600px;
+            line-height: 1.6;
+        }
+
+        .controls {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid var(--primary-color);
+            margin-top: 20px;
+        }
+
+        button {
+            font-size: clamp(1rem, 5vw, 1.5rem);
+            padding: 15px 30px;
+            border: 2px solid var(--primary-color);
+            border-radius: 50px;
+            background: transparent;
+            color: var(--text-color);
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 10px var(--primary-color);
+            margin-top: 20px;
+        }
+
+        button:hover {
+            background: var(--primary-color);
+            color: var(--background-color);
+            box-shadow: 0 0 20px var(--primary-color), 0 0 30px var(--primary-color);
+        }
+
+        #hud {
+            position: absolute;
+            top: 10px;
+            left: 0;
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            padding: 0 20px;
+            font-size: clamp(1rem, 4vw, 1.8rem);
+            font-weight: bold;
+            text-shadow: 0 0 5px #000;
+            pointer-events: none; /* Allows mouse events to pass through to the canvas */
+        }
+        
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        
+        <div id="hud" class="hidden">
+            <div id="score">Score: 0</div>
+            <div id="lives">Lives: ❤️❤️❤️</div>
+        </div>
+
+        <div id="start-screen" class="ui-overlay">
+            <h1>Ricochet Riot 2</h1>
+            <p>Break all the bricks to win! Use your mouse or arrow keys to control the paddle. Don't let the ball fall!</p>
+            <div class="controls">
+                <strong>Controls:</strong><br>
+                ↔️ Mouse Move / ← → Arrow Keys
+            </div>
+            <button id="start-button">Start Game</button>
+        </div>
+
+        <div id="game-over-screen" class="ui-overlay hidden">
+            <h1>Game Over</h1>
+            <p id="final-score">Your Score: 0</p>
+            <button id="restart-button">Play Again</button>
+        </div>
+    </div>
+
+<script>
+class Sound {
+    constructor() {
+        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    play(type) {
+        if (!this.audioCtx) return;
+
+        const oscillator = this.audioCtx.createOscillator();
+        const gainNode = this.audioCtx.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(this.audioCtx.destination);
+        gainNode.gain.setValueAtTime(0, this.audioCtx.currentTime);
+
+        switch (type) {
+            case 'hit':
+                oscillator.type = 'square';
+                oscillator.frequency.setValueAtTime(440, this.audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.1, this.audioCtx.currentTime + 0.02);
+                gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + 0.1);
+                break;
+            case 'break':
+                oscillator.type = 'triangle';
+                oscillator.frequency.setValueAtTime(880, this.audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.2, this.audioCtx.currentTime + 0.02);
+                gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + 0.2);
+                break;
+            case 'loseLife':
+                oscillator.type = 'sawtooth';
+                oscillator.frequency.setValueAtTime(440, this.audioCtx.currentTime);
+                oscillator.frequency.linearRampToValueAtTime(110, this.audioCtx.currentTime + 0.5);
+                gainNode.gain.exponentialRampToValueAtTime(0.3, this.audioCtx.currentTime + 0.02);
+                gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + 0.5);
+                break;
+        }
+
+        oscillator.start(this.audioCtx.currentTime);
+        oscillator.stop(this.audioCtx.currentTime + 0.5);
+    }
+}
+
+class Paddle {
+    constructor(game) {
+        this.game = game;
+        this.width = 0;
+        this.height = 0;
+        this.x = 0;
+        this.y = 0;
+        this.speed = 0;
+        this.maxSpeed = 8;
+        this.color = 'linear-gradient(0deg, var(--primary-color), var(--secondary-color))';
+    }
+
+    reset() {
+        this.width = this.game.width * 0.15;
+        this.height = this.game.height * 0.03;
+        this.x = (this.game.width - this.width) / 2;
+        this.y = this.game.height - this.height - 10;
+        this.speed = 0;
+    }
+
+    draw(ctx) {
+        const gradient = ctx.createLinearGradient(this.x, this.y, this.x + this.width, this.y + this.height);
+        gradient.addColorStop(0, getComputedStyle(document.documentElement).getPropertyValue('--primary-color'));
+        gradient.addColorStop(1, getComputedStyle(document.documentElement).getPropertyValue('--secondary-color'));
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.roundRect(this.x, this.y, this.width, this.height, [this.height / 2]);
+        ctx.fill();
+        ctx.shadowColor = getComputedStyle(document.documentElement).getPropertyValue('--primary-color');
+        ctx.shadowBlur = 10;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+    }
+
+    update() {
+        // Keyboard movement
+        if (this.game.input.left) {
+            this.speed = -this.maxSpeed;
+        } else if (this.game.input.right) {
+            this.speed = this.maxSpeed;
+        } else {
+            this.speed = 0;
+        }
+        this.x += this.speed * (this.game.width / 800); // Scale speed with canvas size
+
+        // Mouse movement
+        if (this.game.input.mouseX !== null) {
+            this.x = this.game.input.mouseX - this.width / 2;
+        }
+
+        // Wall collision
+        if (this.x < 0) this.x = 0;
+        if (this.x + this.width > this.game.width) this.x = this.game.width - this.width;
+    }
+}
+
+class Ball {
+    constructor(game) {
+        this.game = game;
+        this.radius = 0;
+        this.x = 0;
+        this.y = 0;
+        this.speedX = 0;
+        this.speedY = 0;
+        this.color = getComputedStyle(document.documentElement).getPropertyValue('--text-color');
+        this.trail = [];
+        this.maxTrailLength = 15;
+    }
+
+    reset() {
+        this.radius = this.game.height * 0.015;
+        this.x = this.game.paddle.x + this.game.paddle.width / 2;
+        this.y = this.game.paddle.y - this.radius - 1;
+        const speedMagnitude = this.game.height * 0.007;
+        this.speedX = speedMagnitude * (Math.random() > 0.5 ? 1 : -1);
+        this.speedY = -speedMagnitude;
+        this.trail = [];
+    }
+
+    draw(ctx) {
+        // Draw trail
+        for (let i = 0; i < this.trail.length; i++) {
+            const pos = this.trail[i];
+            const alpha = (i + 1) / this.trail.length;
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, this.radius * (alpha * 0.8), 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(255, 255, 255, ${alpha * 0.3})`;
+            ctx.fill();
+        }
+
+        // Draw ball
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.shadowColor = this.color;
+        ctx.shadowBlur = 15;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+    }
+
+    update() {
+        // Update trail
+        this.trail.push({ x: this.x, y: this.y });
+        if (this.trail.length > this.maxTrailLength) {
+            this.trail.shift();
+        }
+
+        this.x += this.speedX;
+        this.y += this.speedY;
+
+        // Wall collision (left/right)
+        if (this.x + this.radius > this.game.width || this.x - this.radius < 0) {
+            this.speedX *= -1;
+            this.game.sound.play('hit');
+        }
+
+        // Wall collision (top)
+        if (this.y - this.radius < 0) {
+            this.speedY *= -1;
+            this.game.sound.play('hit');
+        }
+
+        // Wall collision (bottom) - lose life
+        if (this.y + this.radius > this.game.height) {
+            this.game.loseLife();
+        }
+
+        // Paddle collision
+        if (this.y + this.radius >= this.game.paddle.y &&
+            this.y - this.radius <= this.game.paddle.y + this.game.paddle.height &&
+            this.x + this.radius >= this.game.paddle.x &&
+            this.x - this.radius <= this.game.paddle.x + this.game.paddle.width) {
+            
+            // Prevent ball from getting stuck in paddle
+            if (this.speedY > 0) {
+                this.y = this.game.paddle.y - this.radius;
+                this.speedY *= -1;
+
+                // Change angle based on where it hits the paddle
+                let collidePoint = this.x - (this.game.paddle.x + this.game.paddle.width / 2);
+                let normalizedPoint = collidePoint / (this.game.paddle.width / 2);
+                let angle = normalizedPoint * (Math.PI / 3); // Max angle 60 degrees
+                
+                const speedMagnitude = Math.sqrt(this.speedX * this.speedX + this.speedY * this.speedY);
+                this.speedX = speedMagnitude * Math.sin(angle);
+                this.speedY = -speedMagnitude * Math.cos(angle);
+                
+                this.game.sound.play('hit');
+            }
+        }
+    }
+}
+
+class Brick {
+    constructor(game, x, y, width, height, color, points) {
+        this.game = game;
+        this.x = x;
+        this.y = y;
+        this.width = width;
+        this.height = height;
+        this.color = color;
+        this.points = points;
+        this.visible = true;
+    }
+
+    draw(ctx) {
+        if (this.visible) {
+            ctx.fillStyle = this.color;
+            ctx.fillRect(this.x, this.y, this.width, this.height);
+            // Add a subtle 3D effect
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.fillRect(this.x, this.y, this.width, this.height * 0.1);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.fillRect(this.x, this.y + this.height * 0.9, this.width, this.height * 0.1);
+        }
+    }
+}
+
+class Particle {
+    constructor(x, y, color) {
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        this.size = Math.random() * 5 + 2;
+        this.speedX = Math.random() * 3 - 1.5;
+        this.speedY = Math.random() * 3 - 1.5;
+        this.life = 100;
+    }
+
+    update() {
+        this.x += this.speedX;
+        this.y += this.speedY;
+        this.life -= 2;
+    }
+
+    draw(ctx) {
+        ctx.fillStyle = `rgba(${this.hexToRgb(this.color)}, ${this.life / 100})`;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    
+    hexToRgb(hex) {
+        let r = 0, g = 0, b = 0;
+        if (hex.length == 4) {
+            r = "0x" + hex[1] + hex[1];
+            g = "0x" + hex[2] + hex[2];
+            b = "0x" + hex[3] + hex[3];
+        } else if (hex.length == 7) {
+            r = "0x" + hex[1] + hex[2];
+            g = "0x" + hex[3] + hex[4];
+            b = "0x" + hex[5] + hex[6];
+        }
+        return `${+r},${+g},${+b}`;
+    }
+}
+
+class Star {
+    constructor(width, height) {
+        this.x = Math.random() * width;
+        this.y = Math.random() * height;
+        this.z = Math.random() * width;
+        this.width = width;
+        this.height = height;
+    }
+
+    update() {
+        this.z -= 1;
+        if (this.z <= 0) {
+            this.x = Math.random() * this.width;
+            this.y = Math.random() * this.height;
+            this.z = this.width;
+        }
+    }
+
+    draw(ctx) {
+        const sx = (this.x - this.width / 2) * (this.width / this.z) + this.width / 2;
+        const sy = (this.y - this.height / 2) * (this.width / this.z) + this.height / 2;
+        const r = Math.max(0.1, (this.width / this.z) * 1.5);
+
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255, 255, 255, ${1 - this.z / this.width})`;
+        ctx.fill();
+    }
+}
+
+class InputHandler {
+    constructor(game) {
+        this.game = game;
+        this.left = false;
+        this.right = false;
+        this.mouseX = null;
+
+        document.addEventListener('keydown', e => {
+            if (e.key === 'ArrowLeft' || e.key === 'a') this.left = true;
+            if (e.key === 'ArrowRight' || e.key === 'd') this.right = true;
+        });
+
+        document.addEventListener('keyup', e => {
+            if (e.key === 'ArrowLeft' || e.key === 'a') this.left = false;
+            if (e.key === 'ArrowRight' || e.key === 'd') this.right = false;
+        });
+        
+        this.game.canvas.addEventListener('mousemove', e => {
+             const rect = this.game.canvas.getBoundingClientRect();
+             this.mouseX = (e.clientX - rect.left) * (this.game.canvas.width / rect.width);
+        });
+
+        this.game.canvas.addEventListener('mouseleave', () => {
+            // Optional: stop paddle movement when mouse leaves
+            // this.mouseX = null;
+        });
+    }
+}
+
+class Game {
+    constructor(canvas) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.width = canvas.width;
+        this.height = canvas.height;
+        this.gameState = 'start'; // 'start', 'playing', 'gameOver'
+
+        this.sound = new Sound();
+        this.paddle = new Paddle(this);
+        this.ball = new Ball(this);
+        this.input = new InputHandler(this);
+
+        this.bricks = [];
+        this.particles = [];
+        this.stars = [];
+
+        this.score = 0;
+        this.lives = 3;
+        this.level = 1;
+        this.animationFrame = null;
+
+        this.setupUI();
+        this.resize();
+        window.addEventListener('resize', () => this.resize());
+    }
+
+    setupUI() {
+        this.startScreen = document.getElementById('start-screen');
+        this.gameOverScreen = document.getElementById('game-over-screen');
+        this.hud = document.getElementById('hud');
+        this.scoreDisplay = document.getElementById('score');
+        this.livesDisplay = document.getElementById('lives');
+        this.finalScoreDisplay = document.getElementById('final-score');
+        
+        document.getElementById('start-button').addEventListener('click', () => this.startGame());
+        document.getElementById('restart-button').addEventListener('click', () => this.startGame());
+    }
+
+    resize() {
+        const container = document.getElementById('game-container');
+        const { width, height } = container.getBoundingClientRect();
+        this.canvas.width = width;
+        this.canvas.height = height;
+        this.width = width;
+        this.height = height;
+        
+        if (this.gameState === 'playing' || this.gameState === 'start') {
+           this.resetLevel();
+        }
+        if (this.stars.length === 0) {
+            this.createStars();
+        } else {
+            this.stars.forEach(star => {
+                star.width = this.width;
+                star.height = this.height;
+            });
+        }
+    }
+    
+    createStars() {
+        this.stars = [];
+        for (let i = 0; i < 100; i++) {
+            this.stars.push(new Star(this.width, this.height));
+        }
+    }
+
+    createBricks() {
+        this.bricks = [];
+        const brickColors = ['#ff4d4d', '#ff944d', '#ffff4d', '#94ff4d', '#4dffff', '#4d4dff'];
+        const brickPoints = [60, 50, 40, 30, 20, 10];
+        const brickRowCount = 6;
+        const brickColumnCount = 10;
+        const brickPadding = this.width * 0.01;
+        const brickOffsetTop = this.height * 0.1;
+        const brickOffsetLeft = this.width * 0.05;
+
+        const brickAreaWidth = this.width - brickOffsetLeft * 2;
+        const brickWidth = (brickAreaWidth - (brickColumnCount - 1) * brickPadding) / brickColumnCount;
+        const brickHeight = this.height * 0.04;
+
+        for (let c = 0; c < brickColumnCount; c++) {
+            for (let r = 0; r < brickRowCount; r++) {
+                const brickX = c * (brickWidth + brickPadding) + brickOffsetLeft;
+                const brickY = r * (brickHeight + brickPadding) + brickOffsetTop;
+                this.bricks.push(new Brick(this, brickX, brickY, brickWidth, brickHeight, brickColors[r], brickPoints[r]));
+            }
+        }
+    }
+
+    startGame() {
+        this.gameState = 'playing';
+        this.score = 0;
+        this.lives = 3;
+        this.startScreen.classList.add('hidden');
+        this.gameOverScreen.classList.add('hidden');
+        this.hud.classList.remove('hidden');
+        this.resetLevel();
+        this.updateHUD();
+        if(!this.animationFrame) this.gameLoop();
+    }
+    
+    resetLevel() {
+        this.paddle.reset();
+        this.ball.reset();
+        this.createBricks();
+    }
+
+    loseLife() {
+        this.lives--;
+        this.sound.play('loseLife');
+        this.updateHUD();
+        if (this.lives > 0) {
+            this.paddle.reset();
+            this.ball.reset();
+        } else {
+            this.gameOver();
+        }
+    }
+
+    gameOver() {
+        this.gameState = 'gameOver';
+        this.finalScoreDisplay.textContent = `Your Score: ${this.score}`;
+        this.gameOverScreen.classList.remove('hidden');
+        this.hud.classList.add('hidden');
+    }
+
+    updateHUD() {
+        this.scoreDisplay.textContent = `Score: ${this.score}`;
+        this.livesDisplay.innerHTML = 'Lives: ' + '❤️'.repeat(this.lives);
+    }
+
+    checkCollisions() {
+        // Brick collision
+        this.bricks.forEach(brick => {
+            if (brick.visible) {
+                if (this.ball.y - this.ball.radius < brick.y + brick.height &&
+                    this.ball.y + this.ball.radius > brick.y &&
+                    this.ball.x - this.ball.radius < brick.x + brick.width &&
+                    this.ball.x + this.ball.radius > brick.x) {
+                    
+                    this.ball.speedY *= -1;
+                    brick.visible = false;
+                    this.score += brick.points;
+                    this.updateHUD();
+                    this.createParticles(brick);
+                    this.sound.play('break');
+                }
+            }
+        });
+
+        // Check for win
+        if (this.bricks.length > 0 && this.bricks.every(brick => !brick.visible)) {
+            // For this version, we'll just restart the level
+            this.level++;
+            alert(`Level ${this.level - 1} Complete! Starting Level ${this.level}.`);
+            this.resetLevel();
+        }
+    }
+
+    createParticles(brick) {
+        for (let i = 0; i < 15; i++) {
+            this.particles.push(new Particle(brick.x + brick.width / 2, brick.y + brick.height / 2, brick.color));
+        }
+    }
+    
+    update() {
+        if (this.gameState !== 'playing') return;
+
+        this.paddle.update();
+        this.ball.update();
+        this.checkCollisions();
+
+        this.particles.forEach((p, index) => {
+            p.update();
+            if (p.life <= 0) {
+                this.particles.splice(index, 1);
+            }
+        });
+    }
+
+    draw() {
+        // Clear canvas with a trail effect
+        this.ctx.fillStyle = 'rgba(26, 5, 55, 0.25)';
+        this.ctx.fillRect(0, 0, this.width, this.height);
+
+        // Draw stars
+        this.stars.forEach(star => {
+            star.update();
+            star.draw(this.ctx);
+        });
+        
+        if (this.gameState === 'playing') {
+            this.paddle.draw(this.ctx);
+            this.ball.draw(this.ctx);
+            this.bricks.forEach(brick => brick.draw(this.ctx));
+            this.particles.forEach(p => p.draw(this.ctx));
+        }
+    }
+
+    gameLoop() {
+        this.update();
+        this.draw();
+        this.animationFrame = requestAnimationFrame(() => this.gameLoop());
+    }
+}
+
+window.addEventListener('load', function() {
+    const canvas = document.getElementById('gameCanvas');
+    const game = new Game(canvas);
+    // Initial draw for start screen background
+    game.gameLoop();
+});
+
+</script>
+</body>
+</html>

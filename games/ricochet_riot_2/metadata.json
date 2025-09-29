@@ -1,0 +1,8 @@
+{
+  "name": "Ricochet Riot 2",
+  "type": "breakout/brick breaker",
+  "folder": "ricochet_riot_2",
+  "description": "Unleash a chaotic storm of ricochets, triggering insane chain reactions with an arsenal of devastating power-ups. Master the mayhem to shatter waves of dynamic, explosive bricks in a symphony of destruction",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
