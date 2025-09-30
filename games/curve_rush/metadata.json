@@ -1,0 +1,8 @@
+{
+  "name": "Curve Rush",
+  "type": "snake game",
+  "folder": "curve_rush",
+  "description": "Whip your ever-growing snake through treacherous curves at blistering speeds. Skillfully dodge obstacles and outmaneuver rivals to become an unstoppable, neon serpent.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
