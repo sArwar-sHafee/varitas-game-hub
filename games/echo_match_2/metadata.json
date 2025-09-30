@@ -1,0 +1,8 @@
+{
+  "name": "Echo Match 2",
+  "type": "memory card game",
+  "folder": "echo_match_2",
+  "description": "Unleash powerful \"Echo\" effects with every pair you find, triggering strategic, game-changing combos across the board. Master the chain reactions to outsmart your opponents in this electrifying sequel to the classic memory game",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
