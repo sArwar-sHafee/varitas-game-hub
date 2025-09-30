@@ -1,0 +1,8 @@
+{
+  "name": "Mind Cipher",
+  "type": "number guessing game",
+  "folder": "mind_cipher",
+  "description": "Crack the secret numerical cipher using nothing but your wits and logic. Each guess reveals a new clue, turning this mind-bending puzzle into a thrilling race against the clock.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

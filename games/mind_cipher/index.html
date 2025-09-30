@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mind Cipher</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        html, body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100%;
+            background-color: #0d0d2b; /* Deep space blue */
+        }
+        canvas {
+            display: block;
+            background: radial-gradient(circle, #1a1a3a, #0d0d2b);
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // ES6+ JavaScript Code for Mind Cipher
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // ===================================
+        // GAME STATE & CONSTANTS
+        // ===================================
+        let gameState = 'START'; // START, PLAYING, GAME_OVER
+        let canvasWidth, canvasHeight;
+        let scaleFactor = 1;
+
+        const GAME_CONFIG = {
+            MIN_NUMBER: 1,
+            MAX_NUMBER: 100,
+            MAX_GUESSES: 10,
+            SCORE_PER_GUESS: 100
+        };
+
+        let targetNumber;
+        let currentGuess = '';
+        let guesses = [];
+        let remainingGuesses;
+        let score;
+        let feedback = { text: '', color: '#fff', alpha: 0 };
+        let gameOverMessage = { title: '', subtitle: '', score: 0 };
+
+        let particles = [];
+        let uiElements = {};
+        let mouse = { x: 0, y: 0, down: false };
+        let lastTime = 0;
+        let blinker = { visible: true, timer: 0, interval: 500 };
+
+        // ===================================
+        // AUDIO HANDLER (Web Audio API)
+        // ===================================
+        const AudioHandler = {
+            audioCtx: null,
+
+            init() {
+                try {
+                    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) {
+                    console.error("Web Audio API is not supported in this browser");
+                }
+            },
+
+            resume() {
+                if (this.audioCtx && this.audioCtx.state === 'suspended') {
+                    this.audioCtx.resume();
+                }
+            },
+
+            play(freq, duration, type = 'sine', volume = 0.5) {
+                if (!this.audioCtx) return;
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+
+                oscillator.type = type;
+                oscillator.frequency.setValueAtTime(freq, this.audioCtx.currentTime);
+
+                gainNode.gain.setValueAtTime(volume, this.audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + duration);
+
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+                oscillator.start();
+                oscillator.stop(this.audioCtx.currentTime + duration);
+            },
+
+            sounds: {
+                keyPress: () => AudioHandler.play(250, 0.05, 'triangle', 0.3),
+                submit: () => AudioHandler.play(440, 0.1, 'sine', 0.5),
+                error: () => {
+                    AudioHandler.play(200, 0.1, 'square', 0.4);
+                    setTimeout(() => AudioHandler.play(180, 0.15, 'square', 0.4), 100);
+                },
+                success: () => {
+                    AudioHandler.play(523.25, 0.1, 'sine', 0.5); // C5
+                    setTimeout(() => AudioHandler.play(659.25, 0.15, 'sine', 0.5), 100); // E5
+                },
+                win: () => {
+                    AudioHandler.play(523.25, 0.1, 'sine', 0.5); // C5
+                    setTimeout(() => AudioHandler.play(659.25, 0.1, 'sine', 0.5), 120); // E5
+                    setTimeout(() => AudioHandler.play(783.99, 0.1, 'sine', 0.5), 240); // G5
+                    setTimeout(() => AudioHandler.play(1046.50, 0.2, 'sine', 0.5), 360); // C6
+                },
+                lose: () => {
+                    AudioHandler.play(300, 0.2, 'sawtooth', 0.5);
+                    setTimeout(() => AudioHandler.play(200, 0.3, 'sawtooth', 0.5), 200);
+                },
+            }
+        };
+
+        // ===================================
+        // UTILITY & HELPER FUNCTIONS
+        // ===================================
+        const lerp = (a, b, t) => a + (b - a) * t;
+        const isPointInRect = (x, y, rect) => (x > rect.x && x < rect.x + rect.w && y > rect.y && y < rect.y + rect.h);
+
+        function createParticles(x, y, count, color, speed = 5) {
+            for (let i = 0; i < count; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                particles.push({
+                    x, y,
+                    vx: Math.cos(angle) * Math.random() * speed,
+                    vy: Math.sin(angle) * Math.random() * speed,
+                    life: 1,
+                    size: Math.random() * 3 + 1,
+                    color: color
+                });
+            }
+        }
+
+        // ===================================
+        // DRAWING FUNCTIONS
+        // ===================================
+        function drawText(text, x, y, size, color, align = 'center', font = 'Orbitron, sans-serif') {
+            ctx.font = `${size * scaleFactor}px ${font}`;
+            ctx.fillStyle = color;
+            ctx.textAlign = align;
+            ctx.textBaseline = 'middle'; // Improves vertical centering
+            ctx.fillText(text, x, y);
+        }
+        
+        function drawRoundedRect(x, y, w, h, r, color) {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.arcTo(x + w, y, x + w, y + h, r);
+            ctx.arcTo(x + w, y + h, x, y + h, r);
+            ctx.arcTo(x, y + h, x, y, r);
+            ctx.arcTo(x, y, x + w, y, r);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        function drawButton(element) {
+            const isHovered = isPointInRect(mouse.x, mouse.y, element);
+            const r = element.h * 0.25;
+            let currentW = element.w;
+            let currentH = element.h;
+
+            if (isHovered) {
+                canvas.style.cursor = 'pointer';
+                currentW *= 1.05;
+                currentH *= 1.05;
+            }
+            element.animW = lerp(element.animW, currentW, 0.2);
+            element.animH = lerp(element.animH, currentH, 0.2);
+
+            const x = element.x - (element.animW - element.w) / 2;
+            const y = element.y - (element.animH - element.h) / 2;
+
+            ctx.save();
+            ctx.shadowColor = element.glowColor;
+            ctx.shadowBlur = isHovered ? 25 * scaleFactor : 15 * scaleFactor;
+            
+            const gradient = ctx.createLinearGradient(x, y, x, y + element.animH);
+            gradient.addColorStop(0, element.color);
+            gradient.addColorStop(1, element.color2);
+            drawRoundedRect(x, y, element.animW, element.animH, r, gradient);
+
+            ctx.restore();
+
+            drawText(element.text, element.x + element.w / 2, element.y + element.h / 2, element.fontSize, '#ffffff');
+        }
+
+        function drawParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vy += 0.05; // gravity
+                p.life -= 0.02;
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                } else {
+                    ctx.globalAlpha = p.life;
+                    ctx.fillStyle = p.color;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.size * scaleFactor, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.globalAlpha = 1;
+                }
+            }
+        }
+        
+        // ===================================
+        // GAME LOGIC & STATE MANAGEMENT
+        // ===================================
+        function initGame() {
+            targetNumber = Math.floor(Math.random() * (GAME_CONFIG.MAX_NUMBER - GAME_CONFIG.MIN_NUMBER + 1)) + GAME_CONFIG.MIN_NUMBER;
+            currentGuess = '';
+            guesses = [];
+            remainingGuesses = GAME_CONFIG.MAX_GUESSES;
+            score = 0;
+            feedback = { text: `Guess a number between ${GAME_CONFIG.MIN_NUMBER} and ${GAME_CONFIG.MAX_NUMBER}`, color: '#fff', alpha: 1, y: canvasHeight * 0.4 };
+        }
+
+        function startGame() {
+            gameState = 'PLAYING';
+            AudioHandler.sounds.success();
+            initGame();
+            createUI();
+            createParticles(canvasWidth / 2, canvasHeight / 2, 100, '#00ffcc');
+        }
+
+        function restartGame() {
+            gameState = 'START';
+            createUI();
+        }
+
+        function submitGuess() {
+            if (currentGuess === '') return;
+            
+            AudioHandler.sounds.submit();
+            const guessNum = parseInt(currentGuess);
+            let feedbackText, feedbackColor;
+
+            if (guessNum === targetNumber) {
+                feedbackText = `CORRECT! The number was ${targetNumber}!`;
+                feedbackColor = '#00ffcc';
+                AudioHandler.sounds.success();
+                createParticles(canvasWidth / 2, canvasHeight * 0.3, 150, '#00ffcc', 8);
+                endGame(true);
+            } else {
+                remainingGuesses--;
+                feedbackText = guessNum > targetNumber ? `TOO HIGH` : `TOO LOW`;
+                feedbackColor = guessNum > targetNumber ? '#ff6b6b' : '#4dabf7';
+                AudioHandler.sounds.error();
+                createParticles(canvasWidth / 2, canvasHeight * 0.3, 20, feedbackColor, 3);
+                if (remainingGuesses <= 0) {
+                    endGame(false);
+                }
+            }
+            
+            guesses.unshift({ num: guessNum, feedback: feedbackText });
+            if (guesses.length > 6) guesses.pop();
+
+            feedback = { text: feedbackText, color: feedbackColor, alpha: 1, y: canvasHeight * 0.4 };
+            currentGuess = '';
+        }
+
+        function endGame(isWin) {
+            gameState = 'GAME_OVER';
+            if (isWin) {
+                score = remainingGuesses * GAME_CONFIG.SCORE_PER_GUESS + GAME_CONFIG.SCORE_PER_GUESS;
+                gameOverMessage = {
+                    title: 'YOU WIN! 🎉',
+                    subtitle: `You cracked the Mind Cipher!`,
+                    score: score
+                };
+                AudioHandler.sounds.win();
+            } else {
+                gameOverMessage = {
+                    title: 'GAME OVER',
+                    subtitle: `The number was ${targetNumber}`,
+                    score: 0
+                };
+                AudioHandler.sounds.lose();
+            }
+            createUI();
+        }
+
+        function handleKeyPress(key) {
+            if (gameState !== 'PLAYING') return;
+            AudioHandler.sounds.keyPress();
+
+            if (/\d/.test(key) && currentGuess.length < 3) {
+                currentGuess += key;
+            } else if (key === 'Backspace') {
+                currentGuess = currentGuess.slice(0, -1);
+            } else if (key === 'Enter') {
+                submitGuess();
+            }
+        }
+
+        // ===================================
+        // UI DEFINITIONS
+        // ===================================
+        function createUI() {
+            uiElements = {};
+            const cx = canvasWidth / 2;
+            const cy = canvasHeight / 2;
+            const btnW = 300 * scaleFactor;
+            const btnH = 70 * scaleFactor;
+            const btnFontSize = 28 * scaleFactor;
+
+            if (gameState === 'START') {
+                uiElements.startButton = {
+                    text: 'Start Game', x: cx - btnW / 2, y: cy + 50 * scaleFactor, w: btnW, h: btnH,
+                    fontSize: btnFontSize, color: '#4c6ef5', color2: '#2240b6', glowColor: '#4c6ef5',
+                    animW: btnW, animH: btnH, action: startGame
+                };
+            } else if (gameState === 'PLAYING') {
+                const keySize = 60 * scaleFactor;
+                const keyGap = 10 * scaleFactor;
+                const keypadWidth = 3 * keySize + 2 * keyGap;
+                const startX = cx - keypadWidth / 2;
+                const startY = canvasHeight * 0.55;
+
+                for (let i = 1; i <= 9; i++) {
+                    const col = (i - 1) % 3;
+                    const row = Math.floor((i - 1) / 3);
+                    uiElements[`key${i}`] = {
+                        text: `${i}`, x: startX + col * (keySize + keyGap), y: startY + row * (keySize + keyGap), w: keySize, h: keySize,
+                        fontSize: 24 * scaleFactor, color: '#343a40', color2: '#212529', glowColor: '#868e96',
+                        animW: keySize, animH: keySize, action: () => handleKeyPress(`${i}`)
+                    };
+                }
+                uiElements.key0 = {
+                    text: '0', x: startX + (keySize + keyGap), y: startY + 3 * (keySize + keyGap), w: keySize, h: keySize,
+                    fontSize: 24 * scaleFactor, color: '#343a40', color2: '#212529', glowColor: '#868e96',
+                    animW: keySize, animH: keySize, action: () => handleKeyPress('0')
+                };
+                uiElements.backspace = {
+                    text: '⌫', x: startX, y: startY + 3 * (keySize + keyGap), w: keySize, h: keySize,
+                    fontSize: 24 * scaleFactor, color: '#c92a2a', color2: '#a61e1e', glowColor: '#c92a2a',
+                    animW: keySize, animH: keySize, action: () => handleKeyPress('Backspace')
+                };
+                uiElements.enter = {
+                    text: '✓', x: startX + 2 * (keySize + keyGap), y: startY + 3 * (keySize + keyGap), w: keySize, h: keySize,
+                    fontSize: 24 * scaleFactor, color: '#2b8a3e', color2: '#19712b', glowColor: '#2b8a3e',
+                    animW: keySize, animH: keySize, action: () => submitGuess()
+                };
+            } else if (gameState === 'GAME_OVER') {
+                uiElements.restartButton = {
+                    text: 'Play Again', x: cx - btnW / 2, y: cy + 100 * scaleFactor, w: btnW, h: btnH,
+                    fontSize: btnFontSize, color: '#4c6ef5', color2: '#2240b6', glowColor: '#4c6ef5',
+                    animW: btnW, animH: btnH, action: restartGame
+                };
+            }
+        }
+        
+        // ===================================
+        // SCREEN DRAWING ROUTINES
+        // ===================================
+        function drawStartScreen() {
+            const cx = canvasWidth / 2;
+            const cy = canvasHeight / 2;
+
+            ctx.save();
+            ctx.shadowColor = '#00ffff';
+            ctx.shadowBlur = 30 * scaleFactor;
+            drawText('Mind Cipher', cx, cy - 80 * scaleFactor, 80, '#00ffff');
+            ctx.restore();
+
+            drawText('Crack the code by guessing the secret number.', cx, cy, 22, '#adb5bd');
+            drawText('You have 10 attempts.', cx, cy + 30 * scaleFactor, 22, '#adb5bd');
+            
+            drawButton(uiElements.startButton);
+        }
+
+        function drawGameScreen(deltaTime) {
+            const cx = canvasWidth / 2;
+
+            // Draw remaining guesses
+            let hearts = '';
+            for(let i = 0; i < GAME_CONFIG.MAX_GUESSES; i++) {
+                hearts += i < remainingGuesses ? '💙' : '🖤';
+            }
+            drawText(hearts, cx, 50 * scaleFactor, 30, '#fff', 'center');
+
+            // Draw guess input box
+            const inputWidth = 200 * scaleFactor;
+            const inputHeight = 80 * scaleFactor;
+            const inputX = cx - inputWidth / 2;
+            const inputY = canvasHeight * 0.25;
+
+            ctx.save();
+            ctx.strokeStyle = '#4c6ef5';
+            ctx.lineWidth = 3 * scaleFactor;
+            ctx.shadowColor = '#4c6ef5';
+            ctx.shadowBlur = 10 * scaleFactor;
+            const bgGradient = ctx.createLinearGradient(inputX, inputY, inputX, inputY + inputHeight);
+            bgGradient.addColorStop(0, '#1a1a3a');
+            bgGradient.addColorStop(1, '#11112f');
+            drawRoundedRect(inputX, inputY, inputWidth, inputHeight, 15 * scaleFactor, bgGradient);
+            ctx.stroke();
+            ctx.restore();
+            
+            drawText(currentGuess || '?', cx, inputY + inputHeight / 2, 60, currentGuess ? '#fff' : '#666');
+            
+            // Blinking cursor
+            blinker.timer += deltaTime;
+            if(blinker.timer > blinker.interval) {
+                blinker.visible = !blinker.visible;
+                blinker.timer = 0;
+            }
+            if(blinker.visible && currentGuess.length < 3) {
+                ctx.font = `${60 * scaleFactor}px Orbitron, sans-serif`;
+                const textWidth = ctx.measureText(currentGuess).width;
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(cx - textWidth/2 + textWidth + 5 * scaleFactor, inputY + 15 * scaleFactor, 3 * scaleFactor, inputHeight - 30 * scaleFactor);
+            }
+
+            // Draw feedback
+            if (feedback.alpha > 0) {
+                feedback.alpha = lerp(feedback.alpha, 0, 0.01);
+                feedback.y = lerp(feedback.y, canvasHeight * 0.45, 0.1);
+                ctx.globalAlpha = feedback.alpha;
+                drawText(feedback.text, cx, feedback.y, 24, feedback.color);
+                ctx.globalAlpha = 1;
+            }
+            
+            // Draw guess history
+            guesses.forEach((guess, index) => {
+                const y = canvasHeight - (40 + index * 30) * scaleFactor;
+                const alpha = 1 - (index / guesses.length) * 0.7;
+                ctx.globalAlpha = alpha;
+                drawText(`${guess.num} - ${guess.feedback}`, cx, y, 18, '#adb5bd');
+                ctx.globalAlpha = 1;
+            });
+            
+            // Draw keypad
+            for (const key in uiElements) {
+                drawButton(uiElements[key]);
+            }
+        }
+
+        function drawGameOverScreen() {
+            const cx = canvasWidth / 2;
+            const cy = canvasHeight / 2;
+            
+            const titleColor = gameOverMessage.title.includes('WIN') ? '#00ffcc' : '#ff6b6b';
+            ctx.save();
+            ctx.shadowColor = titleColor;
+            ctx.shadowBlur = 30 * scaleFactor;
+            drawText(gameOverMessage.title, cx, cy - 80 * scaleFactor, 70, titleColor);
+            ctx.restore();
+
+            drawText(gameOverMessage.subtitle, cx, cy, 24, '#adb5bd');
+            drawText(`Score: ${gameOverMessage.score}`, cx, cy + 40 * scaleFactor, 30, '#ffd700');
+            
+            drawButton(uiElements.restartButton);
+        }
+
+        // ===================================
+        // MAIN GAME LOOP
+        // ===================================
+        function gameLoop(timestamp) {
+            const deltaTime = timestamp - lastTime;
+            lastTime = timestamp;
+
+            // Clear canvas
+            ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+            canvas.style.cursor = 'default';
+
+            // Draw based on game state
+            switch (gameState) {
+                case 'START':
+                    drawStartScreen();
+                    break;
+                case 'PLAYING':
+                    drawGameScreen(deltaTime);
+                    break;
+                case 'GAME_OVER':
+                    drawGameOverScreen();
+                    break;
+            }
+            
+            drawParticles();
+            
+            requestAnimationFrame(gameLoop);
+        }
+
+        // ===================================
+        // EVENT LISTENERS & SETUP
+        // ===================================
+        function onResize() {
+            canvasWidth = window.innerWidth;
+            canvasHeight = window.innerHeight;
+            canvas.width = canvasWidth;
+            canvas.height = canvasHeight;
+            scaleFactor = Math.min(canvasWidth / 800, canvasHeight / 1000);
+            createUI();
+        }
+
+        window.addEventListener('resize', onResize);
+
+        window.addEventListener('keydown', (e) => {
+            handleKeyPress(e.key);
+        });
+        
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = e.clientX - rect.left;
+            mouse.y = e.clientY - rect.top;
+        });
+
+        canvas.addEventListener('mousedown', (e) => {
+            AudioHandler.resume(); // Essential for audio to work in modern browsers
+            mouse.down = true;
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = e.clientX - rect.left;
+            mouse.y = e.clientY - rect.top;
+
+            for (const key in uiElements) {
+                if (isPointInRect(mouse.x, mouse.y, uiElements[key])) {
+                    uiElements[key].action();
+                    createParticles(mouse.x, mouse.y, 10, '#ffffff', 2);
+                    break;
+                }
+            }
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            mouse.down = false;
+        });
+
+        // Load custom font
+        const font = new FontFace('Orbitron', 'url(https://fonts.gstatic.com/s/orbitron/v25/yMJRMIlzdpvBhQQL_Qq7dy0.woff2)');
+        document.fonts.add(font);
+        font.load().then(() => {
+             // Initialize and start game
+            AudioHandler.init();
+            onResize();
+            requestAnimationFrame(gameLoop);
+        }).catch(err => {
+            console.error('Font could not be loaded:', err);
+            // Fallback if font fails
+            AudioHandler.init();
+            onResize();
+            requestAnimationFrame(gameLoop);
+        });
+
+    </script>
+</body>
+</html>
