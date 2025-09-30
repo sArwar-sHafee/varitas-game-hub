@@ -1,8 +1,0 @@
-{
-  "name": "Shade Shift",
-  "type": "color matching game",
-  "folder": "shade_shift",
-  "description": "Test your perception in a race against the clock as you hunt for the perfect hue in a shifting cascade of color. Tap the matching shade before it transforms and prove you're a master of the spectrum",
-  "cover": "cover.png",
-  "main_file": "index.html"
-}

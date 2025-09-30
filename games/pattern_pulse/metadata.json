@@ -1,8 +1,0 @@
-{
-  "name": "Pattern Pulse",
-  "type": "simon says memory game",
-  "folder": "pattern_pulse",
-  "description": "A fun simon says memory game game where players can enjoy exciting gameplay!",
-  "cover": "cover.png",
-  "main_file": "index.html"
-}

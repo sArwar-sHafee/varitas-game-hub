@@ -1,8 +1,0 @@
-{
-  "name": "Cascade Crush",
-  "type": "breakout/brick breaker",
-  "folder": "cascade_crush",
-  "description": "Unleash explosive chain reactions that obliterate entire levels with a single, perfect shot. Strategize your aim to trigger a satisfying cascade of pure, screen-clearing destruction",
-  "cover": "cover.png",
-  "main_file": "index.html"
-}
