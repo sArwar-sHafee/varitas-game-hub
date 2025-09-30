@@ -375,6 +375,19 @@ Return ONLY the complete, corrected HTML code without any markdown formatting or
     return metadata
 
 if __name__ == "__main__":
+    from add_game_to_webpage import sync_games_with_webpage
     game_info = generate_game()
-    print("\nGame generation complete!")
-    print("Run 'add_game_to_webpage.py' to add this game to your website.")
+    if game_info:
+        print("\nGame generation complete! Syncing with webpage...")
+        try:
+            games_count = sync_games_with_webpage()
+            if games_count > 0:
+                print(f"\n✨ Sync complete! {games_count} game(s) now displayed on webpage")
+            else:
+                print("\n✨ Sync complete! No games found - showing placeholder")
+            print("🌐 Open index.html to see your updated gaming hub.")
+        except Exception as e:
+            print(f"\nAn error occurred during webpage sync: {e}")
+            print("Please run 'python add_game_to_webpage.py' manually.")
+    else:
+        print("\nGame generation failed.")
