@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Epoch Echoes</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #1e0c42, #491f8f);
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #game-container {
+            width: 100%;
+            max-width: 1000px;
+            aspect-ratio: 16 / 9;
+            box-shadow: 0 0 30px rgba(255, 255, 255, 0.2);
+        }
+        canvas {
+            width: 100%;
+            height: 100%;
+            background-color: #000;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+<script>
+class SoundEngine {
+    constructor() {
+        this.audioCtx = null;
+        this.sounds = {};
+    }
+
+    init() {
+        if (!this.audioCtx) {
+            try {
+                this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            } catch (e) {
+                console.error("Web Audio API is not supported in this browser");
+            }
+        }
+    }
+
+    play(soundName) {
+        if (!this.audioCtx) return;
+        if (this.audioCtx.state === 'suspended') {
+            this.audioCtx.resume();
+        }
+
+        let freq, type, duration, volume;
+        switch (soundName) {
+            case 'select':
+                freq = 440; type = 'triangle'; duration = 0.05; volume = 0.3;
+                break;
+            case 'hit':
+                freq = 220; type = 'square'; duration = 0.1; volume = 0.4;
+                break;
+            case 'magic':
+                freq = 660; type = 'sine'; duration = 0.3; volume = 0.3;
+                break;
+            case 'heal':
+                freq = 880; type = 'sine'; duration = 0.4; volume = 0.3;
+                break;
+            case 'defend':
+                freq = 330; type = 'sawtooth'; duration = 0.2; volume = 0.3;
+                break;
+            case 'victory':
+                this._playNote(523.25, 0.1, 0); // C5
+                this._playNote(659.25, 0.1, 0.1); // E5
+                this._playNote(783.99, 0.1, 0.2); // G5
+                this._playNote(1046.50, 0.2, 0.3); // C6
+                return;
+            case 'gameOver':
+                this._playNote(300, 0.2, 0);
+                this._playNote(200, 0.2, 0.2);
+                this._playNote(100, 0.4, 0.4);
+                return;
+            default:
+                return;
+        }
+
+        this._playNote(freq, duration, 0, type, volume);
+    }
+
+    _playNote(frequency, duration, delay, type = 'sine', volume = 0.3) {
+        if (!this.audioCtx) this.init();
+        if (!this.audioCtx) return;
+        const oscillator = this.audioCtx.createOscillator();
+        const gainNode = this.audioCtx.createGain();
+
+        oscillator.type = type;
+        oscillator.frequency.setValueAtTime(frequency, this.audioCtx.currentTime + delay);
+        gainNode.gain.setValueAtTime(volume, this.audioCtx.currentTime + delay);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + delay + duration);
+
+        oscillator.connect(gainNode);
+        gainNode.connect(this.audioCtx.destination);
+
+        oscillator.start(this.audioCtx.currentTime + delay);
+        oscillator.stop(this.audioCtx.currentTime + delay + duration);
+    }
+}
+
+class FloatingText {
+    constructor(text, x, y, color, size) {
+        this.text = text;
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        this.size = size;
+        this.vy = -1;
+        this.life = 60; // frames
+        this.opacity = 1;
+    }
+
+    update() {
+        this.y += this.vy;
+        this.life--;
+        if (this.life < 20) {
+            this.opacity -= 0.05;
+        }
+    }
+
+    draw(ctx) {
+        ctx.save();
+        ctx.globalAlpha = this.opacity;
+        ctx.fillStyle = this.color;
+        ctx.font = `bold ${this.size}px 'Segoe UI', sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.shadowColor = 'black';
+        ctx.shadowBlur = 5;
+        ctx.fillText(this.text, this.x, this.y);
+        ctx.restore();
+    }
+}
+
+class Particle {
+    constructor(x, y, color, size, type) {
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        this.size = size;
+        this.type = type;
+        this.life = Math.random() * 60 + 30;
+
+        switch (type) {
+            case 'slash':
+                this.vx = (Math.random() - 0.5) * 8;
+                this.vy = (Math.random() - 0.5) * 8;
+                break;
+            case 'magic':
+                this.vx = (Math.random() - 0.5) * 4;
+                this.vy = (Math.random() - 0.5) * 4;
+                this.angle = Math.random() * Math.PI * 2;
+                this.spin = Math.random() * 0.2 - 0.1;
+                break;
+            case 'heal':
+                this.vx = (Math.random() - 0.5) * 2;
+                this.vy = -Math.random() * 3 - 1;
+                break;
+            case 'defend':
+                this.vx = 0;
+                this.vy = 0;
+                break;
+        }
+    }
+
+    update() {
+        this.x += this.vx;
+        this.y += this.vy;
+        this.life--;
+        if(this.type === 'magic') {
+            this.angle += this.spin;
+        }
+    }
+
+    draw(ctx) {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, this.life / 60);
+        ctx.fillStyle = this.color;
+        
+        ctx.translate(this.x, this.y);
+        if(this.type === 'magic') {
+            ctx.rotate(this.angle);
+        }
+
+        ctx.beginPath();
+        switch (this.type) {
+            case 'slash':
+                ctx.fillRect(-this.size / 2, -this.size / 2, this.size, this.size);
+                break;
+            case 'magic':
+                ctx.moveTo(0, -this.size);
+                for (let i = 0; i < 5; i++) {
+                    ctx.rotate(Math.PI / 5);
+                    ctx.lineTo(0, -this.size * 0.4);
+                    ctx.rotate(Math.PI / 5);
+                    ctx.lineTo(0, -this.size);
+                }
+                ctx.fill();
+                break;
+            case 'heal':
+                ctx.arc(0, 0, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                break;
+            case 'defend':
+                ctx.strokeStyle = this.color;
+                ctx.lineWidth = 4;
+                ctx.beginPath();
+                ctx.arc(0, 0, this.size, Math.PI * 1.25, Math.PI * 1.75);
+                ctx.stroke();
+                break;
+        }
+        ctx.restore();
+    }
+}
+
+class Character {
+    constructor(name, emoji, maxHp, attack, defense, magic) {
+        this.name = name;
+        this.emoji = emoji;
+        this.maxHp = maxHp;
+        this.hp = maxHp;
+        this.maxMp = magic * 10;
+        this.mp = this.maxMp;
+        this.attack = attack;
+        this.defense = defense;
+        this.magic = magic;
+        this.isDefending = false;
+        this.isTurn = false;
+        this.x = 0;
+        this.y = 0;
+        this.shake = 0;
+        this.scale = 1;
+        this.yOffset = 0;
+    }
+
+    takeDamage(damage) {
+        const defenseFactor = this.isDefending ? 2 : 1;
+        const actualDamage = Math.max(1, Math.round(damage - this.defense * defenseFactor));
+        this.hp = Math.max(0, this.hp - actualDamage);
+        this.shake = 15;
+        return actualDamage;
+    }
+
+    heal(amount) {
+        const healAmount = Math.round(amount);
+        this.hp = Math.min(this.maxHp, this.hp + healAmount);
+        return healAmount;
+    }
+
+    useMp(cost) {
+        if (this.mp >= cost) {
+            this.mp -= cost;
+            return true;
+        }
+        return false;
+    }
+
+    isAlive() {
+        return this.hp > 0;
+    }
+
+    update() {
+        if (this.shake > 0) {
+            this.shake--;
+        }
+        // Bobbing animation
+        this.yOffset = Math.sin(Date.now() / 400) * 5;
+
+        // Turn start animation
+        if (this.isTurn) {
+            this.scale = 1 + Math.sin(Date.now() / 200) * 0.05;
+        } else {
+            this.scale = 1;
+        }
+    }
+
+    draw(ctx, w, h) {
+        this.update();
+        const shakeX = (Math.random() - 0.5) * this.shake;
+        const shakeY = (Math.random() - 0.5) * this.shake;
+
+        ctx.save();
+        ctx.translate(this.x + shakeX, this.y + this.yOffset + shakeY);
+        ctx.scale(this.scale, this.scale);
+        ctx.font = `${w * 0.1}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(this.emoji, 0, 0);
+        ctx.restore();
+
+        // Draw defending shield
+        if (this.isDefending) {
+            ctx.save();
+            ctx.strokeStyle = '#55aaff';
+            ctx.lineWidth = 5;
+            ctx.globalAlpha = 0.5 + Math.sin(Date.now() / 200) * 0.3;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, w * 0.06, Math.PI * 0.2, Math.PI * 1.8);
+            ctx.stroke();
+            ctx.restore();
+        }
+    }
+
+    drawHud(ctx, x, y, w, h) {
+        const barWidth = w * 0.25;
+        const barHeight = h * 0.03;
+        const barMargin = h * 0.01;
+
+        // Name
+        ctx.fillStyle = '#fff';
+        ctx.font = `bold ${h * 0.03}px 'Segoe UI', sans-serif`;
+        ctx.textAlign = 'left';
+        ctx.fillText(this.name, x, y);
+
+        // HP Bar
+        ctx.fillStyle = '#333';
+        ctx.fillRect(x, y + barMargin, barWidth, barHeight);
+        const hpRatio = this.hp / this.maxHp;
+        const hpColor = hpRatio > 0.5 ? '#4CAF50' : hpRatio > 0.2 ? '#FFC107' : '#F44336';
+        ctx.fillStyle = hpColor;
+        ctx.fillRect(x, y + barMargin, barWidth * hpRatio, barHeight);
+        ctx.fillStyle = '#fff';
+        ctx.font = `${h * 0.025}px 'Segoe UI', sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText(`HP: ${this.hp}/${this.maxHp}`, x + barWidth / 2, y + barMargin + barHeight * 0.7);
+        
+        // MP Bar
+        if(this.maxMp > 0){
+            ctx.fillStyle = '#333';
+            ctx.fillRect(x, y + barMargin * 2 + barHeight, barWidth, barHeight);
+            const mpRatio = this.mp / this.maxMp;
+            ctx.fillStyle = '#2196F3';
+            ctx.fillRect(x, y + barMargin * 2 + barHeight, barWidth * mpRatio, barHeight);
+            ctx.fillStyle = '#fff';
+            ctx.fillText(`MP: ${this.mp}/${this.maxMp}`, x + barWidth / 2, y + barMargin * 2 + barHeight * 1.7);
+        }
+    }
+}
+
+class Player extends Character {
+    constructor() {
+        super('Chrono Knight', '🦸', 100, 15, 8, 5);
+    }
+}
+
+class Enemy extends Character {
+    constructor(level) {
+        const types = [
+            { name: 'Goblin Grunt', emoji: '👹', hp: 30, atk: 10, def: 3, mag: 0 },
+            { name: 'Slime Blob', emoji: '🦠', hp: 50, atk: 8, def: 5, mag: 2 },
+            { name: 'Clockwork Golem', emoji: '🤖', hp: 80, atk: 12, def: 8, mag: 0 },
+            { name: 'Shadow Wisp', emoji: '👻', hp: 40, atk: 18, def: 2, mag: 4 },
+            { name: 'Cosmic Dragon', emoji: '🐉', hp: 120, atk: 20, def: 10, mag: 8 }
+        ];
+        const type = types[Math.floor(Math.random() * types.length)];
+        
+        // Scale stats with level
+        const levelMultiplier = 1 + (level - 1) * 0.2;
+        const hp = Math.round(type.hp * levelMultiplier);
+        const atk = Math.round(type.atk * levelMultiplier);
+        const def = Math.round(type.def * levelMultiplier);
+        const mag = Math.round(type.mag * levelMultiplier);
+
+        super(type.name, type.emoji, hp, atk, def, mag);
+    }
+
+    chooseAction(player) {
+        // Simple AI
+        const options = ['attack'];
+        if (this.mp >= 10 && this.magic > 0 && this.hp < this.maxHp / 2) {
+             options.push('magic');
+        }
+        const choice = options[Math.floor(Math.random() * options.length)];
+        
+        if (choice === 'magic') {
+            return { type: 'magic', target: player, spell: 'Drain' };
+        }
+        return { type: 'attack', target: player };
+    }
+}
+
+class Game {
+    constructor(canvas) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.baseWidth = 1280;
+        this.baseHeight = 720;
+        this.scaleFactor = 1;
+
+        this.gameState = 'START'; // START, PLAYER_TURN, ENEMY_TURN, VICTORY, GAME_OVER
+        this.player = null;
+        this.enemy = null;
+        this.battleLog = [];
+        this.floatingTexts = [];
+        this.particles = [];
+        this.buttons = [];
+        this.score = 0; // Battles won
+        this.currentTurn = 0;
+        this.soundEngine = new SoundEngine();
+
+        this.mouse = { x: 0, y: 0 };
+        
+        this.resize();
+        window.addEventListener('resize', () => this.resize());
+        this.canvas.addEventListener('click', (e) => this.handleClick(e));
+        this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+        window.addEventListener('keydown', (e) => this.handleKeydown(e));
+    }
+
+    resize() {
+        const container = document.getElementById('game-container');
+        const containerWidth = container.clientWidth;
+        const containerHeight = container.clientHeight;
+        
+        const ratio = this.baseWidth / this.baseHeight;
+        let newWidth = containerWidth;
+        let newHeight = newWidth / ratio;
+        
+        if (newHeight > containerHeight) {
+            newHeight = containerHeight;
+            newWidth = newHeight * ratio;
+        }
+
+        this.scaleFactor = newWidth / this.baseWidth;
+        
+        this.canvas.width = this.baseWidth;
+        this.canvas.height = this.baseHeight;
+
+        this.canvas.style.width = `${newWidth}px`;
+        this.canvas.style.height = `${newHeight}px`;
+    }
+
+    init() {
+        this.player = new Player();
+        this.score = 0;
+        this.gameState = 'START';
+        this.lastTime = 0;
+        this.gameLoop();
+    }
+
+    startNewBattle() {
+        this.enemy = new Enemy(this.score + 1);
+        this.battleLog = [`A wild ${this.enemy.name} appears!`];
+        this.currentTurn = 0;
+        
+        this.player.isDefending = false;
+        this.player.isTurn = true;
+        this.enemy.isTurn = false;
+
+        this.player.x = this.canvas.width * 0.25;
+        this.player.y = this.canvas.height * 0.5;
+        this.enemy.x = this.canvas.width * 0.75;
+        this.enemy.y = this.canvas.height * 0.5;
+
+        this.createButtons();
+        this.transitionState('PLAYER_TURN', 500);
+    }
+    
+    transitionState(newState, delay = 0) {
+        if(delay > 0) {
+            this.gameState = 'TRANSITION';
+            setTimeout(() => {
+                this.gameState = newState;
+                if(newState === 'ENEMY_TURN') {
+                    this.enemyTurn();
+                }
+            }, delay);
+        } else {
+            this.gameState = newState;
+        }
+    }
+
+    createButtons() {
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+        const btnW = w * 0.15;
+        const btnH = h * 0.08;
+        const gap = w * 0.02;
+        const startX = w * 0.5 - (btnW * 3 + gap * 2) / 2;
+        const startY = h * 0.85;
+
+        this.buttons = [
+            { label: 'Attack (A)', x: startX, y: startY, w: btnW, h: btnH, action: 'attack', color: '#e74c3c' },
+            { label: 'Defend (D)', x: startX + btnW + gap, y: startY, w: btnW, h: btnH, action: 'defend', color: '#3498db' },
+            { label: 'Magic (M)', x: startX + (btnW + gap) * 2, y: startY, w: btnW, h: btnH, action: 'magic', color: '#9b59b6' }
+        ];
+    }
+    
+    handleMouseMove(e) {
+        const rect = this.canvas.getBoundingClientRect();
+        this.mouse.x = (e.clientX - rect.left) / this.scaleFactor;
+        this.mouse.y = (e.clientY - rect.top) / this.scaleFactor;
+    }
+
+    handleClick(e) {
+        this.soundEngine.init(); // User interaction required to start audio context
+        
+        if (this.gameState === 'START') {
+            this.soundEngine.play('select');
+            this.startNewBattle();
+            return;
+        }
+        
+        if (this.gameState === 'GAME_OVER' || this.gameState === 'VICTORY') {
+            const restartBtn = { x: this.canvas.width / 2 - 150, y: this.canvas.height / 2 + 60, w: 300, h: 70 };
+            if(this.isMouseInRect(restartBtn)) {
+                this.soundEngine.play('select');
+                if (this.gameState === 'GAME_OVER') {
+                    this.init();
+                } else {
+                    this.score++;
+                    this.player.hp = this.player.maxHp;
+                    this.player.mp = this.player.maxMp;
+                    this.startNewBattle();
+                }
+            }
+            return;
+        }
+        
+        if (this.gameState === 'PLAYER_TURN') {
+            this.buttons.forEach(btn => {
+                if (this.isMouseInRect(btn)) {
+                    this.soundEngine.play('select');
+                    this.playerAction(btn.action);
+                }
+            });
+        }
+    }
+    
+    handleKeydown(e) {
+        this.soundEngine.init();
+        if (this.gameState === 'START' && e.key === 'Enter') {
+            this.soundEngine.play('select');
+            this.startNewBattle();
+        }
+        if ((this.gameState === 'GAME_OVER' || this.gameState === 'VICTORY') && e.key === 'Enter') {
+            this.soundEngine.play('select');
+            if (this.gameState === 'GAME_OVER') {
+                this.init();
+            } else {
+                this.score++;
+                this.player.hp = this.player.maxHp;
+                this.player.mp = this.player.maxMp;
+                this.startNewBattle();
+            }
+        }
+        if (this.gameState === 'PLAYER_TURN') {
+            switch(e.key.toLowerCase()) {
+                case 'a': this.playerAction('attack'); this.soundEngine.play('select'); break;
+                case 'd': this.playerAction('defend'); this.soundEngine.play('select'); break;
+                case 'm': this.playerAction('magic'); this.soundEngine.play('select'); break;
+            }
+        }
+    }
+
+    isMouseInRect(rect) {
+        return this.mouse.x > rect.x && this.mouse.x < rect.x + rect.w &&
+               this.mouse.y > rect.y && this.mouse.y < rect.y + rect.h;
+    }
+
+    playerAction(action) {
+        if (this.gameState !== 'PLAYER_TURN') return;
+
+        this.player.isDefending = false;
+        let logMsg = '';
+        let actionTaken = true;
+
+        switch (action) {
+            case 'attack':
+                const actualDamage = this.enemy.takeDamage(this.player.attack);
+                this.addFloatingText(actualDamage, this.enemy.x, this.enemy.y, '#ffdd57', 48);
+                this.createEffect('slash', this.enemy.x, this.enemy.y, '#ffffff', 20, 30);
+                this.soundEngine.play('hit');
+                logMsg = `You attacked ${this.enemy.name} for ${actualDamage} damage.`;
+                break;
+            case 'defend':
+                this.player.isDefending = true;
+                this.createEffect('defend', this.player.x, this.player.y, '#55aaff', 80, 1);
+                this.soundEngine.play('defend');
+                logMsg = `You are defending. Defense doubled for one turn.`;
+                break;
+            case 'magic':
+                if (this.player.useMp(10)) {
+                    const healAmount = this.player.heal(this.player.magic * 3);
+                    this.addFloatingText(`+${healAmount}`, this.player.x, this.player.y, '#20f230', 48);
+                    this.createEffect('heal', this.player.x, this.player.y, '#20f230', 8, 40);
+                    this.soundEngine.play('heal');
+                    logMsg = `You used Heal and recovered ${healAmount} HP.`;
+                } else {
+                    logMsg = "Not enough MP!";
+                    actionTaken = false;
+                }
+                break;
+        }
+
+        this.addToLog(logMsg);
+        
+        if(actionTaken) {
+            this.player.isTurn = false;
+            this.enemy.isTurn = true;
+
+            if (this.enemy.isAlive()) {
+                this.transitionState('ENEMY_TURN', 1000);
+            } else {
+                this.transitionState('VICTORY', 1000);
+                this.soundEngine.play('victory');
+            }
+        }
+    }
+
+    enemyTurn() {
+        if (this.gameState !== 'ENEMY_TURN') return;
+
+        const action = this.enemy.chooseAction(this.player);
+        let logMsg = '';
+        
+        setTimeout(() => {
+            if (action.type === 'attack') {
+                const damage = this.enemy.attack;
+                const actualDamage = this.player.takeDamage(damage);
+                this.addFloatingText(actualDamage, this.player.x, this.player.y, '#ff4d4d', 48);
+                this.createEffect('slash', this.player.x, this.player.y, '#ff4d4d', 20, 30);
+                this.soundEngine.play('hit');
+                logMsg = `${this.enemy.name} attacked you for ${actualDamage} damage.`;
+            } else if (action.type === 'magic') {
+                 if (this.enemy.useMp(10)) {
+                    const damage = this.enemy.magic * 2;
+                    const actualDamage = this.player.takeDamage(damage);
+                    this.enemy.heal(actualDamage);
+                    this.addFloatingText(actualDamage, this.player.x, this.player.y, '#aa4dff', 48);
+                    this.addFloatingText(`+${actualDamage}`, this.enemy.x, this.enemy.y, '#20f230', 32);
+                    this.createEffect('magic', this.player.x, this.player.y, '#aa4dff', 15, 50);
+                    this.soundEngine.play('magic');
+                    logMsg = `${this.enemy.name} used Drain! It dealt ${actualDamage} damage and healed itself.`;
+                 } else {
+                    // Fallback to attack if not enough MP
+                    const damage = this.enemy.attack;
+                    const actualDamage = this.player.takeDamage(damage);
+                    this.addFloatingText(actualDamage, this.player.x, this.player.y, '#ff4d4d', 48);
+                    this.createEffect('slash', this.player.x, this.player.y, '#ff4d4d', 20, 30);
+                    this.soundEngine.play('hit');
+                    logMsg = `${this.enemy.name} attacked you for ${actualDamage} damage.`;
+                 }
+            }
+
+            this.addToLog(logMsg);
+            this.enemy.isTurn = false;
+            this.player.isTurn = true;
+            this.player.isDefending = false;
+
+            if (this.player.isAlive()) {
+                this.transitionState('PLAYER_TURN', 1000);
+            } else {
+                this.transitionState('GAME_OVER', 1000);
+                this.soundEngine.play('gameOver');
+            }
+        }, 1000);
+    }
+    
+    addFloatingText(text, x, y, color, size) {
+        this.floatingTexts.push(new FloatingText(text, x, y, color, size));
+    }
+    
+    createEffect(type, x, y, color, size, count) {
+        for (let i = 0; i < count; i++) {
+            this.particles.push(new Particle(x, y, color, size, type));
+        }
+    }
+
+    addToLog(message) {
+        this.battleLog.unshift(message);
+        if (this.battleLog.length > 3) {
+            this.battleLog.pop();
+        }
+    }
+
+    update() {
+        this.floatingTexts.forEach(ft => ft.update());
+        this.floatingTexts = this.floatingTexts.filter(ft => ft.life > 0);
+        
+        this.particles.forEach(p => p.update());
+        this.particles = this.particles.filter(p => p.life > 0);
+    }
+
+    draw() {
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+        const ctx = this.ctx;
+
+        // Background
+        const bgGrad = ctx.createLinearGradient(0, 0, 0, h);
+        bgGrad.addColorStop(0, '#2c3e50');
+        bgGrad.addColorStop(0.6, '#34495e');
+        bgGrad.addColorStop(1, '#1a2533');
+        ctx.fillStyle = bgGrad;
+        ctx.fillRect(0, 0, w, h);
+        
+        // Ground
+        ctx.fillStyle = '#273444';
+        ctx.fillRect(0, h * 0.7, w, h * 0.3);
+
+        if (this.gameState === 'START') {
+            this.drawStartScreen();
+            return;
+        }
+
+        if (this.gameState === 'GAME_OVER') {
+            this.drawGameOverScreen();
+            return;
+        }
+        
+        if (this.gameState === 'VICTORY') {
+            this.drawVictoryScreen();
+            return;
+        }
+
+        // Draw Characters
+        if (this.player) this.player.draw(ctx, w, h);
+        if (this.enemy) this.enemy.draw(ctx, w, h);
+        
+        // Draw Particles
+        this.particles.forEach(p => p.draw(ctx));
+
+        // Draw Floating Texts
+        this.floatingTexts.forEach(ft => ft.draw(ctx));
+
+        // Draw HUD
+        this.drawHUD();
+    }
+
+    drawHUD() {
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+        const ctx = this.ctx;
+        
+        // Player HUD
+        if(this.player) this.player.drawHud(ctx, w * 0.05, h * 0.05, w, h);
+        
+        // Enemy HUD
+        if (this.enemy) this.enemy.drawHud(ctx, w * 0.7, h * 0.05, w, h);
+
+        // Battle Log
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillRect(w * 0.2, h * 0.72, w * 0.6, h * 0.1);
+        ctx.strokeStyle = '#fff';
+        ctx.strokeRect(w * 0.2, h * 0.72, w * 0.6, h * 0.1);
+        ctx.fillStyle = '#fff';
+        ctx.font = `${h * 0.025}px 'Segoe UI', sans-serif`;
+        ctx.textAlign = 'left';
+        this.battleLog.forEach((msg, i) => {
+            ctx.globalAlpha = 1 - i * 0.3;
+            ctx.fillText(msg, w * 0.22, h * 0.75 + i * h * 0.03);
+        });
+        ctx.globalAlpha = 1;
+
+        // Action Buttons
+        if (this.gameState === 'PLAYER_TURN') {
+            this.buttons.forEach(btn => {
+                const isHover = this.isMouseInRect(btn);
+                ctx.fillStyle = btn.color;
+                ctx.globalAlpha = isHover ? 1 : 0.8;
+                this.drawRoundRect(ctx, btn.x, btn.y, btn.w, btn.h, 15);
+                ctx.fill();
+                
+                ctx.fillStyle = '#fff';
+                ctx.font = `bold ${h * 0.03}px 'Segoe UI', sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(btn.label, btn.x + btn.w / 2, btn.y + btn.h / 2);
+            });
+            ctx.globalAlpha = 1;
+        }
+        
+        // Turn indicator
+        let turnText = '';
+        if(this.gameState === 'PLAYER_TURN') turnText = "Your Turn";
+        if(this.gameState === 'ENEMY_TURN') turnText = "Enemy's Turn";
+        
+        if (turnText) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(w/2 - 150, h * 0.05, 300, 50);
+            ctx.fillStyle = '#fff';
+            ctx.font = `bold ${h * 0.04}px 'Segoe UI', sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(turnText, w/2, h * 0.05 + 30);
+        }
+        
+        // Score
+        ctx.fillStyle = '#fff';
+        ctx.font = `bold ${h * 0.03}px 'Segoe UI', sans-serif`;
+        ctx.textAlign = 'right';
+        ctx.fillText(`Battles Won: ${this.score}`, w * 0.98, h * 0.98);
+    }
+    
+    drawRoundRect(ctx, x, y, w, h, r) {
+        if (w < 2 * r) r = w / 2;
+        if (h < 2 * r) r = h / 2;
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + w, y, x + w, y + h, r);
+        ctx.arcTo(x + w, y + h, x, y + h, r);
+        ctx.arcTo(x, y + h, x, y, r);
+        ctx.arcTo(x, y, x + w, y, r);
+        ctx.closePath();
+    }
+
+    drawStartScreen() {
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+        const ctx = this.ctx;
+
+        ctx.textAlign = 'center';
+        
+        // Title
+        ctx.font = `bold ${h * 0.15}px 'Segoe UI', sans-serif`;
+        const grad = ctx.createLinearGradient(w * 0.25, 0, w * 0.75, 0);
+        grad.addColorStop(0, '#f39c12');
+        grad.addColorStop(0.5, '#f1c40f');
+        grad.addColorStop(1, '#f39c12');
+        ctx.fillStyle = grad;
+        ctx.shadowColor = 'black';
+        ctx.shadowBlur = 10;
+        ctx.fillText('Epoch Echoes', w / 2, h * 0.4);
+        ctx.shadowBlur = 0;
+        
+        // Instructions
+        ctx.fillStyle = '#fff';
+        ctx.font = `${h * 0.04}px 'Segoe UI', sans-serif`;
+        ctx.globalAlpha = Math.abs(Math.sin(Date.now() / 500));
+        ctx.fillText('Click or Press Enter to Start', w / 2, h * 0.6);
+        ctx.globalAlpha = 1;
+
+        ctx.font = `${h * 0.03}px 'Segoe UI', sans-serif`;
+        ctx.fillText('Controls: (A)ttack, (D)efend, (M)agic', w / 2, h * 0.7);
+    }
+
+    drawEndScreen(title, buttonText) {
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+        const ctx = this.ctx;
+
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0, 0, w, h);
+        
+        ctx.textAlign = 'center';
+        ctx.fillStyle = title === 'Victory!' ? '#2ecc71' : '#e74c3c';
+        ctx.font = `bold ${h * 0.15}px 'Segoe UI', sans-serif`;
+        ctx.fillText(title, w / 2, h / 2 - 50);
+
+        ctx.fillStyle = '#fff';
+        ctx.font = `${h * 0.05}px 'Segoe UI', sans-serif`;
+        ctx.fillText(`Battles Won: ${this.score}`, w / 2, h / 2 + 20);
+
+        const btn = { x: w / 2 - 150, y: h / 2 + 60, w: 300, h: 70 };
+        const isHover = this.isMouseInRect(btn);
+        ctx.fillStyle = isHover ? '#3498db' : '#2980b9';
+        this.drawRoundRect(ctx, btn.x, btn.y, btn.w, btn.h, 20);
+        ctx.fill();
+
+        ctx.fillStyle = '#fff';
+        ctx.font = `bold ${h * 0.04}px 'Segoe UI', sans-serif`;
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${buttonText} (Enter)`, w / 2, btn.y + btn.h / 2);
+    }
+
+    drawGameOverScreen() {
+        this.drawEndScreen('Game Over', 'Restart');
+    }
+    
+    drawVictoryScreen() {
+        this.drawEndScreen('Victory!', 'Next Battle');
+    }
+
+    gameLoop(timestamp) {
+        this.lastTime = timestamp;
+
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        
+        this.update();
+        this.draw();
+
+        requestAnimationFrame((t) => this.gameLoop(t));
+    }
+}
+
+window.addEventListener('load', () => {
+    const canvas = document.getElementById('gameCanvas');
+    const game = new Game(canvas);
+    game.init();
+});
+
+</script>
+</body>
+</html>

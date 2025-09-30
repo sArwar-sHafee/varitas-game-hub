@@ -1,0 +1,8 @@
+{
+  "name": "Epoch Echoes",
+  "type": "turn-based RPG battle",
+  "folder": "epoch_echoes",
+  "description": "Bend time to your will, setting up attacks that echo across future turns to create devastating combos. Every battle is a strategic puzzle where your greatest weapon isn't a sword, but the mastery of the timeline itself.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
