@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mind Winks</title>
+    <style>
+        :root {
+            --bg-color: #1a1a2e;
+            --primary-color: #e94560;
+            --secondary-color: #0f3460;
+            --accent-color: #53d3d1;
+            --font-color: #ffffff;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: var(--bg-color);
+            background-image: radial-gradient(circle, #16213e, var(--bg-color) 80%);
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+            color: var(--font-color);
+            overflow: hidden;
+        }
+
+        #game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            max-width: 95vmin;
+            max-height: 95vmin;
+            aspect-ratio: 1 / 1;
+        }
+
+        canvas {
+            background: transparent;
+            display: block;
+            border-radius: 20px;
+            box-shadow: 0 0 30px rgba(83, 211, 209, 0.3);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        // Use modern JavaScript (ES6+)
+        document.addEventListener('DOMContentLoaded', () => {
+
+            // --- Canvas & Context ---
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+            let canvasSize = { width: 0, height: 0 };
+
+            // --- Game State ---
+            const GAME_STATE = {
+                START_SCREEN: 'START_SCREEN',
+                PLAYING: 'PLAYING',
+                GAME_OVER: 'GAME_OVER'
+            };
+            let gameState = GAME_STATE.START_SCREEN;
+
+            // --- Game Variables ---
+            let grid = { cols: 4, rows: 4 };
+            let tiles = [];
+            let flippedTiles = [];
+            let matchedPairs = 0;
+            let totalPairs = 0;
+            let moves = 0;
+            let gameTime = 0;
+            let gameStartTime = 0;
+            
+            // --- Emojis for the game ---
+            const emojiPool = ['😀', '😍', '🚀', '🦄', '🍕', '🎉', '🌟', '👾', '🧠', '💡', '🎨', '🎵', '🔥', '💧', '🌍', '❤️'];
+
+            // --- Sound Engine (Web Audio API) ---
+            let audioCtx;
+            const sounds = {
+                flip: { freq: 300, type: 'triangle', dur: 0.1 },
+                match: { freq: 600, type: 'sine', dur: 0.2 },
+                noMatch: { freq: 150, type: 'square', dur: 0.2 },
+                win: { freq: 800, type: 'sine', dur: 0.5 }
+            };
+
+            function initAudio() {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+            }
+
+            function playSound({ freq, type, dur }) {
+                if (!audioCtx) return;
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+
+                oscillator.type = type;
+                oscillator.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+                
+                oscillator.start(audioCtx.currentTime);
+                oscillator.stop(audioCtx.currentTime + dur);
+            }
+
+            // --- Tile Class ---
+            class Tile {
+                constructor(x, y, size, emoji) {
+                    this.x = x;
+                    this.y = y;
+                    this.size = size;
+                    this.emoji = emoji;
+                    this.isFlipped = false;
+                    this.isMatched = false;
+                    this.isAnimating = false;
+                    this.scaleX = 1;
+                }
+
+                draw() {
+                    ctx.save();
+                    ctx.translate(this.x + this.size / 2, this.y + this.size / 2);
+                    ctx.scale(this.scaleX, 1);
+
+                    // Tile base
+                    const cornerRadius = this.size * 0.15;
+                    ctx.beginPath();
+                    ctx.moveTo(-this.size / 2 + cornerRadius, -this.size / 2);
+                    ctx.arcTo(this.size / 2, -this.size / 2, this.size / 2, this.size / 2, cornerRadius);
+                    ctx.arcTo(this.size / 2, this.size / 2, -this.size / 2, this.size / 2, cornerRadius);
+                    ctx.arcTo(-this.size / 2, this.size / 2, -this.size / 2, -this.size / 2, cornerRadius);
+                    ctx.arcTo(-this.size / 2, -this.size / 2, this.size / 2, -this.size / 2, cornerRadius);
+                    ctx.closePath();
+                    
+                    ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+                    ctx.shadowBlur = 10;
+                    ctx.shadowOffsetX = 2;
+                    ctx.shadowOffsetY = 4;
+                    
+                    if (this.isMatched) {
+                        ctx.fillStyle = 'rgba(83, 211, 209, 0.3)';
+                        ctx.strokeStyle = '#53d3d1';
+                        ctx.lineWidth = 4;
+                        ctx.fill();
+                        ctx.stroke();
+                    } else {
+                        const grad = ctx.createLinearGradient(-this.size/2, -this.size/2, this.size/2, this.size/2);
+                        grad.addColorStop(0, '#1c2541');
+                        grad.addColorStop(1, '#0f3460');
+                        ctx.fillStyle = grad;
+                        ctx.fill();
+                    }
+                    
+                    ctx.shadowColor = 'transparent';
+
+                    // Content
+                    if (this.isFlipped || this.isMatched) {
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.font = `${this.size * 0.6}px sans-serif`;
+                        ctx.fillText(this.emoji, 0, 0);
+                    } else {
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.font = `bold ${this.size * 0.5}px sans-serif`;
+                        ctx.fillStyle = '#e94560';
+                        ctx.fillText('?', 0, 0);
+                    }
+
+                    ctx.restore();
+                }
+
+                flip() {
+                    if (this.isFlipped || this.isMatched || this.isAnimating) return;
+                    playSound(sounds.flip);
+                    this.isFlipped = !this.isFlipped;
+                    this.isAnimating = true;
+                    // Animate from 1 to 0, then we'll flip the scale sign and animate back up
+                    const flipAnimation = () => {
+                        this.scaleX -= 0.15;
+                        if (this.scaleX <= 0) {
+                            this.scaleX *= -1; // Flip the visual content
+                            unflipAnimation();
+                        } else {
+                           requestAnimationFrame(flipAnimation);
+                        }
+                    };
+                    const unflipAnimation = () => {
+                        this.scaleX += 0.15;
+                        if (this.scaleX >= 1) {
+                            this.scaleX = 1;
+                            this.isAnimating = false;
+                        } else {
+                           requestAnimationFrame(unflipAnimation);
+                        }
+                    };
+                    flipAnimation();
+                }
+
+                unflip() {
+                    if (!this.isFlipped || this.isMatched || this.isAnimating) return;
+                    this.isFlipped = false;
+                    this.isAnimating = true;
+                     const flipAnimation = () => {
+                        this.scaleX -= 0.15;
+                        if (this.scaleX <= 0) {
+                            this.scaleX *= -1;
+                            unflipAnimation();
+                        } else {
+                           requestAnimationFrame(flipAnimation);
+                        }
+                    };
+                    const unflipAnimation = () => {
+                        this.scaleX += 0.15;
+                        if (this.scaleX >= 1) {
+                            this.scaleX = 1;
+                            this.isAnimating = false;
+                        } else {
+                           requestAnimationFrame(unflipAnimation);
+                        }
+                    };
+                    flipAnimation();
+                }
+
+                isPointInside(x, y) {
+                    return x >= this.x && x <= this.x + this.size &&
+                           y >= this.y && y <= this.y + this.size;
+                }
+            }
+
+            // --- Game Setup ---
+            function setupGame() {
+                // Set grid size. Fixed to 4x4 to match emoji pool size.
+                grid = { cols: 4, rows: 4 };
+                
+                totalPairs = (grid.cols * grid.rows) / 2;
+                if ((grid.cols * grid.rows) % 2 !== 0) {
+                    console.error("Grid must have an even number of tiles.");
+                    return;
+                }
+
+                // Create and shuffle emojis
+                let emojisForGame = emojiPool.slice(0, totalPairs);
+                emojisForGame = [...emojisForGame, ...emojisForGame];
+                // Fisher-Yates shuffle
+                for (let i = emojisForGame.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [emojisForGame[i], emojisForGame[j]] = [emojisForGame[j], emojisForGame[i]];
+                }
+
+                // Create tiles
+                tiles = [];
+                const padding = canvasSize.width * 0.05;
+                const totalPaddingX = padding * (grid.cols + 1);
+                const totalPaddingY = padding * (grid.rows + 1);
+                const tileSize = Math.min(
+                    (canvasSize.width - totalPaddingX) / grid.cols,
+                    (canvasSize.height - totalPaddingY) / grid.rows
+                );
+
+                const offsetX = (canvasSize.width - (grid.cols * tileSize + (grid.cols - 1) * padding)) / 2;
+                const offsetY = (canvasSize.height - (grid.rows * tileSize + (grid.rows - 1) * padding)) / 2;
+
+                for (let r = 0; r < grid.rows; r++) {
+                    for (let c = 0; c < grid.cols; c++) {
+                        const x = offsetX + c * (tileSize + padding);
+                        const y = offsetY + r * (tileSize + padding);
+                        const emoji = emojisForGame.pop();
+                        tiles.push(new Tile(x, y, tileSize, emoji));
+                    }
+                }
+                
+                moves = 0;
+                matchedPairs = 0;
+                gameTime = 0;
+                gameStartTime = Date.now();
+                gameState = GAME_STATE.PLAYING;
+            }
+
+            // --- Game Loop Functions ---
+
+            function drawStartScreen() {
+                // Background
+                const grad = ctx.createRadialGradient(canvasSize.width/2, canvasSize.height/2, 50, canvasSize.width/2, canvasSize.height/2, canvasSize.width * 0.7);
+                grad.addColorStop(0, '#16213e');
+                grad.addColorStop(1, '#0f3460');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, canvasSize.width, canvasSize.height);
+
+                // Title
+                ctx.fillStyle = '#e94560';
+                ctx.font = `bold ${canvasSize.width * 0.15}px 'Segoe UI', sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                ctx.shadowBlur = 10;
+                ctx.fillText('Mind Winks', canvasSize.width / 2, canvasSize.height * 0.3);
+                ctx.shadowColor = 'transparent';
+
+                // Instructions
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                ctx.font = `${canvasSize.width * 0.04}px 'Segoe UI', sans-serif`;
+                ctx.fillText('Match all the pairs!', canvasSize.width / 2, canvasSize.height * 0.5);
+                ctx.font = `${canvasSize.width * 0.035}px 'Segoe UI', sans-serif`;
+                ctx.fillText('Click a tile to start', canvasSize.width / 2, canvasSize.height * 0.65);
+                ctx.fillText('or press Enter', canvasSize.width / 2, canvasSize.height * 0.72);
+            }
+
+            function drawGame() {
+                ctx.clearRect(0, 0, canvasSize.width, canvasSize.height);
+                
+                // Draw all tiles
+                tiles.forEach(tile => tile.draw());
+
+                // Draw HUD
+                if (gameState === GAME_STATE.PLAYING) {
+                    gameTime = (Date.now() - gameStartTime) / 1000;
+                }
+                
+                ctx.fillStyle = 'white';
+                ctx.font = `${canvasSize.width * 0.04}px 'Segoe UI', sans-serif`;
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'top';
+                ctx.fillText(`Moves: ${moves}`, 20, 10);
+
+                ctx.textAlign = 'right';
+                ctx.fillText(`Time: ${gameTime.toFixed(1)}s`, canvasSize.width - 20, 10);
+            }
+            
+            function drawGameOverScreen() {
+                // Dim background
+                ctx.fillStyle = 'rgba(26, 26, 46, 0.8)';
+                ctx.fillRect(0, 0, canvasSize.width, canvasSize.height);
+
+                // "You Won!" message
+                ctx.fillStyle = '#53d3d1';
+                ctx.font = `bold ${canvasSize.width * 0.15}px 'Segoe UI', sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                ctx.shadowBlur = 10;
+                ctx.fillText('You Won!', canvasSize.width / 2, canvasSize.height * 0.3);
+                ctx.shadowColor = 'transparent';
+
+                // Final Score
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                ctx.font = `${canvasSize.width * 0.05}px 'Segoe UI', sans-serif`;
+                ctx.fillText(`Time: ${gameTime.toFixed(2)}s`, canvasSize.width / 2, canvasSize.height * 0.5);
+                ctx.fillText(`Moves: ${moves}`, canvasSize.width / 2, canvasSize.height * 0.58);
+                
+                // Restart instructions
+                ctx.font = `${canvasSize.width * 0.035}px 'Segoe UI', sans-serif`;
+                ctx.fillText('Click or Press Enter to Play Again', canvasSize.width / 2, canvasSize.height * 0.75);
+            }
+
+
+            function update() {
+                // Animation is handled within Tile methods using requestAnimationFrame
+            }
+
+            function gameLoop() {
+                update();
+                
+                switch (gameState) {
+                    case GAME_STATE.START_SCREEN:
+                        drawStartScreen();
+                        break;
+                    case GAME_STATE.PLAYING:
+                        drawGame();
+                        break;
+                    case GAME_STATE.GAME_OVER:
+                        drawGame(); // Draw final board state
+                        drawGameOverScreen();
+                        break;
+                }
+
+                requestAnimationFrame(gameLoop);
+            }
+
+            // --- Event Handlers ---
+            function handleMouseClick(event) {
+                initAudio(); // Required for browsers that block audio before user interaction
+
+                if (gameState === GAME_STATE.START_SCREEN || gameState === GAME_STATE.GAME_OVER) {
+                    setupGame();
+                    return;
+                }
+
+                if (gameState === GAME_STATE.PLAYING && flippedTiles.length < 2) {
+                    const rect = canvas.getBoundingClientRect();
+                    const scaleX = canvas.width / rect.width;
+                    const scaleY = canvas.height / rect.height;
+                    const mouseX = (event.clientX - rect.left) * scaleX;
+                    const mouseY = (event.clientY - rect.top) * scaleY;
+
+                    for (const tile of tiles) {
+                        if (tile.isPointInside(mouseX, mouseY) && !tile.isFlipped && !tile.isMatched) {
+                            tile.flip();
+                            flippedTiles.push(tile);
+                            
+                            if (flippedTiles.length === 2) {
+                                moves++;
+                                checkForMatch();
+                            }
+                            break; 
+                        }
+                    }
+                }
+            }
+            
+            function handleKeyDown(event) {
+                initAudio();
+                if (event.key === 'Enter') {
+                    if (gameState === GAME_STATE.START_SCREEN || gameState === GAME_STATE.GAME_OVER) {
+                        setupGame();
+                    }
+                }
+            }
+            
+            function checkForMatch() {
+                const [tile1, tile2] = flippedTiles;
+                if (tile1.emoji === tile2.emoji) {
+                    // Match!
+                    playSound(sounds.match);
+                    tile1.isMatched = true;
+                    tile2.isMatched = true;
+                    matchedPairs++;
+                    flippedTiles = [];
+
+                    if (matchedPairs === totalPairs) {
+                        // Game Won!
+                        playSound(sounds.win);
+                        setTimeout(() => {
+                           gameState = GAME_STATE.GAME_OVER;
+                        }, 1000);
+                    }
+                } else {
+                    // No Match
+                    playSound(sounds.noMatch);
+                    setTimeout(() => {
+                        tile1.unflip();
+                        tile2.unflip();
+                        flippedTiles = [];
+                    }, 1000);
+                }
+            }
+            
+            function updateCursor(event) {
+                if (gameState !== GAME_STATE.PLAYING) {
+                    canvas.style.cursor = 'pointer';
+                    return;
+                }
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                const mouseX = (event.clientX - rect.left) * scaleX;
+                const mouseY = (event.clientY - rect.top) * scaleY;
+                
+                let onTile = false;
+                for (const tile of tiles) {
+                    if(tile.isPointInside(mouseX, mouseY) && !tile.isFlipped && !tile.isMatched) {
+                        onTile = true;
+                        break;
+                    }
+                }
+                canvas.style.cursor = onTile ? 'pointer' : 'default';
+            }
+
+
+            // --- Initialization and Responsiveness ---
+            function resizeCanvas() {
+                const container = document.getElementById('game-container');
+                const size = Math.min(container.clientWidth, container.clientHeight);
+                canvas.width = size;
+                canvas.height = size;
+                canvasSize = { width: canvas.width, height: canvas.height };
+
+                // If a game is in progress, recalculate tile positions
+                if (gameState === GAME_STATE.PLAYING || gameState === GAME_STATE.GAME_OVER) {
+                     const padding = canvasSize.width * 0.05;
+                    const totalPaddingX = padding * (grid.cols + 1);
+                    const totalPaddingY = padding * (grid.rows + 1);
+                    const tileSize = Math.min(
+                        (canvasSize.width - totalPaddingX) / grid.cols,
+                        (canvasSize.height - totalPaddingY) / grid.rows
+                    );
+
+                    const offsetX = (canvasSize.width - (grid.cols * tileSize + (grid.cols - 1) * padding)) / 2;
+                    const offsetY = (canvasSize.height - (grid.rows * tileSize + (grid.rows - 1) * padding)) / 2;
+                    
+                    let i = 0;
+                    for (let r = 0; r < grid.rows; r++) {
+                        for (let c = 0; c < grid.cols; c++) {
+                            if (tiles[i]) {
+                                tiles[i].x = offsetX + c * (tileSize + padding);
+                                tiles[i].y = offsetY + r * (tileSize + padding);
+                                tiles[i].size = tileSize;
+                                i++;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- Start the engine ---
+            window.addEventListener('resize', resizeCanvas);
+            canvas.addEventListener('click', handleMouseClick);
+            window.addEventListener('keydown', handleKeyDown);
+            canvas.addEventListener('mousemove', updateCursor);
+
+            resizeCanvas();
+            gameLoop();
+        });
+    </script>
+</body>
+</html>

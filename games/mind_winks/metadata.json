@@ -1,0 +1,8 @@
+{
+  "name": "Mind Winks",
+  "type": "puzzle game",
+  "folder": "mind_winks",
+  "description": "Twist your perspective and connect the clues in a world of deceptive, mind-bending challenges. Each solution is a satisfying \"aha!\" moment, a clever wink that reveals the hidden path forward.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
