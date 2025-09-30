@@ -1,0 +1,8 @@
+{
+  "name": "Veridian Ascent",
+  "type": "platform adventure (Metroidvania-lite)",
+  "folder": "veridian_ascent",
+  "description": "Scale a colossal, living world with acrobatic, nature-powered abilities in a seamless vertical ascent. Master the grappling vine and spore-dash to unlock hidden paths and discover the secrets waiting at the summit.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
