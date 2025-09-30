@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Chroma Burst 2</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: radial-gradient(circle, #2a2a3a, #1a1a2a);
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            text-align: center;
+        }
+        canvas {
+            display: block;
+            background: transparent;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // ES6+ JavaScript Game Code
+        class Game {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
+                this.gameState = 'start'; // 'start', 'playing', 'gameOver'
+                this.score = 0;
+                this.highScore = localStorage.getItem('chromaBurst2HighScore') || 0;
+                this.colors = ['#ff3838', '#4dff4d', '#4d4dff', '#ffff4d', '#ff4dff', '#4dffff']; // Red, Green, Blue, Yellow, Magenta, Cyan
+                this.audio = new Sound();
+                
+                this.init();
+                this.addEventListeners();
+                this.lastTime = 0;
+                this.gameLoop(0);
+            }
+
+            init() {
+                this.resizeCanvas();
+                const center = { x: this.canvas.width / 2, y: this.canvas.height / 2 };
+                const playerRadius = Math.min(this.canvas.width, this.canvas.height) * 0.1;
+
+                this.player = new Player(center.x, center.y, playerRadius, this.colors);
+                this.projectiles = [];
+                this.particles = [];
+                
+                this.projectileSpawnRate = 2000; // ms
+                this.lastSpawnTime = 0;
+                this.projectileSpeed = Math.min(this.canvas.width, this.canvas.height) * 0.001;
+                this.difficultyTimer = 0;
+            }
+
+            reset() {
+                this.score = 0;
+                this.init();
+                this.gameState = 'playing';
+                this.audio.play('start');
+            }
+
+            addEventListeners() {
+                window.addEventListener('resize', () => this.resizeCanvas());
+                
+                // Keyboard controls
+                window.addEventListener('keydown', (e) => {
+                    if (this.gameState === 'playing') {
+                        const key = e.key.toLowerCase();
+                        if (key === 'arrowleft' || key === 'a') {
+                            this.player.rotate(-1);
+                        } else if (key === 'arrowright' || key === 'd') {
+                            this.player.rotate(1);
+                        }
+                    } else if (e.key === 'Enter' || e.key === ' ') {
+                         if (this.gameState === 'start' || this.gameState === 'gameOver') {
+                            this.reset();
+                         }
+                    }
+                });
+                
+                window.addEventListener('keyup', (e) => {
+                    if (this.gameState === 'playing') {
+                        if (['arrowleft', 'a', 'arrowright', 'd'].includes(e.key.toLowerCase())) {
+                            this.player.stopRotation();
+                        }
+                    }
+                });
+
+                // Mouse/Touch controls
+                this.canvas.addEventListener('pointerdown', (e) => {
+                    this.handlePointer(e);
+                });
+
+                this.canvas.addEventListener('pointerup', () => {
+                     if (this.gameState === 'playing') this.player.stopRotation();
+                });
+            }
+
+            handlePointer(e) {
+                // Resume audio context on first user interaction
+                this.audio.resume();
+
+                if (this.gameState === 'start' || this.gameState === 'gameOver') {
+                    this.reset();
+                    return;
+                }
+
+                if (this.gameState === 'playing') {
+                    const rect = this.canvas.getBoundingClientRect();
+                    const pointerX = e.clientX - rect.left;
+                    if (pointerX < this.canvas.width / 2) {
+                        this.player.rotate(-1);
+                    } else {
+                        this.player.rotate(1);
+                    }
+                }
+            }
+
+            resizeCanvas() {
+                this.canvas.width = window.innerWidth;
+                this.canvas.height = window.innerHeight;
+                if (this.player) {
+                    this.player.x = this.canvas.width / 2;
+                    this.player.y = this.canvas.height / 2;
+                    this.player.radius = Math.min(this.canvas.width, this.canvas.height) * 0.1;
+                }
+                 this.projectileSpeed = Math.min(this.canvas.width, this.canvas.height) * 0.001;
+            }
+
+            spawnProjectile(timestamp) {
+                if (timestamp - this.lastSpawnTime > this.projectileSpawnRate) {
+                    this.lastSpawnTime = timestamp;
+
+                    const radius = Math.min(this.canvas.width, this.canvas.height) * 0.03;
+                    const color = this.colors[Math.floor(Math.random() * this.colors.length)];
+                    
+                    let x, y;
+                    if (Math.random() < 0.5) {
+                        x = Math.random() < 0.5 ? 0 - radius : this.canvas.width + radius;
+                        y = Math.random() * this.canvas.height;
+                    } else {
+                        x = Math.random() * this.canvas.width;
+                        y = Math.random() < 0.5 ? 0 - radius : this.canvas.height + radius;
+                    }
+                    
+                    const angle = Math.atan2(this.player.y - y, this.player.x - x);
+                    const velocity = {
+                        x: Math.cos(angle) * this.projectileSpeed,
+                        y: Math.sin(angle) * this.projectileSpeed
+                    };
+
+                    this.projectiles.push(new Projectile(x, y, radius, color, velocity));
+                }
+            }
+            
+            createParticleBurst(x, y, color) {
+                for (let i = 0; i < 30; i++) {
+                    this.particles.push(new Particle(x, y, color));
+                }
+            }
+
+            update(deltaTime) {
+                if (!deltaTime) return; // Skip update if deltaTime is invalid
+                this.player.update(deltaTime);
+
+                // Update projectiles and check for collisions
+                // Use a reverse loop to safely remove items while iterating
+                for (let i = this.projectiles.length - 1; i >= 0; i--) {
+                    const p = this.projectiles[i];
+                    p.update(deltaTime);
+                    const dist = Math.hypot(this.player.x - p.x, this.player.y - p.y);
+                    if (dist - p.radius - this.player.radius < 1) {
+                        const correctColor = this.player.getColorAtAngle(Math.atan2(p.y - this.player.y, p.x - this.player.x));
+                        if (correctColor === p.color) {
+                            this.score++;
+                            this.createParticleBurst(p.x, p.y, p.color);
+                            this.projectiles.splice(i, 1);
+                            this.audio.play('match');
+                        } else {
+                            this.gameOver();
+                            break; // Exit loop since game is over
+                        }
+                    } else if (p.x + p.radius < 0 || p.x - p.radius > this.canvas.width || p.y + p.radius < 0 || p.y - p.radius > this.canvas.height) {
+                         this.projectiles.splice(i, 1);
+                    }
+                }
+                
+                // Update particles
+                // Use a reverse loop to safely remove items while iterating
+                for (let i = this.particles.length - 1; i >= 0; i--) {
+                    const p = this.particles[i];
+                    p.update(deltaTime);
+                    if (p.alpha <= 0) {
+                        this.particles.splice(i, 1);
+                    }
+                }
+
+                // Increase difficulty over time
+                this.difficultyTimer += deltaTime;
+                if (this.difficultyTimer > 5000) { // Every 5 seconds
+                    this.difficultyTimer = 0;
+                    this.projectileSpawnRate = Math.max(500, this.projectileSpawnRate * 0.95);
+                    this.projectileSpeed *= 1.05;
+                }
+            }
+            
+            gameOver() {
+                this.gameState = 'gameOver';
+                if (this.score > this.highScore) {
+                    this.highScore = this.score;
+                    localStorage.setItem('chromaBurst2HighScore', this.highScore);
+                }
+                this.audio.play('gameOver');
+                this.createParticleBurst(this.player.x, this.player.y, '#ffffff');
+            }
+
+            draw() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+                this.particles.forEach(p => p.draw(this.ctx));
+                
+                if (this.player) {
+                    this.player.draw(this.ctx);
+                }
+                
+                this.projectiles.forEach(p => p.draw(this.ctx));
+
+                // Draw Score
+                this.ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                this.ctx.font = `${Math.min(this.canvas.width, this.canvas.height) * 0.08}px 'Segoe UI', sans-serif`;
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'top';
+                this.ctx.fillText(this.score, this.canvas.width / 2, 20);
+            }
+
+            drawStartScreen() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                const baseFontSize = Math.min(this.canvas.width, this.canvas.height) * 0.1;
+
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                
+                // Title Gradient
+                const gradient = this.ctx.createLinearGradient(0, 0, this.canvas.width, 0);
+                this.colors.forEach((color, i) => gradient.addColorStop(i / this.colors.length, color));
+                this.ctx.fillStyle = gradient;
+                
+                this.ctx.font = `bold ${baseFontSize}px 'Segoe UI', sans-serif`;
+                this.ctx.fillText('Chroma Burst 2', this.canvas.width / 2, this.canvas.height * 0.3);
+
+                this.ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                this.ctx.font = `${baseFontSize * 0.3}px 'Segoe UI', sans-serif`;
+                this.ctx.fillText('Match the incoming orbs to the correct color segment.', this.canvas.width / 2, this.canvas.height * 0.5);
+
+                this.ctx.font = `${baseFontSize * 0.25}px 'Segoe UI', sans-serif`;
+                this.ctx.fillText('🖱️ Tap/Click Left/Right side to rotate', this.canvas.width / 2, this.canvas.height * 0.6);
+                this.ctx.fillText('⌨️ Use A/D or Arrow Keys to rotate', this.canvas.width / 2, this.canvas.height * 0.65);
+                
+                // Pulsing text effect
+                const pulse = Math.sin(Date.now() * 0.005) * 0.1 + 0.9;
+                this.ctx.fillStyle = `rgba(255, 255, 255, ${pulse})`;
+                this.ctx.font = `bold ${baseFontSize * 0.35}px 'Segoe UI', sans-serif`;
+                this.ctx.fillText('Click or Press Enter to Start', this.canvas.width / 2, this.canvas.height * 0.8);
+            }
+            
+            drawGameOverScreen() {
+                 this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                 this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                 
+                 const baseFontSize = Math.min(this.canvas.width, this.canvas.height) * 0.1;
+                 
+                 this.ctx.textAlign = 'center';
+                 this.ctx.textBaseline = 'middle';
+                 
+                 this.ctx.fillStyle = '#ff3838';
+                 this.ctx.font = `bold ${baseFontSize * 1.2}px 'Segoe UI', sans-serif`;
+                 this.ctx.fillText('GAME OVER', this.canvas.width / 2, this.canvas.height * 0.3);
+
+                 this.ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                 this.ctx.font = `${baseFontSize * 0.5}px 'Segoe UI', sans-serif`;
+                 this.ctx.fillText(`Score: ${this.score}`, this.canvas.width / 2, this.canvas.height * 0.5);
+                 
+                 this.ctx.font = `${baseFontSize * 0.4}px 'Segoe UI', sans-serif`;
+                 this.ctx.fillText(`High Score: ${this.highScore}`, this.canvas.width / 2, this.canvas.height * 0.6);
+
+                 const pulse = Math.sin(Date.now() * 0.005) * 0.1 + 0.9;
+                 this.ctx.fillStyle = `rgba(255, 255, 255, ${pulse})`;
+                 this.ctx.font = `bold ${baseFontSize * 0.35}px 'Segoe UI', sans-serif`;
+                 this.ctx.fillText('Click or Press Enter to Restart', this.canvas.width / 2, this.canvas.height * 0.8);
+            }
+
+            gameLoop(timestamp) {
+                const deltaTime = timestamp - this.lastTime;
+                this.lastTime = timestamp;
+
+                switch (this.gameState) {
+                    case 'start':
+                        this.drawStartScreen();
+                        break;
+                    case 'playing':
+                        this.spawnProjectile(timestamp);
+                        this.update(deltaTime);
+                        this.draw();
+                        break;
+                    case 'gameOver':
+                        this.drawGameOverScreen();
+                        break;
+                }
+
+                requestAnimationFrame(this.gameLoop.bind(this));
+            }
+        }
+
+        class Player {
+            constructor(x, y, radius, colors) {
+                this.x = x;
+                this.y = y;
+                this.radius = radius;
+                this.colors = colors;
+                this.angle = 0;
+                this.rotationSpeed = 0.005; // radians per millisecond
+                this.rotationDirection = 0; // -1 for left, 1 for right, 0 for stop
+            }
+
+            rotate(direction) {
+                this.rotationDirection = direction;
+            }
+
+            stopRotation() {
+                this.rotationDirection = 0;
+            }
+
+            update(deltaTime) {
+                this.angle += this.rotationDirection * this.rotationSpeed * deltaTime;
+                this.angle %= (2 * Math.PI); // Keep angle between 0 and 2*PI
+            }
+
+            draw(ctx) {
+                const segmentAngle = (2 * Math.PI) / this.colors.length;
+
+                this.colors.forEach((color, i) => {
+                    ctx.beginPath();
+                    ctx.moveTo(this.x, this.y);
+                    ctx.arc(this.x, this.y, this.radius, this.angle + i * segmentAngle, this.angle + (i + 1) * segmentAngle);
+                    ctx.closePath();
+                    ctx.fillStyle = color;
+                    ctx.fill();
+                });
+
+                // Add a nice inner circle to make it look like a wheel
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius * 0.3, 0, 2 * Math.PI);
+                ctx.fillStyle = 'rgba(26, 26, 42, 0.8)'; // Dark center
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+            
+            getColorAtAngle(targetAngle) {
+                // Normalize player and target angles to be positive
+                let normalizedPlayerAngle = (this.angle % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+                let normalizedTargetAngle = (targetAngle % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+                
+                // Adjust target angle based on player's rotation
+                let relativeAngle = normalizedTargetAngle - normalizedPlayerAngle;
+                relativeAngle = (relativeAngle % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+                
+                const segmentAngle = (2 * Math.PI) / this.colors.length;
+                const colorIndex = Math.floor(relativeAngle / segmentAngle);
+                
+                return this.colors[colorIndex];
+            }
+        }
+
+        class Projectile {
+            constructor(x, y, radius, color, velocity) {
+                this.x = x;
+                this.y = y;
+                this.radius = radius;
+                this.color = color;
+                this.velocity = velocity;
+            }
+
+            update(deltaTime) {
+                this.x += this.velocity.x * deltaTime;
+                this.y += this.velocity.y * deltaTime;
+            }
+
+            draw(ctx) {
+                ctx.beginPath();
+                const gradient = ctx.createRadialGradient(this.x, this.y, this.radius * 0.1, this.x, this.y, this.radius);
+                gradient.addColorStop(0, 'rgba(255,255,255,0.8)');
+                gradient.addColorStop(0.5, this.color);
+                gradient.addColorStop(1, this.color);
+                ctx.fillStyle = gradient;
+                ctx.arc(this.x, this.y, this.radius, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
+        
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.radius = Math.random() * 5 + 2;
+                const speed = (Math.random() * 0.2 + 0.15); // pixels per millisecond
+                this.angle = Math.random() * Math.PI * 2;
+                this.velocity = {
+                    x: Math.cos(this.angle) * speed,
+                    y: Math.sin(this.angle) * speed
+                };
+                this.alpha = 1;
+                this.decay = 0.0015; // alpha decay per millisecond
+                this.gravity = 0.0003; // velocity change per millisecond
+                this.emoji = ['✨', '💥', '⭐'][Math.floor(Math.random() * 3)];
+                this.useEmoji = Math.random() > 0.8;
+            }
+
+            update(deltaTime) {
+                if (!deltaTime) return; // Guard against first frame
+                this.velocity.y += this.gravity * deltaTime;
+                this.x += this.velocity.x * deltaTime;
+                this.y += this.velocity.y * deltaTime;
+                this.alpha -= this.decay * deltaTime;
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = this.alpha;
+                if (this.useEmoji) {
+                    ctx.font = `${this.radius * 4}px sans-serif`;
+                    ctx.fillText(this.emoji, this.x, this.y);
+                } else {
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                    ctx.fillStyle = this.color;
+                    ctx.fill();
+                }
+                ctx.restore();
+            }
+        }
+        
+        class Sound {
+            constructor() {
+                this.audioCtx = null;
+            }
+
+            // Create context after user interaction
+            _init() {
+                if (!this.audioCtx) {
+                    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+            }
+            
+            resume() {
+                this._init();
+                if (this.audioCtx && this.audioCtx.state === 'suspended') {
+                    this.audioCtx.resume();
+                }
+            }
+            
+            play(type) {
+                if (!this.audioCtx || this.audioCtx.state !== 'running') return;
+
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+                
+                gainNode.gain.setValueAtTime(0.2, this.audioCtx.currentTime);
+
+                switch (type) {
+                    case 'match':
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(440, this.audioCtx.currentTime); // A4
+                        oscillator.frequency.exponentialRampToValueAtTime(880, this.audioCtx.currentTime + 0.1); // A5
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + 0.2);
+                        break;
+                    case 'gameOver':
+                        oscillator.type = 'sawtooth';
+                        oscillator.frequency.setValueAtTime(220, this.audioCtx.currentTime); // A3
+                        oscillator.frequency.exponentialRampToValueAtTime(55, this.audioCtx.currentTime + 0.8); // A1
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + 0.8);
+                        break;
+                    case 'start':
+                        oscillator.type = 'triangle';
+                        oscillator.frequency.setValueAtTime(261.63, this.audioCtx.currentTime); // C4
+                        oscillator.frequency.linearRampToValueAtTime(523.25, this.audioCtx.currentTime + 0.2); // C5
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + 0.3);
+                        break;
+                }
+
+                oscillator.start();
+                oscillator.stop(this.audioCtx.currentTime + 1);
+            }
+        }
+
+        // Initialize the game
+        window.onload = () => {
+            const canvas = document.getElementById('gameCanvas');
+            new Game(canvas);
+        };
+    </script>
+</body>
+</html>

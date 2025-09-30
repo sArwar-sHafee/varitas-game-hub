@@ -1,0 +1,8 @@
+{
+  "name": "Chroma Burst 2",
+  "type": "color matching game",
+  "folder": "chroma_burst_2",
+  "description": "Unleash explosive, screen-clearing chain reactions by matching colors at a frantic pace. Master the combos to trigger the ultimate Chroma Burst and watch your score skyrocket in a dazzling display",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
