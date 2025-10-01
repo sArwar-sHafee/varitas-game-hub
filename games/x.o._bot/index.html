@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>X.O. Bot - A Tic-Tac-Toe AI Game</title>
+    <style>
+        :root {
+            --primary-color: #0d1b2a;
+            --secondary-color: #1b263b;
+            --accent-color-1: #415a77;
+            --accent-color-2: #778da9;
+            --text-color: #e0e1dd;
+            --glow-color: #00f6ff;
+            --win-color: #70e000;
+            --lose-color: #f25c54;
+            --draw-color: #ffca3a;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--primary-color);
+            color: var(--text-color);
+        }
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: radial-gradient(circle, var(--secondary-color) 0%, var(--primary-color) 100%);
+        }
+
+        #game-container {
+            width: 100%;
+            max-width: 500px;
+            padding: 20px;
+            box-sizing: border-box;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+        }
+
+        h1 {
+            font-size: 3rem;
+            margin: 0;
+            text-shadow: 0 0 10px var(--glow-color), 0 0 20px var(--glow-color);
+            animation: pulse 4s infinite ease-in-out;
+            user-select: none;
+        }
+
+        #score-board {
+            display: flex;
+            justify-content: space-around;
+            width: 100%;
+            font-size: 1.5rem;
+            font-weight: bold;
+            user-select: none;
+        }
+        
+        #score-board span {
+            padding: 5px 15px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        #game-canvas {
+            width: 100%;
+            aspect-ratio: 1 / 1;
+            background-color: var(--secondary-color);
+            border-radius: 15px;
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.5);
+            cursor: pointer;
+            touch-action: none;
+        }
+
+        #instructions {
+            font-size: 1rem;
+            color: var(--accent-color-2);
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+        }
+        
+        .status-win { color: var(--win-color); }
+        .status-lose { color: var(--lose-color); }
+        .status-draw { color: var(--draw-color); }
+
+        @keyframes pulse {
+            0% { text-shadow: 0 0 5px var(--glow-color), 0 0 10px var(--glow-color); }
+            50% { text-shadow: 0 0 15px var(--glow-color), 0 0 25px var(--glow-color); }
+            100% { text-shadow: 0 0 5px var(--glow-color), 0 0 10px var(--glow-color); }
+        }
+
+        @media (max-width: 500px) {
+            h1 { font-size: 2.5rem; }
+            #score-board { font-size: 1.2rem; }
+            #instructions { font-size: 0.9rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <h1>X.O. Bot</h1>
+        <div id="score-board">
+            <span id="player-score">Player (❌): 0</span>
+            <span id="bot-score">Bot (⭕️): 0</span>
+        </div>
+        <canvas id="game-canvas"></canvas>
+        <div id="instructions">
+            <p id="game-status">Click on the board or press [Enter] to start!</p>
+        </div>
+    </div>
+
+    <script>
+        // --- SETUP ---
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        const statusDisplay = document.getElementById('game-status');
+        const playerScoreDisplay = document.getElementById('player-score');
+        const botScoreDisplay = document.getElementById('bot-score');
+
+        const PLAYER = 'X';
+        const BOT = 'O';
+        
+        const GameState = {
+            START: 'START',
+            PLAYING: 'PLAYING',
+            GAME_OVER: 'GAME_OVER'
+        };
+
+        let gameState = GameState.START;
+        let board = Array(9).fill(null);
+        let currentPlayer = PLAYER;
+        let scores = { [PLAYER]: 0, [BOT]: 0 };
+        let animations = [];
+        let winningLine = null;
+
+        // --- SOUND ENGINE ---
+        let audioCtx;
+        function initAudio() {
+            if (!audioCtx) {
+                try {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) {
+                    console.error("Web Audio API is not supported in this browser");
+                }
+            }
+        }
+        
+        function playSound(type) {
+            if (!audioCtx) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+
+            switch(type) {
+                case 'place':
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(440, audioCtx.currentTime); // A4
+                    gainNode.gain.exponentialRampToValueAtTime(0.3, audioCtx.currentTime + 0.02);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.1);
+                    break;
+                case 'win':
+                    playSoundSequence([659.25, 783.99, 987.77], 0.1); // E5, G5, B5
+                    return;
+                case 'lose':
+                    playSoundSequence([523.25, 392.00, 329.63], 0.12); // C5, G4, E4
+                    return;
+                case 'draw':
+                    playSoundSequence([587.33, 440.00], 0.1); // D5, A4
+                    return;
+                case 'start':
+                    playSoundSequence([261.63, 392.00, 523.25], 0.08); // C4, G4, C5
+                    return;
+            }
+            
+            oscillator.start(audioCtx.currentTime);
+            oscillator.stop(audioCtx.currentTime + 0.2);
+        }
+
+        function playSoundSequence(frequencies, duration) {
+            if (!audioCtx) return;
+            let time = audioCtx.currentTime;
+            frequencies.forEach(freq => {
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                oscillator.type = 'triangle';
+                oscillator.frequency.setValueAtTime(freq, time);
+                gainNode.gain.setValueAtTime(0.2, time);
+                gainNode.gain.exponentialRampToValueAtTime(0.0001, time + duration);
+                oscillator.start(time);
+                oscillator.stop(time + duration);
+                time += duration;
+            });
+        }
+
+
+        // --- RESIZING & DRAWING ---
+        let size, cellSize, halfCell;
+
+        function resizeCanvas() {
+            const containerWidth = canvas.parentElement.clientWidth;
+            size = containerWidth;
+            canvas.width = size;
+            canvas.height = size;
+            cellSize = size / 3;
+            halfCell = cellSize / 2;
+            draw();
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, size, size);
+
+            // Background
+            const gradient = ctx.createLinearGradient(0, 0, size, size);
+            gradient.addColorStop(0, '#1b263b');
+            gradient.addColorStop(1, '#0d1b2a');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, size, size);
+
+            if (gameState === GameState.START) {
+                drawStartScreen();
+            } else {
+                drawGrid();
+                drawSymbols();
+                if (gameState === GameState.GAME_OVER) {
+                    if (winningLine) drawWinningLine();
+                    drawGameOverScreen();
+                }
+            }
+            
+            // Process animations
+            animations = animations.filter(anim => anim.update());
+            animations.forEach(anim => anim.draw());
+        }
+
+        function drawGrid() {
+            ctx.strokeStyle = '#415a77';
+            ctx.lineWidth = 8;
+            ctx.lineCap = 'round';
+
+            for (let i = 1; i < 3; i++) {
+                // Vertical lines
+                ctx.beginPath();
+                ctx.moveTo(i * cellSize, 10);
+                ctx.lineTo(i * cellSize, size - 10);
+                ctx.stroke();
+                // Horizontal lines
+                ctx.beginPath();
+                ctx.moveTo(10, i * cellSize);
+                ctx.lineTo(size - 10, i * cellSize);
+                ctx.stroke();
+            }
+        }
+
+        function drawSymbols() {
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            const symbolSize = cellSize * 0.7;
+            ctx.font = `${symbolSize}px sans-serif`;
+
+            for (let i = 0; i < 9; i++) {
+                if (board[i] && !animations.some(a => a.index === i)) {
+                    const { x, y } = getCellCenter(i);
+                    const symbol = board[i] === PLAYER ? '❌' : '⭕️';
+                    ctx.fillText(symbol, x, y);
+                }
+            }
+        }
+        
+        function drawWinningLine() {
+            const start = getCellCenter(winningLine[0]);
+            const end = getCellCenter(winningLine[2]);
+            
+            ctx.beginPath();
+            ctx.moveTo(start.x, start.y);
+            ctx.lineTo(end.x, end.y);
+            
+            ctx.strokeStyle = '#70e000';
+            ctx.lineWidth = 15;
+            ctx.shadowColor = '#70e000';
+            ctx.shadowBlur = 20;
+            ctx.stroke();
+            ctx.shadowBlur = 0; // Reset shadow
+        }
+
+        function drawStartScreen() {
+            drawMessage("X.O. Bot", size / 2, size / 3, 80, '#e0e1dd');
+            drawMessage("Click to Play", size / 2, size / 2, 40, '#778da9');
+        }
+
+        function drawGameOverScreen() {
+            let message, color;
+            const winner = checkWinner(board);
+            if(winner) {
+                message = winner.player === PLAYER ? "You Win! 🎉" : "Bot Wins! 🤖";
+                color = winner.player === PLAYER ? 'var(--win-color)' : 'var(--lose-color)';
+            } else {
+                message = "It's a Draw! 🤝";
+                color = 'var(--draw-color)';
+            }
+            
+            // Overlay
+            ctx.fillStyle = 'rgba(13, 27, 42, 0.8)';
+            ctx.fillRect(0, 0, size, size);
+
+            drawMessage(message, size / 2, size / 2 - 30, 60, getComputedStyle(document.documentElement).getPropertyValue(color.slice(4, -1).trim()));
+            drawMessage("Click to Restart", size / 2, size / 2 + 30, 30, '#e0e1dd');
+        }
+
+        function drawMessage(text, x, y, fontSize, color) {
+            ctx.fillStyle = color;
+            ctx.font = `bold ${fontSize}px 'Segoe UI', sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowColor = 'black';
+            ctx.shadowBlur = 5;
+            ctx.fillText(text, x, y);
+            ctx.shadowBlur = 0;
+        }
+
+        // --- ANIMATIONS ---
+        class SymbolAnimation {
+            constructor(index, symbol) {
+                this.index = index;
+                this.symbol = symbol === PLAYER ? '❌' : '⭕️';
+                this.progress = 0;
+                this.duration = 15; // frames
+                this.coords = getCellCenter(index);
+            }
+
+            update() {
+                this.progress++;
+                return this.progress < this.duration;
+            }
+
+            draw() {
+                const scale = Math.sin((this.progress / this.duration) * (Math.PI / 2)); // Ease-out
+                const symbolSize = cellSize * 0.7 * scale;
+                ctx.font = `${symbolSize}px sans-serif`;
+                ctx.globalAlpha = scale;
+                ctx.fillText(this.symbol, this.coords.x, this.coords.y);
+                ctx.globalAlpha = 1;
+            }
+        }
+
+
+        // --- GAME LOGIC ---
+        function startGame() {
+            board.fill(null);
+            winningLine = null;
+            currentPlayer = PLAYER;
+            gameState = GameState.PLAYING;
+            statusDisplay.textContent = "Your Turn (❌)";
+            statusDisplay.className = '';
+            playSound('start');
+        }
+        
+        function handlePlayerMove(index) {
+            if (gameState !== GameState.PLAYING || board[index] || currentPlayer !== PLAYER) {
+                return;
+            }
+
+            makeMove(index, PLAYER);
+
+            if (gameState === GameState.PLAYING) {
+                currentPlayer = BOT;
+                statusDisplay.textContent = "Bot is thinking... 🤔";
+                setTimeout(botMove, 700);
+            }
+        }
+        
+        function makeMove(index, player) {
+            board[index] = player;
+            animations.push(new SymbolAnimation(index, player));
+            playSound('place');
+
+            const winnerInfo = checkWinner(board);
+            if (winnerInfo) {
+                endGame(winnerInfo);
+            } else if (board.every(cell => cell)) {
+                endGame(null); // Draw
+            }
+        }
+        
+        function endGame(winnerInfo) {
+            gameState = GameState.GAME_OVER;
+            if(winnerInfo) {
+                winningLine = winnerInfo.line;
+                scores[winnerInfo.player]++;
+                if (winnerInfo.player === PLAYER) {
+                    statusDisplay.textContent = "You Win! 🎉 Press [Enter] to restart.";
+                    statusDisplay.className = 'status-win';
+                    playSound('win');
+                } else {
+                    statusDisplay.textContent = "Bot Wins! 🤖 Press [Enter] to restart.";
+                    statusDisplay.className = 'status-lose';
+                    playSound('lose');
+                }
+            } else {
+                statusDisplay.textContent = "It's a Draw! 🤝 Press [Enter] to restart.";
+                statusDisplay.className = 'status-draw';
+                playSound('draw');
+            }
+            updateScores();
+        }
+
+        function updateScores() {
+            playerScoreDisplay.textContent = `Player (❌): ${scores[PLAYER]}`;
+            botScoreDisplay.textContent = `Bot (⭕️): ${scores[BOT]}`;
+        }
+
+        const winningCombos = [
+            [0, 1, 2], [3, 4, 5], [6, 7, 8], // rows
+            [0, 3, 6], [1, 4, 7], [2, 5, 8], // columns
+            [0, 4, 8], [2, 4, 6]  // diagonals
+        ];
+
+        function checkWinner(currentBoard) {
+            for (const line of winningCombos) {
+                const [a, b, c] = line;
+                if (currentBoard[a] && currentBoard[a] === currentBoard[b] && currentBoard[a] === currentBoard[c]) {
+                    return { player: currentBoard[a], line: line };
+                }
+            }
+            return null;
+        }
+
+        // --- AI LOGIC ---
+        function botMove() {
+            if (gameState !== GameState.PLAYING) return;
+            
+            // 1. Check if Bot can win
+            let move = findWinningMove(BOT);
+            
+            // 2. Check if Player can win and block
+            if (move === null) {
+                move = findWinningMove(PLAYER);
+            }
+            
+            // 3. Take center if available
+            if (move === null && board[4] === null) {
+                move = 4;
+            }
+            
+            // 4. Take a corner
+            if (move === null) {
+                const corners = [0, 2, 6, 8];
+                const availableCorners = corners.filter(i => board[i] === null);
+                if (availableCorners.length > 0) {
+                    move = availableCorners[Math.floor(Math.random() * availableCorners.length)];
+                }
+            }
+            
+            // 5. Take any remaining cell
+            if (move === null) {
+                const availableMoves = board.map((cell, i) => cell === null ? i : null).filter(i => i !== null);
+                move = availableMoves[Math.floor(Math.random() * availableMoves.length)];
+            }
+            
+            if (move !== null) {
+                makeMove(move, BOT);
+            }
+
+            if (gameState === GameState.PLAYING) {
+                currentPlayer = PLAYER;
+                statusDisplay.textContent = "Your Turn (❌)";
+            }
+        }
+        
+        function findWinningMove(player) {
+            for(let i=0; i<9; i++) {
+                if(board[i] === null) {
+                    const tempBoard = [...board];
+                    tempBoard[i] = player;
+                    if(checkWinner(tempBoard)) {
+                        return i;
+                    }
+                }
+            }
+            return null;
+        }
+
+        // --- EVENT LISTENERS & HELPERS ---
+        function getCellIndex(x, y) {
+            const col = Math.floor(x / cellSize);
+            const row = Math.floor(y / cellSize);
+            return row * 3 + col;
+        }
+
+        function getCellCenter(index) {
+            const col = index % 3;
+            const row = Math.floor(index / 3);
+            return {
+                x: col * cellSize + halfCell,
+                y: row * cellSize + halfCell
+            };
+        }
+
+        canvas.addEventListener('click', (e) => {
+            initAudio(); // User interaction required to start audio
+            
+            if (gameState === GameState.PLAYING) {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                const index = getCellIndex(x, y);
+                handlePlayerMove(index);
+            } else {
+                startGame();
+            }
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && (gameState === GameState.START || gameState === GameState.GAME_OVER)) {
+                initAudio();
+                startGame();
+            }
+        });
+        
+        window.addEventListener('resize', resizeCanvas);
+
+
+        // --- MAIN GAME LOOP ---
+        function gameLoop() {
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- INITIALIZATION ---
+        resizeCanvas();
+        gameLoop();
+
+    </script>
+</body>
+</html>

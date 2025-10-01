@@ -1,0 +1,8 @@
+{
+  "name": "X.O. Bot",
+  "type": "tic-tac-toe with AI",
+  "folder": "x.o._bot",
+  "description": "Challenge a cunning AI that learns your strategy and anticipates your every move. It\u2019s a high-speed battle of wits where only perfect plays can outsmart the machine and claim victory",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
