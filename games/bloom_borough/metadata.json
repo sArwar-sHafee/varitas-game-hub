@@ -1,0 +1,8 @@
+{
+  "name": "Bloom Borough",
+  "type": "city builder (simplified)",
+  "folder": "bloom_borough",
+  "description": "Unleash your inner architect and transform an empty field into a vibrant, thriving community. Strategically place every home, park, and shop to watch your personalized borough blossom to life before your very eyes",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
