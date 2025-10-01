@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Word Weave 2</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Poppins', 'Arial Rounded MT Bold', sans-serif;
+            overflow: hidden;
+        }
+        #game-container {
+            width: 100%;
+            max-width: 1200px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        canvas {
+            background: #16213e;
+            border-radius: 15px;
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.3);
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+    // Self-invoking function to encapsulate the game logic
+    (() => {
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // --- Game Constants & State ---
+        let gameState = 'START'; // START, PLAYING, GAME_OVER
+        let score = 0;
+        let timer = 0;
+        let gameTimeLimit = 180; // 3 minutes
+        let lastTime = 0;
+        
+        let grid = [];
+        let words = [];
+        let foundWords = [];
+        let placedWords = [];
+        
+        const GRID_SIZE = 14;
+        let cellSize = 0;
+        let gridStartX = 0;
+        let gridStartY = 0;
+
+        // --- Input State ---
+        let isDragging = false;
+        let startCell = null;
+        let currentCell = null;
+        let mouse = { x: 0, y: 0 };
+
+        // --- UI & Effects ---
+        let particles = [];
+        let buttons = [];
+        const theme = {
+            bg: '#16213e',
+            gridBg: 'rgba(22, 33, 62, 0.8)',
+            text: '#e0e0e0',
+            accent: '#0f3460',
+            primary: '#e94560',
+            highlight: '#1f8a70',
+            found: 'rgba(255, 193, 7, 0.8)',
+            line: 'rgba(233, 69, 96, 0.8)',
+            particleColors: ['#f9ed69', '#f08a5d', '#b83b5e', '#6a2c70']
+        };
+
+        // --- Word Bank (Theme: The Cosmos) ---
+        const wordBank = [
+            "GALAXY", "PLANET", "STAR", "NEBULA", "COSMOS", "ORBIT", "ASTEROID",
+            "COMET", "UNIVERSE", "SUPERNOVA", "SPACESHIP", "ALIEN", "GRAVITY",
+            "TELESCOPE", "SOLAR", "LUNAR", "BLACKHOLE", "METEOR", "EQUINOX"
+        ];
+
+        // --- Audio Manager ---
+        class SoundSystem {
+            constructor() {
+                this.audioCtx = null;
+                try {
+                   this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) {
+                    console.warn("Web Audio API is not supported in this browser.");
+                }
+            }
+
+            _createOscillator(freq, type, duration) {
+                if (!this.audioCtx) return;
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+
+                oscillator.type = type;
+                oscillator.frequency.setValueAtTime(freq, this.audioCtx.currentTime);
+                
+                gainNode.gain.setValueAtTime(0.2, this.audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + duration);
+
+                oscillator.start(this.audioCtx.currentTime);
+                oscillator.stop(this.audioCtx.currentTime + duration);
+            }
+
+            play(sound) {
+                if (!this.audioCtx) return;
+                if (this.audioCtx.state === 'suspended') {
+                    this.audioCtx.resume();
+                }
+                switch (sound) {
+                    case 'select':
+                        this._createOscillator(660, 'triangle', 0.1);
+                        break;
+                    case 'found':
+                        this._createOscillator(523, 'sine', 0.2);
+                        setTimeout(() => this._createOscillator(659, 'sine', 0.2), 100);
+                        setTimeout(() => this._createOscillator(784, 'sine', 0.3), 200);
+                        break;
+                    case 'error':
+                        this._createOscillator(150, 'square', 0.2);
+                        break;
+                    case 'win':
+                        this._createOscillator(440, 'sine', 0.1);
+                        setTimeout(() => this._createOscillator(554, 'sine', 0.1), 100);
+                        setTimeout(() => this._createOscillator(660, 'sine', 0.1), 200);
+                        setTimeout(() => this._createOscillator(880, 'sine', 0.4), 300);
+                        break;
+                    case 'lose':
+                        this._createOscillator(300, 'sawtooth', 0.2);
+                        setTimeout(() => this._createOscillator(200, 'sawtooth', 0.3), 200);
+                        break;
+                }
+            }
+        }
+        const sound = new SoundSystem();
+
+        // --- Particle System ---
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.size = Math.random() * 5 + 2;
+                this.speedX = Math.random() * 3 - 1.5;
+                this.speedY = Math.random() * 3 - 1.5;
+                this.life = 1;
+            }
+
+            update() {
+                this.x += this.speedX;
+                this.y += this.speedY;
+                this.life -= 0.02;
+                if (this.size > 0.1) this.size -= 0.1;
+            }
+
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.globalAlpha = this.life;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+            }
+        }
+
+        function createExplosion(x, y, count = 30) {
+            for (let i = 0; i < count; i++) {
+                const color = theme.particleColors[Math.floor(Math.random() * theme.particleColors.length)];
+                particles.push(new Particle(x, y, color));
+            }
+        }
+
+        // --- Game Setup & Logic ---
+        function selectWords(count) {
+            let shuffled = [...wordBank].sort(() => 0.5 - Math.random());
+            return shuffled.slice(0, count).sort((a,b) => b.length - a.length);
+        }
+
+        function generateGrid() {
+            grid = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(''));
+            placedWords = [];
+
+            const directions = [
+                { x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 },
+                { x: 1, y: 1 }, { x: -1, y: -1 }, { x: 1, y: -1 }, { x: -1, y: 1 }
+            ];
+
+            for (const word of words) {
+                let placed = false;
+                let attempts = 0;
+                while (!placed && attempts < 100) {
+                    attempts++;
+                    const dir = directions[Math.floor(Math.random() * directions.length)];
+                    const startX = Math.floor(Math.random() * GRID_SIZE);
+                    const startY = Math.floor(Math.random() * GRID_SIZE);
+
+                    let canPlace = true;
+                    let path = [];
+                    for (let i = 0; i < word.length; i++) {
+                        const newX = startX + i * dir.x;
+                        const newY = startY + i * dir.y;
+
+                        if (newX < 0 || newX >= GRID_SIZE || newY < 0 || newY >= GRID_SIZE || 
+                           (grid[newY][newX] !== '' && grid[newY][newX] !== word[i])) {
+                            canPlace = false;
+                            break;
+                        }
+                        path.push({ x: newX, y: newY, letter: word[i] });
+                    }
+
+                    if (canPlace) {
+                        path.forEach(p => grid[p.y][p.x] = p.letter);
+                        placedWords.push({
+                            word,
+                            path: path.map(p => ({ x: p.x, y: p.y }))
+                        });
+                        placed = true;
+                    }
+                }
+            }
+            
+            // Fill empty spaces
+            const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    if (grid[y][x] === '') {
+                        grid[y][x] = alphabet[Math.floor(Math.random() * alphabet.length)];
+                    }
+                }
+            }
+        }
+
+        function startGame() {
+            score = 0;
+            words = selectWords(10);
+            foundWords = [];
+            generateGrid();
+            timer = gameTimeLimit;
+            gameState = 'PLAYING';
+            sound.play('select');
+        }
+
+        function checkWord() {
+            if (!startCell || !currentCell) return;
+
+            const dx = Math.sign(currentCell.x - startCell.x);
+            const dy = Math.sign(currentCell.y - startCell.y);
+            
+            // Allow only straight lines (horizontal, vertical, diagonal)
+            if (dx !== 0 && dy !== 0 && Math.abs(currentCell.x - startCell.x) !== Math.abs(currentCell.y - startCell.y)) {
+                sound.play('error');
+                return;
+            }
+            
+            let selectedString = '';
+            let path = [];
+            let x = startCell.x;
+            let y = startCell.y;
+            
+            while(true) {
+                if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) break;
+                selectedString += grid[y][x];
+                path.push({x, y});
+                if (x === currentCell.x && y === currentCell.y) break;
+                x += dx;
+                y += dy;
+            }
+
+            const reversedString = selectedString.split('').reverse().join('');
+            
+            const wordToFind = words.find(w => (w === selectedString || w === reversedString) && !foundWords.some(fw => fw.word === w));
+
+            if (wordToFind) {
+                score += wordToFind.length * 10;
+                const foundPath = (wordToFind === selectedString) ? path : [...path].reverse();
+                foundWords.push({ word: wordToFind, path: foundPath });
+                sound.play('found');
+                
+                const startPos = getCellCenter(foundPath[0].x, foundPath[0].y);
+                const endPos = getCellCenter(foundPath[foundPath.length - 1].x, foundPath[foundPath.length - 1].y);
+                createExplosion((startPos.x + endPos.x)/2, (startPos.y + endPos.y)/2);
+                
+                if (foundWords.length === words.length) {
+                    gameState = 'GAME_OVER';
+                    sound.play('win');
+                }
+            } else {
+                sound.play('error');
+            }
+        }
+
+        // --- Drawing ---
+        function drawGradientBackground() {
+            const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+            gradient.addColorStop(0, '#1a1a2e');
+            gradient.addColorStop(1, '#16213e');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        function drawGrid() {
+            ctx.fillStyle = theme.gridBg;
+            ctx.strokeStyle = theme.accent;
+            ctx.lineWidth = 2;
+            roundRect(gridStartX - cellSize/2, gridStartY - cellSize/2, GRID_SIZE * cellSize, GRID_SIZE * cellSize, 10);
+            ctx.fill();
+
+            ctx.font = `${cellSize * 0.5}px 'Poppins', sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    const cellX = gridStartX + x * cellSize;
+                    const cellY = gridStartY + y * cellSize;
+                    ctx.fillStyle = theme.text;
+                    ctx.fillText(grid[y][x], cellX, cellY);
+                }
+            }
+        }
+        
+        function drawFoundWords() {
+            ctx.strokeStyle = theme.found;
+            ctx.lineWidth = cellSize * 0.7;
+            ctx.lineCap = 'round';
+
+            foundWords.forEach(word => {
+                const start = getCellCenter(word.path[0].x, word.path[0].y);
+                const end = getCellCenter(word.path[word.path.length - 1].x, word.path[word.path.length - 1].y);
+                
+                ctx.beginPath();
+                ctx.moveTo(start.x, start.y);
+                ctx.lineTo(end.x, end.y);
+                ctx.stroke();
+            });
+        }
+        
+        function drawSelectionLine() {
+            if (isDragging && startCell) {
+                const startPos = getCellCenter(startCell.x, startCell.y);
+                ctx.strokeStyle = theme.line;
+                ctx.lineWidth = cellSize * 0.5;
+                ctx.lineCap = 'round';
+
+                ctx.beginPath();
+                ctx.moveTo(startPos.x, startPos.y);
+                ctx.lineTo(mouse.x, mouse.y);
+                ctx.stroke();
+            }
+        }
+
+        function drawUI() {
+            const panelWidth = canvas.width - (gridStartX + (GRID_SIZE - 0.5) * cellSize) - 30;
+            const panelX = gridStartX + (GRID_SIZE - 0.5) * cellSize + 20;
+
+            // --- Score ---
+            ctx.fillStyle = theme.text;
+            ctx.font = 'bold 24px Poppins';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.fillText('SCORE', panelX, gridStartY - cellSize/2);
+            ctx.fillStyle = theme.primary;
+            ctx.font = 'bold 40px Poppins';
+            ctx.fillText(score, panelX, gridStartY + 10);
+            
+            // --- Timer ---
+            ctx.fillStyle = theme.text;
+            ctx.font = 'bold 24px Poppins';
+            ctx.fillText('TIME', panelX, gridStartY + 80);
+            const minutes = Math.floor(timer / 60);
+            const seconds = Math.floor(timer % 60);
+            ctx.fillStyle = timer < 20 ? theme.primary : theme.highlight;
+            ctx.font = 'bold 40px Poppins';
+            ctx.fillText(`${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`, panelX, gridStartY + 96);
+            
+            // --- Word List ---
+            ctx.fillStyle = theme.text;
+            ctx.font = 'bold 24px Poppins';
+            ctx.fillText('WORDS', panelX, gridStartY + 170);
+            
+            const wordListY = gridStartY + 200;
+            const wordColHeight = canvas.height - wordListY - 20;
+            const wordsPerCol = Math.floor(wordColHeight / 30);
+
+            words.forEach((word, index) => {
+                const isFound = foundWords.some(fw => fw.word === word);
+                const col = Math.floor(index / wordsPerCol);
+                const yIndex = index % wordsPerCol;
+                
+                ctx.font = '18px Poppins';
+                ctx.fillStyle = isFound ? theme.found : theme.text;
+                ctx.fillText(word, panelX + col * (panelWidth/2), wordListY + yIndex * 30);
+                
+                if (isFound) {
+                    ctx.strokeStyle = theme.primary;
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    const textMetrics = ctx.measureText(word);
+                    const lineY = wordListY + yIndex * 30 + 9;
+                    ctx.moveTo(panelX + col * (panelWidth/2), lineY);
+                    ctx.lineTo(panelX + col * (panelWidth/2) + textMetrics.width, lineY);
+                    ctx.stroke();
+                }
+            });
+        }
+        
+        function drawStartScreen() {
+            drawGradientBackground();
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            // Title
+            ctx.font = 'bold 80px Poppins';
+            const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0);
+            gradient.addColorStop(0.3, theme.primary);
+            gradient.addColorStop(0.7, theme.highlight);
+            ctx.fillStyle = gradient;
+            ctx.fillText('Word Weave 2', canvas.width / 2, canvas.height / 2 - 150);
+
+            // Instructions
+            ctx.fillStyle = theme.text;
+            ctx.font = '24px Poppins';
+            ctx.fillText('Find all the words hidden in the grid.', canvas.width / 2, canvas.height / 2 - 50);
+            ctx.fillText('Click and drag to select words.', canvas.width / 2, canvas.height / 2 - 20);
+            
+            // Button
+            const btn = { x: canvas.width / 2 - 120, y: canvas.height / 2 + 50, w: 240, h: 70, text: '▶️ PLAY' };
+            buttons = [btn];
+            drawButton(btn);
+        }
+
+        function drawGameOverScreen() {
+            ctx.fillStyle = 'rgba(22, 33, 62, 0.8)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            const message = (foundWords.length === words.length) ? "Congratulations! ✨" : "Time's Up! ⌛";
+            ctx.fillStyle = (foundWords.length === words.length) ? theme.highlight : theme.primary;
+            ctx.font = 'bold 60px Poppins';
+            ctx.fillText(message, canvas.width / 2, canvas.height / 2 - 120);
+
+            ctx.fillStyle = theme.text;
+            ctx.font = '30px Poppins';
+            ctx.fillText(`You found ${foundWords.length} / ${words.length} words.`, canvas.width / 2, canvas.height / 2 - 50);
+            ctx.fillText(`Final Score: ${score}`, canvas.width / 2, canvas.height / 2);
+
+            const btn = { x: canvas.width / 2 - 150, y: canvas.height / 2 + 80, w: 300, h: 70, text: '🔄 PLAY AGAIN' };
+            buttons = [btn];
+            drawButton(btn);
+        }
+
+        function drawButton(btn) {
+            const isHovered = mouse.x > btn.x && mouse.x < btn.x + btn.w && mouse.y > btn.y && mouse.y < btn.y + btn.h;
+            
+            ctx.save();
+            if (isHovered) {
+                ctx.shadowColor = theme.primary;
+                ctx.shadowBlur = 20;
+            }
+            ctx.fillStyle = theme.accent;
+            ctx.strokeStyle = theme.primary;
+            ctx.lineWidth = 4;
+            roundRect(btn.x, btn.y, btn.w, btn.h, 15);
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+
+            ctx.fillStyle = theme.text;
+            ctx.font = 'bold 30px Poppins';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(btn.text, btn.x + btn.w / 2, btn.y + btn.h / 2);
+        }
+
+        // --- Helpers ---
+        function roundRect(x, y, w, h, radius) {
+            ctx.beginPath();
+            ctx.moveTo(x + radius, y);
+            ctx.lineTo(x + w - radius, y);
+            ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+            ctx.lineTo(x + w, y + h - radius);
+            ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+            ctx.lineTo(x + radius, y + h);
+            ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+            ctx.lineTo(x, y + radius);
+            ctx.quadraticCurveTo(x, y, x + radius, y);
+            ctx.closePath();
+        }
+
+        function getCellFromCoords(x, y) {
+            const gridWidth = GRID_SIZE * cellSize;
+            const gridHeight = GRID_SIZE * cellSize;
+            const gridLeft = gridStartX - cellSize / 2;
+            const gridTop = gridStartY - cellSize / 2;
+
+            if (x < gridLeft || x > gridLeft + gridWidth || y < gridTop || y > gridTop + gridHeight) {
+                return null;
+            }
+
+            const cellX = Math.floor((x - gridLeft) / cellSize);
+            const cellY = Math.floor((y - gridTop) / cellSize);
+
+            if (cellX >= 0 && cellX < GRID_SIZE && cellY >= 0 && cellY < GRID_SIZE) {
+                return { x: cellX, y: cellY };
+            }
+            return null;
+        }
+
+        function getCellCenter(cellX, cellY) {
+            return {
+                x: gridStartX + cellX * cellSize,
+                y: gridStartY + cellY * cellSize
+            };
+        }
+        
+        function resizeCanvas() {
+            const container = document.getElementById('game-container');
+            const aspectRatio = 4 / 3;
+            let newWidth = container.clientWidth;
+            let newHeight = container.clientHeight;
+
+            if (newWidth / newHeight > aspectRatio) {
+                newWidth = newHeight * aspectRatio;
+            } else {
+                newHeight = newWidth / aspectRatio;
+            }
+
+            canvas.width = newWidth;
+            canvas.height = newHeight;
+            
+            const gridAreaSize = Math.min(canvas.width * 0.65, canvas.height * 0.9);
+            cellSize = gridAreaSize / GRID_SIZE;
+            
+            gridStartX = (canvas.width * 0.7) / 2 - (gridAreaSize / 2) + cellSize / 2;
+            gridStartY = canvas.height / 2 - (gridAreaSize / 2) + cellSize / 2;
+        }
+
+        // --- Input Handlers ---
+        function handleMouseDown(e) {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = e.clientX - rect.left;
+            mouse.y = e.clientY - rect.top;
+
+            if (gameState === 'PLAYING') {
+                startCell = getCellFromCoords(mouse.x, mouse.y);
+                if (startCell) {
+                    isDragging = true;
+                }
+            }
+        }
+
+        function handleMouseMove(e) {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = e.clientX - rect.left;
+            mouse.y = e.clientY - rect.top;
+
+            if (isDragging) {
+                currentCell = getCellFromCoords(mouse.x, mouse.y);
+            }
+        }
+
+        function handleMouseUp(e) {
+            e.preventDefault();
+            if (gameState === 'PLAYING' && isDragging) {
+                isDragging = false;
+                currentCell = getCellFromCoords(mouse.x, mouse.y);
+                if (startCell && currentCell) {
+                    checkWord();
+                }
+                startCell = null;
+                currentCell = null;
+            }
+        }
+        
+        function handleMouseClick(e) {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = e.clientX - rect.left;
+            mouse.y = e.clientY - rect.top;
+
+            const clickedButton = buttons.find(btn => 
+                mouse.x > btn.x && mouse.x < btn.x + btn.w && 
+                mouse.y > btn.y && mouse.y < btn.y + btn.h
+            );
+
+            if (clickedButton) {
+                if (gameState === 'START' || gameState === 'GAME_OVER') {
+                    startGame();
+                }
+            }
+        }
+
+        // Touch handlers to mimic mouse
+        function handleTouchStart(e) {
+            if (e.touches && e.touches.length > 0) {
+                // Pass a synthetic event object to the mouse handlers
+                const touchEvent = {
+                    clientX: e.touches[0].clientX,
+                    clientY: e.touches[0].clientY,
+                    preventDefault: () => e.preventDefault()
+                };
+                handleMouseDown(touchEvent);
+                handleMouseClick(touchEvent); // Trigger click on touch start for buttons
+            }
+        }
+        function handleTouchMove(e) {
+            if (e.touches && e.touches.length > 0) {
+                const touchEvent = {
+                    clientX: e.touches[0].clientX,
+                    clientY: e.touches[0].clientY,
+                    preventDefault: () => e.preventDefault()
+                };
+                handleMouseMove(touchEvent);
+            }
+        }
+        function handleTouchEnd(e) {
+             const touchEvent = {
+                preventDefault: () => e.preventDefault()
+            };
+            handleMouseUp(touchEvent);
+        }
+
+        // --- Game Loop ---
+        function update(deltaTime) {
+            if (gameState === 'PLAYING') {
+                timer -= deltaTime;
+                if (timer <= 0) {
+                    timer = 0;
+                    gameState = 'GAME_OVER';
+                    sound.play('lose');
+                }
+            }
+            
+            // Update and filter particles
+            particles.forEach(p => p.update());
+            particles = particles.filter(p => p.life > 0);
+        }
+        
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawGradientBackground();
+
+            switch(gameState) {
+                case 'START':
+                    drawStartScreen();
+                    break;
+                case 'PLAYING':
+                    drawGrid();
+                    drawFoundWords();
+                    drawSelectionLine();
+                    drawUI();
+                    break;
+                case 'GAME_OVER':
+                    // Draw final state of board behind overlay
+                    drawGrid();
+                    drawFoundWords();
+                    drawUI();
+                    // Draw overlay and screen
+                    drawGameOverScreen();
+                    break;
+            }
+            
+            // Draw particles on top of everything
+            particles.forEach(p => p.draw());
+        }
+
+        function gameLoop(timestamp) {
+            const deltaTime = (timestamp - lastTime) / 1000;
+            lastTime = timestamp;
+
+            update(deltaTime);
+            draw();
+            
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- Initialization ---
+        function init() {
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+            
+            canvas.addEventListener('mousedown', handleMouseDown);
+            canvas.addEventListener('mousemove', handleMouseMove);
+            canvas.addEventListener('mouseup', handleMouseUp);
+            canvas.addEventListener('click', handleMouseClick);
+
+            canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
+            canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+            canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
+            
+            lastTime = performance.now();
+            requestAnimationFrame(gameLoop);
+        }
+
+        init();
+    })();
+    </script>
+</body>
+</html>

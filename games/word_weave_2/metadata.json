@@ -1,0 +1,8 @@
+{
+  "name": "Word Weave 2",
+  "type": "word search",
+  "folder": "word_weave_2",
+  "description": "Words don't just hide; they twist, turn, and weave together in a mind-bending puzzle grid. Untangle the intricate tapestry of letters to conquer the ultimate word search challenge",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
