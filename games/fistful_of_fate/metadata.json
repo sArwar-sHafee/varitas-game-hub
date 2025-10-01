@@ -1,0 +1,8 @@
+{
+  "name": "Fistful of Fate",
+  "type": "rock paper scissors",
+  "folder": "fistful_of_fate",
+  "description": "Forge your destiny with the crushing might of Rock, the cunning of Scissors, or the devious grasp of Paper. Outwit your opponent in a lightning-fast psychological showdown where a single throw decides it all.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

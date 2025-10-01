@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fistful of Fate</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100%;
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #fff;
+        }
+        canvas {
+            display: block;
+            background: #00000022;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // ES6+ JavaScript Code
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // --- GAME CONFIGURATION ---
+        const WINNING_SCORE = 3;
+        const CHOICES = [
+            { name: 'rock', emoji: '✊', beats: 'scissors', color: '#ff6b6b' },
+            { name: 'paper', emoji: '✋', beats: 'rock', color: '#feca57' },
+            { name: 'scissors', emoji: '✌️', beats: 'paper', color: '#48dbfb' }
+        ];
+
+        // --- GAME STATE ---
+        let gameState = 'START'; // START, PLAYING, ROUND_OVER, GAME_OVER
+        let playerScore = 0;
+        let cpuScore = 0;
+        let playerChoice = null;
+        let cpuChoice = null;
+        let resultMessage = '';
+        let winner = '';
+        
+        let roundTimer = 0;
+        const ROUND_DELAY = 2000; // 2 seconds between rounds
+
+        // --- ANIMATION & EFFECTS ---
+        let particles = [];
+        let playerHand = { x: -100, y: 0, targetX: 0, alpha: 0 };
+        let cpuHand = { x: 100, y: 0, targetX: 0, alpha: 0 };
+
+        // --- SOUND ENGINE ---
+        let audioCtx;
+
+        function initializeAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        function playSound(type) {
+            if (!audioCtx) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+
+            switch (type) {
+                case 'select':
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(300, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.3, audioCtx.currentTime + 0.02);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.1);
+                    break;
+                case 'win':
+                    oscillator.type = 'square';
+                    oscillator.frequency.setValueAtTime(440, audioCtx.currentTime); // A
+                    gainNode.gain.linearRampToValueAtTime(0.2, audioCtx.currentTime + 0.05);
+                    oscillator.frequency.setValueAtTime(554, audioCtx.currentTime + 0.1); // C#
+                    oscillator.frequency.setValueAtTime(659, audioCtx.currentTime + 0.2); // E
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.4);
+                    break;
+                case 'lose':
+                    oscillator.type = 'sawtooth';
+                    oscillator.frequency.setValueAtTime(300, audioCtx.currentTime);
+                    gainNode.gain.linearRampToValueAtTime(0.3, audioCtx.currentTime + 0.05);
+                    oscillator.frequency.setValueAtTime(150, audioCtx.currentTime + 0.2);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.4);
+                    break;
+                case 'tie':
+                    oscillator.type = 'triangle';
+                    oscillator.frequency.setValueAtTime(220, audioCtx.currentTime);
+                    gainNode.gain.linearRampToValueAtTime(0.2, audioCtx.currentTime + 0.05);
+                    oscillator.frequency.setValueAtTime(220, audioCtx.currentTime + 0.15);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.3);
+                    break;
+                case 'start':
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(261.63, audioCtx.currentTime); // C4
+                     gainNode.gain.linearRampToValueAtTime(0.3, audioCtx.currentTime + 0.05);
+                    oscillator.frequency.setValueAtTime(392.00, audioCtx.currentTime + 0.1); // G4
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.2);
+                    break;
+            }
+
+            oscillator.start(audioCtx.currentTime);
+            oscillator.stop(audioCtx.currentTime + 1);
+        }
+        
+        // --- RESPONSIVE CANVAS ---
+        function resizeCanvas() {
+            canvas.width = Math.min(window.innerWidth * 0.9, 800);
+            canvas.height = Math.min(window.innerHeight * 0.9, 600);
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // --- UTILITY FUNCTIONS ---
+        function drawText(text, x, y, size, color, align = 'center', weight = 'normal') {
+            ctx.font = `${weight} ${size}px 'Arial', sans-serif`;
+            ctx.fillStyle = color;
+            ctx.textAlign = align;
+            ctx.fillText(text, x, y);
+        }
+
+        function drawRoundedRect(x, y, width, height, radius, color) {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(x + radius, y);
+            ctx.lineTo(x + width - radius, y);
+            ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+            ctx.lineTo(x + width, y + height - radius);
+            ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+            ctx.lineTo(x + radius, y + height);
+            ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+            ctx.lineTo(x, y + radius);
+            ctx.quadraticCurveTo(x, y, x + radius, y);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // --- PARTICLE SYSTEM ---
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.size = Math.random() * 5 + 2;
+                this.vx = (Math.random() - 0.5) * 8;
+                this.vy = (Math.random() - 0.5) * 8;
+                this.alpha = 1;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.alpha -= 0.02;
+            }
+
+            draw() {
+                ctx.globalAlpha = this.alpha;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+            }
+        }
+        
+        function createExplosion(x, y, color) {
+            for (let i = 0; i < 50; i++) {
+                particles.push(new Particle(x, y, color));
+            }
+        }
+
+        // --- GAME LOGIC ---
+        function resetGame() {
+            playerScore = 0;
+            cpuScore = 0;
+            winner = '';
+            gameState = 'PLAYING';
+            playSound('start');
+        }
+
+        function playRound(playerChoiceName) {
+            if (gameState !== 'PLAYING') return;
+
+            playSound('select');
+            playerChoice = CHOICES.find(c => c.name === playerChoiceName);
+            cpuChoice = CHOICES[Math.floor(Math.random() * CHOICES.length)];
+
+            if (playerChoice.name === cpuChoice.name) {
+                resultMessage = "It's a Tie!";
+                playSound('tie');
+            } else if (playerChoice.beats === cpuChoice.name) {
+                resultMessage = "You Win This Round!";
+                playerScore++;
+                playSound('win');
+                createExplosion(canvas.width * 0.25, canvas.height / 2, playerChoice.color);
+            } else {
+                resultMessage = "CPU Wins This Round!";
+                cpuScore++;
+                playSound('lose');
+                createExplosion(canvas.width * 0.75, canvas.height / 2, cpuChoice.color);
+            }
+
+            gameState = 'ROUND_OVER';
+            roundTimer = Date.now();
+
+            if (playerScore === WINNING_SCORE || cpuScore === WINNING_SCORE) {
+                setTimeout(() => {
+                    gameState = 'GAME_OVER';
+                    winner = playerScore === WINNING_SCORE ? 'Player' : 'CPU';
+                }, ROUND_DELAY);
+            } else {
+                 setTimeout(() => {
+                    gameState = 'PLAYING';
+                    playerChoice = null;
+                    cpuChoice = null;
+                }, ROUND_DELAY);
+            }
+
+            // Animate hands
+            playerHand = { x: -canvas.width/4, y: canvas.height / 2, targetX: canvas.width * 0.25, alpha: 0};
+            cpuHand = { x: canvas.width * 1.25, y: canvas.height / 2, targetX: canvas.width * 0.75, alpha: 0};
+        }
+
+        // --- INPUT HANDLING ---
+        const choiceBoxes = [];
+
+        function handleInput(e) {
+            initializeAudio();
+
+            if (gameState === 'START') {
+                // Any key or click starts the game
+                resetGame();
+                return;
+            }
+            
+            if (gameState === 'GAME_OVER') {
+                // Only click or "Enter" key restarts, as per on-screen text
+                if (e.type === 'click' || (e.type === 'keydown' && e.key === 'Enter')) {
+                    resetGame();
+                }
+                return;
+            }
+
+            if (gameState === 'PLAYING') {
+                if(e.type === 'keydown') {
+                    if (e.key === '1' || e.key.toLowerCase() === 'r') playRound('rock');
+                    if (e.key === '2' || e.key.toLowerCase() === 'p') playRound('paper');
+                    if (e.key === '3' || e.key.toLowerCase() === 's') playRound('scissors');
+                } else if (e.type === 'click') {
+                    const rect = canvas.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    
+                    choiceBoxes.forEach(box => {
+                        if (x > box.x && x < box.x + box.width && y > box.y && y < box.y + box.height) {
+                            playRound(box.name);
+                        }
+                    });
+                }
+            }
+        }
+        
+        document.addEventListener('keydown', handleInput);
+        canvas.addEventListener('click', handleInput);
+
+        // --- DRAWING FUNCTIONS ---
+
+        function drawStartScreen() {
+            drawText('Fistful of Fate', canvas.width / 2, canvas.height * 0.3, canvas.width / 10, '#fff', 'center', 'bold');
+            
+            const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0);
+            gradient.addColorStop(0, '#ff6b6b');
+            gradient.addColorStop(0.5, '#feca57');
+            gradient.addColorStop(1, '#48dbfb');
+            drawText('Rock Paper Scissors', canvas.width / 2, canvas.height * 0.4, canvas.width / 25, gradient);
+
+            drawText('First to 3 points wins!', canvas.width / 2, canvas.height * 0.6, canvas.width / 30, '#eee');
+            
+            // Pulsing effect for start text
+            const pulse = Math.sin(Date.now() / 300) * 0.1 + 0.9;
+            ctx.globalAlpha = pulse;
+            drawText('Click or Press any key to Start', canvas.width / 2, canvas.height * 0.75, canvas.width / 35, '#fff');
+            ctx.globalAlpha = 1;
+        }
+
+        function drawGameScreen() {
+            // Draw Scores
+            drawText('Player', canvas.width * 0.25, canvas.height * 0.1, canvas.width / 25, '#fff', 'center');
+            drawText(playerScore, canvas.width * 0.25, canvas.height * 0.2, canvas.width / 15, '#fff', 'center', 'bold');
+            
+            drawText('CPU', canvas.width * 0.75, canvas.height * 0.1, canvas.width / 25, '#fff', 'center');
+            drawText(cpuScore, canvas.width * 0.75, canvas.height * 0.2, canvas.width / 15, '#fff', 'center', 'bold');
+
+            // Draw VS
+            drawText('VS', canvas.width/2, canvas.height * 0.15, canvas.width/18, '#ffffff88', 'center', 'bold');
+
+            // Draw choices
+            const choiceBoxWidth = canvas.width / 4;
+            const choiceBoxHeight = canvas.height / 5;
+            const choiceBoxY = canvas.height * 0.75;
+            const gap = (canvas.width - (3 * choiceBoxWidth)) / 4;
+            
+            choiceBoxes.length = 0; // Clear for hit detection
+
+            CHOICES.forEach((choice, index) => {
+                const x = gap + index * (choiceBoxWidth + gap);
+                choiceBoxes.push({name: choice.name, x: x, y: choiceBoxY, width: choiceBoxWidth, height: choiceBoxHeight});
+                
+                drawRoundedRect(x, choiceBoxY, choiceBoxWidth, choiceBoxHeight, 15, choice.color + 'aa');
+                drawText(choice.emoji, x + choiceBoxWidth / 2, choiceBoxY + choiceBoxHeight / 2 + (canvas.width/60), canvas.width / 12, '#fff');
+                drawText(choice.name.toUpperCase(), x + choiceBoxWidth / 2, choiceBoxY + choiceBoxHeight - (canvas.width/80), canvas.width / 50, '#fff');
+            });
+            
+            // Draw Instructions
+            drawText('Choose your fate: Click or Press (R/1, P/2, S/3)', canvas.width / 2, canvas.height * 0.98, canvas.width / 50, '#ffffffaa', 'center');
+        }
+        
+        function drawRoundOverScreen() {
+             // Animate hands
+            playerHand.x += (playerHand.targetX - playerHand.x) * 0.1;
+            cpuHand.x += (cpuHand.targetX - cpuHand.x) * 0.1;
+            playerHand.alpha = Math.min(1, playerHand.alpha + 0.05);
+            cpuHand.alpha = Math.min(1, cpuHand.alpha + 0.05);
+
+            // Draw chosen hands
+            ctx.globalAlpha = playerHand.alpha;
+            drawText(playerChoice.emoji, playerHand.x, playerHand.y, canvas.width / 5, playerChoice.color, 'center');
+            ctx.globalAlpha = cpuHand.alpha;
+            drawText(cpuChoice.emoji, cpuHand.x, cpuHand.y, canvas.width / 5, cpuChoice.color, 'center');
+            ctx.globalAlpha = 1;
+            
+            drawText('VS', canvas.width/2, canvas.height/2, canvas.width/10, '#ffffff88', 'center', 'bold');
+            
+            // Draw result message after a delay
+            if (Date.now() - roundTimer > 500) {
+                 drawText(resultMessage, canvas.width / 2, canvas.height * 0.2, canvas.width / 20, '#fff', 'center', 'bold');
+            }
+        }
+        
+        function drawGameOverScreen() {
+            drawText('GAME OVER', canvas.width / 2, canvas.height * 0.3, canvas.width / 8, '#ff6b6b', 'center', 'bold');
+            drawText(`${winner} is the Champion!`, canvas.width / 2, canvas.height * 0.5, canvas.width / 18, '#feca57');
+            drawText(`Final Score: ${playerScore} - ${cpuScore}`, canvas.width / 2, canvas.height * 0.6, canvas.width / 25, '#fff');
+            
+            // Pulsing effect for restart text
+            const pulse = Math.sin(Date.now() / 300) * 0.1 + 0.9;
+            ctx.globalAlpha = pulse;
+            drawText('Click or Press Enter to Play Again', canvas.width / 2, canvas.height * 0.8, canvas.width / 35, '#fff');
+            ctx.globalAlpha = 1;
+        }
+        
+        // --- MAIN GAME LOOP ---
+        function gameLoop() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            switch(gameState) {
+                case 'START':
+                    drawStartScreen();
+                    break;
+                case 'PLAYING':
+                    drawGameScreen();
+                    break;
+                case 'ROUND_OVER':
+                    drawRoundOverScreen();
+                    break;
+                case 'GAME_OVER':
+                    drawGameOverScreen();
+                    break;
+            }
+            
+            // Update and draw particles safely
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.update();
+                p.draw();
+                if (p.alpha <= 0) {
+                    particles.splice(i, 1);
+                }
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Start the game
+        gameLoop();
+    </script>
+</body>
+</html>
