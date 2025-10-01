@@ -1,0 +1,8 @@
+{
+  "name": "Crown Clash",
+  "type": "checkers",
+  "folder": "crown_clash",
+  "description": "Outmaneuver your opponent in a tactical rush across the board, capturing pieces to clear your path. Seize the all-powerful crown to unlock devastating moves and dominate the clash for victory",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crown Clash</title>
+    <style>
+        :root {
+            --primary-color: #3a3a3a;
+            --secondary-color: #f0f0f0;
+            --accent-color-1: #e74c3c;
+            --accent-color-2: #3498db;
+            --highlight-color: rgba(255, 223, 0, 0.7);
+            --font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: linear-gradient(135deg, #2c3e50, #4ca1af);
+            color: var(--secondary-color);
+            font-family: var(--font-family);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #game-container {
+            position: relative;
+            width: 95vmin;
+            height: 95vmin;
+            max-width: 800px;
+            max-height: 800px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+            border-radius: 15px;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            background: var(--primary-color);
+        }
+
+        .ui-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            text-align: center;
+            transition: opacity 0.5s ease;
+            opacity: 1;
+            pointer-events: auto;
+            backdrop-filter: blur(5px);
+        }
+        
+        .ui-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .ui-overlay h1 {
+            font-size: clamp(2rem, 10vmin, 5rem);
+            margin: 0;
+            text-shadow: 0 0 15px var(--accent-color-1);
+            animation: pulse 2s infinite;
+        }
+
+        .ui-overlay p {
+            font-size: clamp(1rem, 4vmin, 1.5rem);
+            margin: 1rem 0;
+            max-width: 80%;
+        }
+
+        .ui-button {
+            padding: 15px 30px;
+            font-size: clamp(1rem, 4vmin, 1.5rem);
+            background: var(--accent-color-2);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        
+        .ui-button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+            background: #4ea8e1;
+        }
+        
+        #game-ui {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 20px;
+            box-sizing: border-box;
+            font-size: clamp(1rem, 4vmin, 1.8rem);
+            font-weight: bold;
+            pointer-events: none;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        }
+
+        #turn-indicator {
+            padding: 8px 15px;
+            border-radius: 10px;
+            transition: background-color 0.3s ease;
+        }
+        
+        #instructions {
+            position: absolute;
+            bottom: 10px;
+            width: 100%;
+            text-align: center;
+            font-size: clamp(0.7rem, 2.5vmin, 1rem);
+            color: rgba(255, 255, 255, 0.7);
+            pointer-events: none;
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="game-ui">
+            <div id="score1">🔴: 12</div>
+            <div id="turn-indicator">🔴's Turn</div>
+            <div id="score2">⚫: 12</div>
+        </div>
+        <div id="instructions">Click to select a piece, then click a highlighted square to move. Press 'R' to Restart.</div>
+        
+        <div id="start-screen" class="ui-overlay">
+            <h1>Crown Clash</h1>
+            <p>A modern checkers game. Capture all your opponent's pieces to win!</p>
+            <button id="start-button" class="ui-button">Start Game (Enter)</button>
+        </div>
+
+        <div id="game-over-screen" class="ui-overlay hidden">
+            <h1 id="winner-message">Winner!</h1>
+            <p>A great victory!</p>
+            <button id="restart-button" class="ui-button">Play Again (R)</button>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- Basic Setup ---
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+            const gameContainer = document.getElementById('game-container');
+            
+            const startScreen = document.getElementById('start-screen');
+            const gameOverScreen = document.getElementById('game-over-screen');
+            const startButton = document.getElementById('start-button');
+            const restartButton = document.getElementById('restart-button');
+            
+            const score1El = document.getElementById('score1');
+            const score2El = document.getElementById('score2');
+            const turnIndicatorEl = document.getElementById('turn-indicator');
+            const winnerMessageEl = document.getElementById('winner-message');
+
+            const GameState = {
+                START_SCREEN: 'START_SCREEN',
+                PLAYING: 'PLAYING',
+                GAME_OVER: 'GAME_OVER'
+            };
+
+            let gameState = GameState.START_SCREEN;
+            
+            const BOARD_SIZE = 8;
+            let tileSize;
+            
+            const Piece = {
+                EMPTY: 0,
+                PLAYER1: 1,
+                PLAYER2: 2,
+                PLAYER1_KING: 3,
+                PLAYER2_KING: 4
+            };
+
+            const Player = {
+                PLAYER1: 1,
+                PLAYER2: 2
+            };
+
+            let board = [];
+            let currentPlayer = Player.PLAYER1;
+            let selectedPiece = null; // { row, col }
+            let validMoves = [];
+            let mustJump = false;
+            
+            let animatedPieces = []; // For move animations
+            let particles = []; // For capture/king effects
+
+            // --- Sound Engine ---
+            let audioCtx;
+            function initAudio() {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+            }
+
+            function playSound(type) {
+                if (!audioCtx) return;
+
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                
+                gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+                gainNode.gain.linearRampToValueAtTime(0.3, audioCtx.currentTime + 0.01);
+
+                switch(type) {
+                    case 'move':
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
+                        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.2);
+                        break;
+                    case 'capture':
+                        oscillator.type = 'square';
+                        oscillator.frequency.setValueAtTime(220, audioCtx.currentTime);
+                        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.3);
+                        break;
+                    case 'king':
+                        oscillator.type = 'triangle';
+                        oscillator.frequency.setValueAtTime(660, audioCtx.currentTime);
+                        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.4);
+                        break;
+                    case 'click':
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
+                        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.1);
+                        break;
+                    case 'win':
+                        oscillator.type = 'sawtooth';
+                        oscillator.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
+                        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
+                        setTimeout(() => playSound('win2'), 150);
+                        break;
+                    case 'win2': // Helper for win sound
+                         oscillator.type = 'sawtooth';
+                         oscillator.frequency.setValueAtTime(659.25, audioCtx.currentTime); // E5
+                         gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
+                         setTimeout(() => playSound('win3'), 150);
+                         break;
+                    case 'win3': // Helper for win sound
+                         oscillator.type = 'sawtooth';
+                         oscillator.frequency.setValueAtTime(783.99, audioCtx.currentTime); // G5
+                         gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
+                         break;
+                }
+
+                oscillator.start(audioCtx.currentTime);
+                oscillator.stop(audioCtx.currentTime + 0.5);
+            }
+
+
+            // --- Game Initialization ---
+            function initGame() {
+                board = createInitialBoard();
+                currentPlayer = Player.PLAYER1;
+                selectedPiece = null;
+                validMoves = [];
+                mustJump = false;
+                animatedPieces = [];
+                particles = [];
+                updateUI();
+                gameState = GameState.PLAYING;
+                startScreen.classList.add('hidden');
+                gameOverScreen.classList.add('hidden');
+            }
+
+            function createInitialBoard() {
+                const newBoard = Array(BOARD_SIZE).fill(0).map(() => Array(BOARD_SIZE).fill(Piece.EMPTY));
+                for (let row = 0; row < BOARD_SIZE; row++) {
+                    for (let col = 0; col < BOARD_SIZE; col++) {
+                        if ((row + col) % 2 !== 0) { // Dark squares
+                            if (row < 3) {
+                                newBoard[row][col] = Piece.PLAYER2;
+                            } else if (row > 4) {
+                                newBoard[row][col] = Piece.PLAYER1;
+                            }
+                        }
+                    }
+                }
+                return newBoard;
+            }
+
+            // --- Game Loop ---
+            function gameLoop(timestamp) {
+                update(timestamp);
+                draw();
+                requestAnimationFrame(gameLoop);
+            }
+
+            function update(timestamp) {
+                // Update animations
+                animatedPieces.forEach(p => {
+                    p.progress += p.speed;
+                    if (p.progress >= 1) {
+                        p.progress = 1;
+                        board[p.to.row][p.to.col] = p.piece;
+                        if (p.onComplete) p.onComplete();
+                    }
+                });
+                animatedPieces = animatedPieces.filter(p => p.progress < 1);
+                
+                // Update particles
+                particles.forEach(p => {
+                    p.x += p.vx;
+                    p.y += p.vy;
+                    p.vy += 0.1; // gravity
+                    p.life--;
+                });
+                particles = particles.filter(p => p.life > 0);
+            }
+
+            // --- Drawing ---
+            function draw() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                drawBoard();
+                drawPieces();
+                drawHighlights();
+                drawAnimations();
+                drawParticles();
+            }
+
+            function drawBoard() {
+                for (let row = 0; row < BOARD_SIZE; row++) {
+                    for (let col = 0; col < BOARD_SIZE; col++) {
+                        ctx.fillStyle = (row + col) % 2 === 0 ? '#f0d9b5' : '#b58863';
+                        ctx.fillRect(col * tileSize, row * tileSize, tileSize, tileSize);
+                    }
+                }
+            }
+
+            function drawPieces() {
+                for (let row = 0; row < BOARD_SIZE; row++) {
+                    for (let col = 0; col < BOARD_SIZE; col++) {
+                        const piece = board[row][col];
+                        // Don't draw pieces that are currently being animated
+                        if (piece !== Piece.EMPTY && !animatedPieces.some(p => p.from.row === row && p.from.col === col)) {
+                            drawPiece(col, row, piece);
+                        }
+                    }
+                }
+            }
+            
+            function drawPiece(col, row, piece, x = col * tileSize + tileSize / 2, y = row * tileSize + tileSize / 2) {
+                const radius = tileSize * 0.4;
+                
+                // Base piece color
+                if (piece === Piece.PLAYER1 || piece === Piece.PLAYER1_KING) {
+                    ctx.fillStyle = '#c82b1d'; // Red
+                } else if (piece === Piece.PLAYER2 || piece === Piece.PLAYER2_KING) {
+                    ctx.fillStyle = '#1e1e1e'; // Black
+                }
+                
+                // Draw piece circle
+                ctx.beginPath();
+                ctx.arc(x, y, radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Add a subtle gradient for 3D effect
+                const gradient = ctx.createRadialGradient(x - radius/3, y - radius/3, radius/5, x, y, radius);
+                if (piece === Piece.PLAYER1 || piece === Piece.PLAYER1_KING) {
+                    gradient.addColorStop(0, 'rgba(255, 150, 150, 0.9)');
+                    gradient.addColorStop(1, 'rgba(200, 43, 29, 0)');
+                } else {
+                    gradient.addColorStop(0, 'rgba(150, 150, 150, 0.7)');
+                    gradient.addColorStop(1, 'rgba(30, 30, 30, 0)');
+                }
+                ctx.fillStyle = gradient;
+                ctx.fill();
+                
+                // Draw king symbol
+                if (piece === Piece.PLAYER1_KING || piece === Piece.PLAYER2_KING) {
+                    ctx.font = `${tileSize * 0.5}px Arial`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillStyle = '#ffd700'; // Gold
+                    ctx.fillText('👑', x, y);
+                }
+            }
+            
+            function drawHighlights() {
+                // Highlight selected piece
+                if (selectedPiece) {
+                    ctx.strokeStyle = 'rgba(255, 223, 0, 0.7)'; // CORRECTED: Removed invalid CSS var() syntax
+                    ctx.lineWidth = 4;
+                    ctx.strokeRect(selectedPiece.col * tileSize + 2, selectedPiece.row * tileSize + 2, tileSize - 4, tileSize - 4);
+                }
+
+                // Highlight valid moves
+                validMoves.forEach(move => {
+                    ctx.fillStyle = 'rgba(0, 255, 0, 0.3)';
+                    ctx.beginPath();
+                    ctx.arc(move.to.col * tileSize + tileSize / 2, move.to.row * tileSize + tileSize / 2, tileSize * 0.2, 0, 2 * Math.PI);
+                    ctx.fill();
+                });
+            }
+
+            function drawAnimations() {
+                animatedPieces.forEach(p => {
+                    const currentX = lerp(p.from.col * tileSize + tileSize / 2, p.to.col * tileSize + tileSize / 2, p.progress);
+                    const currentY = lerp(p.from.row * tileSize + tileSize / 2, p.to.row * tileSize + tileSize / 2, p.progress);
+                    drawPiece(0, 0, p.piece, currentX, currentY);
+                });
+            }
+
+            function lerp(start, end, t) {
+                return start * (1 - t) + end * t;
+            }
+
+            function drawParticles() {
+                particles.forEach(p => {
+                    ctx.fillStyle = `rgba(${p.r}, ${p.g}, ${p.b}, ${p.life / p.maxLife})`;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+            }
+            
+            // --- Game Logic ---
+            function handleClick(event) {
+                if (gameState !== GameState.PLAYING || animatedPieces.length > 0) return;
+                initAudio();
+                
+                const rect = canvas.getBoundingClientRect();
+                const x = event.clientX - rect.left;
+                const y = event.clientY - rect.top;
+                
+                const col = Math.floor(x / tileSize);
+                const row = Math.floor(y / tileSize);
+
+                const clickedMove = validMoves.find(move => move.to.row === row && move.to.col === col);
+
+                if (clickedMove) {
+                    executeMove(clickedMove);
+                    if (!clickedMove.isJump) playSound('move');
+                } else {
+                    const piece = board[row][col];
+                    if (piece !== Piece.EMPTY && isCurrentPlayerPiece(piece)) {
+                        selectPiece(row, col);
+                        playSound('click');
+                    } else {
+                        selectedPiece = null;
+                        validMoves = [];
+                    }
+                }
+            }
+            
+            function isCurrentPlayerPiece(piece) {
+                if (currentPlayer === Player.PLAYER1) {
+                    return piece === Piece.PLAYER1 || piece === Piece.PLAYER1_KING;
+                } else {
+                    return piece === Piece.PLAYER2 || piece === Piece.PLAYER2_KING;
+                }
+            }
+
+            function selectPiece(row, col) {
+                selectedPiece = { row, col };
+                validMoves = calculateValidMovesForPiece(row, col, board[row][col]);
+                
+                // Force jump rule
+                const allPossibleJumps = findAllJumpsForPlayer(currentPlayer);
+                if (allPossibleJumps.length > 0) {
+                    validMoves = validMoves.filter(move => move.isJump);
+                    mustJump = true;
+                } else {
+                    validMoves = validMoves.filter(move => !move.isJump);
+                    mustJump = false;
+                }
+            }
+
+            function calculateValidMovesForPiece(row, col, piece) {
+                const moves = [];
+                const isKing = (piece === Piece.PLAYER1_KING || piece === Piece.PLAYER2_KING);
+                const forwardDir = (piece === Piece.PLAYER1 || piece === Piece.PLAYER1_KING) ? -1 : 1;
+
+                const dirs = isKing ? [[-1,-1], [-1,1], [1,-1], [1,1]] : [[forwardDir, -1], [forwardDir, 1]];
+
+                for (const [dr, dc] of dirs) {
+                    // Check simple move
+                    const r1 = row + dr, c1 = col + dc;
+                    if (isValidSquare(r1, c1) && board[r1][c1] === Piece.EMPTY) {
+                        moves.push({ from: { row, col }, to: { row: r1, col: c1 }, isJump: false });
+                    }
+                    
+                    // Check jump
+                    const r2 = row + 2 * dr, c2 = col + 2 * dc;
+                    if (isValidSquare(r2, c2) && board[r2][c2] === Piece.EMPTY &&
+                        isValidSquare(r1, c1) && board[r1][c1] !== Piece.EMPTY &&
+                        !isPlayerPiece(board[r1][c1], currentPlayer))
+                    {
+                        moves.push({ from: { row, col }, to: { row: r2, col: c2 }, isJump: true, captured: { row: r1, col: c1 } });
+                    }
+                }
+                return moves;
+            }
+
+            function findAllJumpsForPlayer(player) {
+                const jumps = [];
+                for (let r = 0; r < BOARD_SIZE; r++) {
+                    for (let c = 0; c < BOARD_SIZE; c++) {
+                        const piece = board[r][c];
+                        if (piece !== Piece.EMPTY && isPlayerPiece(piece, player)) {
+                            const pieceMoves = calculateValidMovesForPiece(r, c, piece);
+                            jumps.push(...pieceMoves.filter(m => m.isJump));
+                        }
+                    }
+                }
+                return jumps;
+            }
+
+            function isPlayerPiece(piece, player) {
+                if (player === Player.PLAYER1) return piece === Piece.PLAYER1 || piece === Piece.PLAYER1_KING;
+                return piece === Piece.PLAYER2 || piece === Piece.PLAYER2_KING;
+            }
+
+            function isValidSquare(row, col) {
+                return row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE;
+            }
+            
+            function executeMove(move) {
+                const { from, to, isJump, captured } = move;
+                const piece = board[from.row][from.col];
+
+                // Start animation
+                animatedPieces.push({
+                    piece: piece,
+                    from: { row: from.row, col: from.col },
+                    to: { row: to.row, col: to.col },
+                    progress: 0,
+                    speed: 0.05,
+                    onComplete: () => onMoveAnimationComplete(move)
+                });
+
+                board[from.row][from.col] = Piece.EMPTY;
+                
+                if (isJump) {
+                    board[captured.row][captured.col] = Piece.EMPTY;
+                    createParticleExplosion(captured.col, captured.row, currentPlayer === Player.PLAYER1 ? Player.PLAYER2 : Player.PLAYER1);
+                    playSound('capture');
+                }
+
+                selectedPiece = null;
+                validMoves = [];
+            }
+            
+            function onMoveAnimationComplete(move) {
+                const { to, isJump } = move;
+                let piece = board[to.row][to.col];
+
+                // Check for kinging
+                if ((piece === Piece.PLAYER1 && to.row === 0) || (piece === Piece.PLAYER2 && to.row === BOARD_SIZE - 1)) {
+                    board[to.row][to.col] = (piece === Piece.PLAYER1) ? Piece.PLAYER1_KING : Piece.PLAYER2_KING;
+                    createKingEffect(to.col, to.row);
+                    playSound('king');
+                }
+                
+                // Check for multi-jump
+                if (isJump) {
+                    const nextJumps = calculateValidMovesForPiece(to.row, to.col, board[to.row][to.col]).filter(m => m.isJump);
+                    if (nextJumps.length > 0) {
+                        selectPiece(to.row, to.col);
+                        // Force the player to make the next jump
+                        validMoves = nextJumps;
+                        mustJump = true;
+                        updateUI();
+                        return; // Don't switch player
+                    }
+                }
+
+                if (checkGameOver()) {
+                    return;
+                }
+
+                switchPlayer();
+                updateUI();
+            }
+
+            function switchPlayer() {
+                currentPlayer = (currentPlayer === Player.PLAYER1) ? Player.PLAYER2 : Player.PLAYER1;
+                const allJumps = findAllJumpsForPlayer(currentPlayer);
+                mustJump = allJumps.length > 0;
+            }
+            
+            function checkGameOver() {
+                let p1Pieces = 0;
+                let p2Pieces = 0;
+
+                for (let r = 0; r < BOARD_SIZE; r++) {
+                    for (let c = 0; c < BOARD_SIZE; c++) {
+                        const piece = board[r][c];
+                        if (isPlayerPiece(piece, Player.PLAYER1)) {
+                            p1Pieces++;
+                        } else if (isPlayerPiece(piece, Player.PLAYER2)) {
+                            p2Pieces++;
+                        }
+                    }
+                }
+
+                const p1HasMoves = findAllMovesForPlayer(Player.PLAYER1).length > 0;
+                const p2HasMoves = findAllMovesForPlayer(Player.PLAYER2).length > 0;
+                
+                let winner = null;
+                if (p1Pieces === 0 || !p1HasMoves) {
+                    winner = Player.PLAYER2;
+                } else if (p2Pieces === 0 || !p2HasMoves) {
+                    winner = Player.PLAYER1;
+                }
+                
+                if (winner) {
+                    gameState = GameState.GAME_OVER;
+                    gameOverScreen.classList.remove('hidden');
+                    winnerMessageEl.textContent = `${winner === Player.PLAYER1 ? '🔴 Red' : '⚫ Black'} Wins!`;
+                    playSound('win');
+                    return true;
+                }
+                return false;
+            }
+
+
+            function findAllMovesForPlayer(player) {
+                const moves = [];
+                for (let r = 0; r < BOARD_SIZE; r++) {
+                    for (let c = 0; c < BOARD_SIZE; c++) {
+                        const piece = board[r][c];
+                        if (piece !== Piece.EMPTY && isPlayerPiece(piece, player)) {
+                            moves.push(...calculateValidMovesForPiece(r, c, piece));
+                        }
+                    }
+                }
+                const jumps = moves.filter(m => m.isJump);
+                return jumps.length > 0 ? jumps : moves.filter(m => !m.isJump);
+            }
+
+            // --- UI & Effects ---
+            function updateUI() {
+                const counts = { player1: 0, player2: 0 };
+                for (let r = 0; r < BOARD_SIZE; r++) {
+                    for (let c = 0; c < BOARD_SIZE; c++) {
+                        const piece = board[r][c];
+                        if (piece === Piece.PLAYER1 || piece === Piece.PLAYER1_KING) counts.player1++;
+                        if (piece === Piece.PLAYER2 || piece === Piece.PLAYER2_KING) counts.player2++;
+                    }
+                }
+                score1El.textContent = `🔴: ${counts.player1}`;
+                score2El.textContent = `⚫: ${counts.player2}`;
+
+                if (currentPlayer === Player.PLAYER1) {
+                    turnIndicatorEl.textContent = "🔴's Turn";
+                    turnIndicatorEl.style.backgroundColor = 'rgba(200, 43, 29, 0.7)';
+                } else {
+                    turnIndicatorEl.textContent = "⚫'s Turn";
+                    turnIndicatorEl.style.backgroundColor = 'rgba(30, 30, 30, 0.7)';
+                }
+            }
+
+            function createParticleExplosion(col, row, player) {
+                const x = col * tileSize + tileSize / 2;
+                const y = row * tileSize + tileSize / 2;
+                const color = player === Player.PLAYER1 ? [200, 43, 29] : [30, 30, 30];
+                for (let i = 0; i < 30; i++) {
+                    particles.push({
+                        x, y,
+                        vx: (Math.random() - 0.5) * 4,
+                        vy: (Math.random() - 0.5) * 4,
+                        life: 50,
+                        maxLife: 50,
+                        size: Math.random() * 3 + 1,
+                        r: color[0], g: color[1], b: color[2]
+                    });
+                }
+            }
+            
+            function createKingEffect(col, row) {
+                const x = col * tileSize + tileSize / 2;
+                const y = row * tileSize + tileSize / 2;
+                for (let i = 0; i < 50; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = Math.random() * 2 + 1;
+                    particles.push({
+                        x, y,
+                        vx: Math.cos(angle) * speed,
+                        vy: Math.sin(angle) * speed,
+                        life: 60,
+                        maxLife: 60,
+                        size: Math.random() * 2 + 1,
+                        r: 255, g: 215, b: 0 // Gold
+                    });
+                }
+            }
+
+            // --- Event Listeners & Responsiveness ---
+            function handleResize() {
+                const size = Math.min(gameContainer.clientWidth, gameContainer.clientHeight);
+                canvas.width = size;
+                canvas.height = size;
+                tileSize = canvas.width / BOARD_SIZE;
+            }
+
+            window.addEventListener('resize', handleResize);
+            canvas.addEventListener('click', handleClick);
+            
+            startButton.addEventListener('click', () => {
+                initAudio();
+                initGame();
+            });
+            restartButton.addEventListener('click', initGame);
+
+            window.addEventListener('keydown', (e) => {
+                if (e.key === 'r' || e.key === 'R') {
+                    if (gameState === GameState.PLAYING || gameState === GameState.GAME_OVER) {
+                        initGame();
+                    }
+                }
+                if (e.key === 'Enter' && gameState === GameState.START_SCREEN) {
+                    initAudio();
+                    initGame();
+                }
+            });
+
+            // --- Initial Call ---
+            handleResize();
+            gameLoop();
+        });
+    </script>
+</body>
+</html>
