@@ -1,0 +1,8 @@
+{
+  "name": "Mind Spark 2",
+  "type": "memory card game",
+  "folder": "mind_spark_2",
+  "description": "Challenge your memory in a high-speed duel, racing to flip and match cards faster than your opponent. Unleash game-changing power-ups to reveal pairs, block your rival, and spark a stunning victory",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
