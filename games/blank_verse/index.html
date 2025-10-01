@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Blank Verse - A Hangman Game</title>
+    <style>
+        :root {
+            --bg-gradient-start: #1a237e;
+            --bg-gradient-end: #0d47a1;
+            --text-color: #e3f2fd;
+            --primary-color: #82b1ff;
+            --accent-color: #ff8a80;
+            --correct-color: #b9f6ca;
+            --font-family: 'Segoe UI', 'Roboto', 'Helvetica', sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: var(--font-family);
+            background: linear-gradient(135deg, var(--bg-gradient-start), var(--bg-gradient-end));
+            color: var(--text-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #game-container {
+            width: 100%;
+            max-width: 900px;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+        }
+
+        #game-header {
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 10px;
+        }
+
+        #game-title {
+            font-size: clamp(1.5rem, 4vw, 2.5rem);
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        #score-display {
+            font-size: clamp(1rem, 3vw, 1.5rem);
+            background: rgba(0,0,0,0.2);
+            padding: 5px 15px;
+            border-radius: 10px;
+        }
+
+        #canvas-container {
+            width: 100%;
+            position: relative;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            border-radius: 15px;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        }
+        
+        #instructions {
+            text-align: center;
+            font-size: clamp(0.8rem, 2vw, 1rem);
+            opacity: 0.8;
+            margin-top: -10px;
+        }
+
+        #keyboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(35px, 1fr));
+            gap: 5px;
+            width: 100%;
+            max-width: 600px;
+            padding: 10px;
+        }
+
+        .key {
+            font-family: var(--font-family);
+            font-weight: bold;
+            font-size: clamp(1rem, 3vw, 1.5rem);
+            aspect-ratio: 1 / 1;
+            border: none;
+            border-radius: 8px;
+            background-color: rgba(255, 255, 255, 0.1);
+            color: var(--text-color);
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .key:hover:not(:disabled) {
+            background-color: var(--primary-color);
+            color: var(--bg-gradient-start);
+            transform: translateY(-2px);
+        }
+
+        .key:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s ease, visibility 0.3s ease;
+        }
+
+        .modal-overlay.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .modal-content {
+            background: linear-gradient(135deg, var(--bg-gradient-end), var(--bg-gradient-start));
+            padding: 30px 40px;
+            border-radius: 20px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+            transform: scale(0.8);
+            transition: transform 0.3s ease;
+        }
+        
+        .modal-overlay.visible .modal-content {
+            transform: scale(1);
+        }
+
+        .modal-content h2 {
+            margin-top: 0;
+            font-size: clamp(2rem, 5vw, 3rem);
+            color: var(--primary-color);
+        }
+        
+        .modal-content p {
+            font-size: clamp(1rem, 3vw, 1.2rem);
+            margin-bottom: 25px;
+        }
+
+        .modal-button {
+            padding: 12px 30px;
+            font-size: clamp(1rem, 3vw, 1.2rem);
+            border: none;
+            border-radius: 10px;
+            background-color: var(--primary-color);
+            color: var(--bg-gradient-start);
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.2s ease;
+        }
+
+        .modal-button:hover {
+            background-color: #fff;
+            transform: scale(1.05);
+        }
+
+        .correct {
+            background-color: var(--correct-color) !important;
+            color: #000 !important;
+        }
+        
+        .incorrect {
+            background-color: var(--accent-color) !important;
+            color: #000 !important;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <div id="game-header">
+            <h1 id="game-title">Blank Verse</h1>
+            <div id="score-display">Score: 0</div>
+        </div>
+        <div id="canvas-container">
+            <canvas id="game-canvas"></canvas>
+        </div>
+        <p id="instructions">Use your keyboard or click the letters below to guess.</p>
+        <div id="keyboard"></div>
+    </div>
+    
+    <div id="start-modal" class="modal-overlay visible">
+        <div class="modal-content">
+            <h2>Welcome to Blank Verse!</h2>
+            <p>Guess the literary-themed word or phrase.<br>You have 6 wrong guesses. Good luck!</p>
+            <button id="start-button" class="modal-button">Start Game</button>
+        </div>
+    </div>
+
+    <div id="game-over-modal" class="modal-overlay">
+        <div class="modal-content">
+            <h2 id="game-over-title"></h2>
+            <p id="game-over-text"></p>
+            <button id="restart-button" class="modal-button">Play Again</button>
+        </div>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- DOM Elements ---
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        const keyboardDiv = document.getElementById('keyboard');
+        const scoreDisplay = document.getElementById('score-display');
+        const startModal = document.getElementById('start-modal');
+        const gameOverModal = document.getElementById('game-over-modal');
+        const startButton = document.getElementById('start-button');
+        const restartButton = document.getElementById('restart-button');
+        const gameOverTitle = document.getElementById('game-over-title');
+        const gameOverText = document.getElementById('game-over-text');
+        
+        // --- Game Constants ---
+        const wordList = [
+            "SHAKESPEARE", "HEMINGWAY", "TOLSTOY", "ORWELL", "DICKENS",
+            "MOBY DICK", "PRIDE AND PREJUDICE", "ULYSSES", "THE GREAT GATSBY",
+            "METAPHOR", "SIMILE", "ONOMATOPOEIA", "ALLITERATION", "SONNET",
+            "HAIKU", "EPIC POEM", "DRAMATIC IRONY", "TRAGIC FLAW", "PROTAGONIST",
+            "ANTAGONIST", "JANE AUSTEN", "EDGAR ALLAN POE", "MARK TWAIN",
+            "VIRGINIA WOOLF", "JAMES JOYCE", "LEO TOLSTOY", "FYODOR DOSTOEVSKY"
+        ];
+        const MAX_WRONG_GUESSES = 6;
+        const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+        // --- Game State ---
+        let gameState = 'start'; // 'start', 'playing', 'won', 'lost'
+        let currentWord = '';
+        let guessedLetters = new Set();
+        let wrongGuesses = 0;
+        let score = 0;
+        let lastTime = 0;
+        let animations = [];
+        let particles = [];
+
+        // --- Audio Context ---
+        let audioCtx;
+        
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+        
+        function playSound(type) {
+            if (!audioCtx) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+
+            switch (type) {
+                case 'correct':
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(600, audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(800, audioCtx.currentTime + 0.05);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.1);
+                    break;
+                case 'wrong':
+                    oscillator.type = 'square';
+                    oscillator.frequency.setValueAtTime(200, audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.1);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.2);
+                    break;
+                case 'win':
+                    playNote(880, 0, 0.1);
+                    playNote(1046.50, 0.1, 0.1);
+                    playNote(1318.51, 0.2, 0.2);
+                    return; // a bit more complex, handle separately
+                case 'lose':
+                     playNote(300, 0, 0.15);
+                     playNote(250, 0.15, 0.15);
+                     playNote(200, 0.3, 0.2);
+                    return;
+            }
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + 0.2);
+        }
+        
+        function playNote(frequency, startTime, duration) {
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            oscillator.type = 'triangle';
+            oscillator.frequency.value = frequency;
+            gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime + startTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + startTime + duration);
+            
+            oscillator.start(audioCtx.currentTime + startTime);
+            oscillator.stop(audioCtx.currentTime + startTime + duration);
+        }
+
+        // --- Canvas & Drawing ---
+        let scale;
+        function resizeCanvas() {
+            const container = document.getElementById('canvas-container');
+            const { width } = container.getBoundingClientRect();
+            // Maintain a 4:3 aspect ratio
+            const height = width * 0.75;
+            canvas.style.width = `${width}px`;
+            canvas.style.height = `${height}px`;
+
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = width * dpr;
+            canvas.height = height * dpr;
+            
+            scale = canvas.width / 800; // Base width of 800 for calculations
+        }
+
+        function clearCanvas() {
+            // Use the unscaled width/height for clearing
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
+        function drawGallows() {
+            ctx.save();
+            ctx.strokeStyle = varToCss('--text-color');
+            ctx.lineWidth = 10 * scale;
+            ctx.lineCap = 'round';
+
+            // Base
+            ctx.beginPath();
+            ctx.moveTo(100 * scale, 550 * scale);
+            ctx.lineTo(300 * scale, 550 * scale);
+            // Post
+            ctx.moveTo(150 * scale, 550 * scale);
+            ctx.lineTo(150 * scale, 100 * scale);
+            // Beam
+            ctx.lineTo(400 * scale, 100 * scale);
+            // Rope
+            ctx.lineTo(400 * scale, 180 * scale);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        function drawHangman() {
+            ctx.save();
+            ctx.strokeStyle = varToCss('--primary-color');
+            ctx.fillStyle = varToCss('--primary-color');
+            ctx.lineWidth = 6 * scale;
+            ctx.lineCap = 'round';
+
+            const parts = [
+                () => { // Head
+                    ctx.save();
+                    ctx.font = `${60 * scale}px sans-serif`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('😟', 400 * scale, 210 * scale);
+                    ctx.restore();
+                },
+                () => { // Body
+                    ctx.beginPath();
+                    ctx.moveTo(400 * scale, 240 * scale);
+                    ctx.lineTo(400 * scale, 380 * scale);
+                    ctx.stroke();
+                },
+                () => { // Left Arm
+                    ctx.beginPath();
+                    ctx.moveTo(400 * scale, 280 * scale);
+                    ctx.lineTo(320 * scale, 350 * scale);
+                    ctx.stroke();
+                },
+                () => { // Right Arm
+                    ctx.beginPath();
+                    ctx.moveTo(400 * scale, 280 * scale);
+                    ctx.lineTo(480 * scale, 350 * scale);
+                    ctx.stroke();
+                },
+                () => { // Left Leg
+                    ctx.beginPath();
+                    ctx.moveTo(400 * scale, 380 * scale);
+                    ctx.lineTo(340 * scale, 480 * scale);
+                    ctx.stroke();
+                },
+                () => { // Right Leg
+                    ctx.beginPath();
+                    ctx.moveTo(400 * scale, 380 * scale);
+                    ctx.lineTo(460 * scale, 480 * scale);
+                    ctx.stroke();
+                }
+            ];
+
+            for (let i = 0; i < wrongGuesses; i++) {
+                const animation = animations[i];
+                if (animation && animation.progress < 1) {
+                    ctx.globalAlpha = easeOutCubic(animation.progress);
+                    ctx.save();
+                    ctx.translate(0, (1 - easeOutBounce(animation.progress)) * -50 * scale);
+                    parts[i]();
+                    ctx.restore();
+                } else if (!animation || animation.progress >= 1) {
+                    parts[i]();
+                }
+            }
+            ctx.restore();
+        }
+
+        function drawWord() {
+            ctx.save();
+            ctx.fillStyle = varToCss('--text-color');
+            const logicalFontSize = Math.min(50, 700 / currentWord.length);
+            ctx.font = `bold ${logicalFontSize * scale}px ${varToCss('--font-family')}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            let displayWord = '';
+            for (const char of currentWord) {
+                if (char === ' ') {
+                    displayWord += '  ';
+                } else if (guessedLetters.has(char)) {
+                    displayWord += char + ' ';
+                } else {
+                    displayWord += '_ ';
+                }
+            }
+            ctx.fillText(displayWord.trim(), 400 * scale, 500 * scale);
+            ctx.restore();
+        }
+        
+        function drawParticles() {
+            particles.forEach(p => {
+                p.alpha = Math.max(0, p.alpha - 0.01);
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vy += 0.1 * scale; // gravity
+
+                ctx.save();
+                ctx.globalAlpha = p.alpha;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            });
+            particles = particles.filter(p => p.alpha > 0);
+        }
+
+        function createConfetti() {
+            const colors = ['#82b1ff', '#ff8a80', '#b9f6ca', '#ffff8d'];
+            for (let i = 0; i < 100; i++) {
+                particles.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * -canvas.height,
+                    vx: (Math.random() - 0.5) * 10 * scale,
+                    vy: (Math.random()) * 10 * scale,
+                    size: (Math.random() * 6 + 2) * scale,
+                    color: colors[Math.floor(Math.random() * colors.length)],
+                    alpha: 1
+                });
+            }
+        }
+        
+        // --- Game Logic ---
+        function setupKeyboard() {
+            keyboardDiv.innerHTML = '';
+            for (const letter of ALPHABET) {
+                const key = document.createElement('button');
+                key.classList.add('key');
+                key.textContent = letter;
+                key.dataset.letter = letter;
+                keyboardDiv.appendChild(key);
+            }
+        }
+
+        function updateKeyboard() {
+            const keys = document.querySelectorAll('.key');
+            keys.forEach(key => {
+                const letter = key.dataset.letter;
+                key.disabled = guessedLetters.has(letter);
+                key.classList.remove('correct', 'incorrect');
+                if (guessedLetters.has(letter)) {
+                    if (currentWord.includes(letter)) {
+                        key.classList.add('correct');
+                    } else {
+                        key.classList.add('incorrect');
+                    }
+                }
+            });
+        }
+
+        function startGame() {
+            gameState = 'playing';
+            guessedLetters.clear();
+            wrongGuesses = 0;
+            currentWord = wordList[Math.floor(Math.random() * wordList.length)];
+            animations = [];
+            particles = [];
+
+            updateKeyboard();
+            gameOverModal.classList.remove('visible');
+        }
+        
+        function handleGuess(letter) {
+            if (gameState !== 'playing' || guessedLetters.has(letter)) {
+                return;
+            }
+
+            guessedLetters.add(letter);
+
+            if (currentWord.includes(letter)) {
+                playSound('correct');
+            } else {
+                wrongGuesses++;
+                playSound('wrong');
+                animations[wrongGuesses - 1] = { progress: 0, startTime: performance.now() };
+            }
+
+            updateKeyboard();
+            checkGameState();
+        }
+
+        function checkGameState() {
+            // Check for win
+            const wordRevealed = currentWord.split('').every(char => char === ' ' || guessedLetters.has(char));
+            if (wordRevealed) {
+                gameState = 'won';
+                score += 100;
+                scoreDisplay.textContent = `Score: ${score}`;
+                playSound('win');
+                createConfetti();
+                setTimeout(() => showGameOver(true), 1500);
+            }
+
+            // Check for loss
+            if (wrongGuesses >= MAX_WRONG_GUESSES) {
+                gameState = 'lost';
+                if (score > 0) {
+                    score = Math.max(0, score - 50);
+                    scoreDisplay.textContent = `Score: ${score}`;
+                }
+                playSound('lose');
+                setTimeout(() => showGameOver(false), 1500);
+            }
+        }
+        
+        function showGameOver(isWin) {
+            if (isWin) {
+                gameOverTitle.textContent = 'You Won!';
+                gameOverText.innerHTML = `Congratulations! You guessed it:<br><strong>${currentWord}</strong>`;
+            } else {
+                gameOverTitle.textContent = 'Game Over';
+                gameOverText.innerHTML = `The word was:<br><strong>${currentWord}</strong>`;
+            }
+            gameOverModal.classList.add('visible');
+        }
+
+        // --- Event Listeners ---
+        function setupEventListeners() {
+            keyboardDiv.addEventListener('click', (e) => {
+                if (e.target.classList.contains('key')) {
+                    handleGuess(e.target.dataset.letter);
+                }
+            });
+
+            window.addEventListener('keydown', (e) => {
+                if (gameState === 'playing' && e.key.match(/^[a-zA-Z]$/)) {
+                    handleGuess(e.key.toUpperCase());
+                }
+            });
+
+            startButton.addEventListener('click', () => {
+                initAudio();
+                startModal.classList.remove('visible');
+                startGame();
+            });
+
+            restartButton.addEventListener('click', () => {
+                startGame();
+            });
+
+            window.addEventListener('resize', () => {
+                resizeCanvas();
+                // A one-off draw call on resize can prevent flickering
+                draw(performance.now()); 
+            });
+        }
+        
+        // --- Animation Loop ---
+        function update(timestamp) {
+            const deltaTime = (timestamp - lastTime) / 1000;
+            lastTime = timestamp;
+
+            animations.forEach(anim => {
+                if (anim.progress < 1) {
+                    anim.progress = Math.min(1, anim.progress + deltaTime * 2); // 0.5 second animation
+                }
+            });
+        }
+        
+        function draw(timestamp) {
+            clearCanvas();
+            
+            if (gameState === 'lost') {
+                const animStartTime = animations[MAX_WRONG_GUESSES-1]?.startTime;
+                if(animStartTime) {
+                    const lostProgress = Math.min(1, (timestamp - animStartTime - 500) / 1000);
+                    if (lostProgress > 0) {
+                        ctx.save();
+                        ctx.globalAlpha = lostProgress * 0.3;
+                        ctx.fillStyle = varToCss('--accent-color');
+                        ctx.fillRect(0, 0, canvas.width, canvas.height);
+                        ctx.restore();
+                    }
+                }
+            }
+
+            drawGallows();
+            drawHangman();
+            drawWord();
+            drawParticles();
+        }
+        
+        function gameLoop(timestamp) {
+            if (!lastTime) lastTime = timestamp;
+            update(timestamp);
+            draw(timestamp);
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- Utility ---
+        function varToCss(name) {
+            return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+        }
+        function easeOutCubic(t) { return (--t)*t*t+1; }
+        function easeOutBounce(t) {
+            const n1 = 7.5625;
+            const d1 = 2.75;
+            if (t < 1 / d1) { return n1 * t * t; }
+            else if (t < 2 / d1) { return n1 * (t -= 1.5 / d1) * t + 0.75; }
+            else if (t < 2.5 / d1) { return n1 * (t -= 2.25 / d1) * t + 0.9375; }
+            else { return n1 * (t -= 2.625 / d1) * t + 0.984375; }
+        }
+
+        // --- Initialization ---
+        function init() {
+            resizeCanvas();
+            setupKeyboard();
+            setupEventListeners();
+            requestAnimationFrame(gameLoop);
+        }
+
+        init();
+    });
+    </script>
+</body>
+</html>
