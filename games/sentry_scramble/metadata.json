@@ -1,0 +1,8 @@
+{
+  "name": "Sentry Scramble",
+  "type": "tower defense",
+  "folder": "sentry_scramble",
+  "description": "Unleash a devastating arsenal of sentries, then scramble your defenses in real-time to counter ever-changing enemy swarms. This is a high-speed tower defense where quick thinking and constant adaptation are your only path to survival.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
