@@ -1,0 +1,999 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tome Tussle</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: linear-gradient(135deg, #1d2b4f, #4a0e4e);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        canvas {
+            display: block;
+            background: #000;
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
+        }
+        #game-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+<script>
+// --- Polyfill for requestAnimationFrame ---
+window.requestAnimationFrame = window.requestAnimationFrame || window.webkitRequestAnimationFrame || window.mozRequestAnimationFrame || function(callback) { window.setTimeout(callback, 1000 / 60); };
+
+// --- Main Game Code ---
+document.addEventListener('DOMContentLoaded', () => {
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // --- Audio Synthesis Engine ---
+    class AudioFX {
+        constructor() {
+            this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+
+        play(sound) {
+            if (!this.ctx) return;
+            const oscillator = this.ctx.createOscillator();
+            const gainNode = this.ctx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(this.ctx.destination);
+            
+            let freq = 440, duration = 0.1, type = 'sine', volume = 0.3;
+
+            switch(sound) {
+                case 'click': freq = 600; duration = 0.05; type = 'triangle'; break;
+                case 'draw': freq = 500; duration = 0.1; type = 'sine'; volume = 0.2; break;
+                case 'play': freq = 800; duration = 0.2; type = 'sawtooth'; break;
+                case 'attack': freq = 200; duration = 0.2; type = 'square'; break;
+                case 'damage': freq = 150; duration = 0.3; type = 'square'; volume = 0.4; break;
+                case 'death': freq = 100; duration = 0.4; type = 'sawtooth'; volume = 0.5; break;
+                case 'win': freq = 1000; duration = 0.5; type = 'sine'; break;
+                case 'lose': freq = 300; duration = 0.8; type = 'sawtooth'; break;
+            }
+
+            oscillator.type = type;
+            oscillator.frequency.setValueAtTime(freq, this.ctx.currentTime);
+            gainNode.gain.setValueAtTime(volume, this.ctx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
+            oscillator.start();
+            oscillator.stop(this.ctx.currentTime + duration);
+        }
+    }
+    const audio = new AudioFX();
+
+    // --- Card Definitions ---
+    const CARD_LIBRARY = [
+        { name: 'Scroll Sprite', cost: 1, attack: 1, health: 1, emoji: '📜', description: '' },
+        { name: 'Arcane Wisp', cost: 1, attack: 2, health: 1, emoji: '✨', description: '' },
+        { name: 'Bookworm', cost: 2, attack: 2, health: 2, emoji: '🐛', description: '' },
+        { name: 'Swift Gryphon', cost: 2, attack: 2, health: 1, emoji: '🦅', description: 'Charge', abilities: ['charge'] },
+        { name: 'Stone Sentinel', cost: 3, attack: 2, health: 4, emoji: '🗿', description: 'Taunt', abilities: ['taunt'] },
+        { name: 'Ink Elemental', cost: 3, attack: 3, health: 3, emoji: '💧', description: '' },
+        { name: 'Tome Golem', cost: 4, attack: 4, health: 5, emoji: '📙', description: '' },
+        { name: 'Rune Guardian', cost: 5, attack: 5, health: 5, emoji: '🛡️', description: 'Taunt', abilities: ['taunt'] },
+        { name: 'Library Dragon', cost: 6, attack: 6, health: 6, emoji: '🐉', description: '' },
+        { name: 'Archmage', cost: 7, attack: 7, health: 7, emoji: '🧙', description: '' }
+    ];
+
+    // --- Game Configuration ---
+    let CONFIG = {
+        baseWidth: 1920,
+        baseHeight: 1080,
+        scale: 1,
+        width: 0,
+        height: 0,
+    };
+
+    let mouse = { x: 0, y: 0, clicked: false };
+    let gameState = 'start'; // start, playerTurn, aiTurn, gameOver
+    
+    // --- Utility Functions ---
+    const lerp = (a, b, t) => a + (b - a) * t;
+    const easeOutCubic = t => 1 - Math.pow(1 - t, 3);
+    const random = (min, max) => Math.random() * (max - min) + min;
+
+    // --- Classes ---
+    class Particle {
+        constructor(x, y, color) {
+            this.x = x;
+            this.y = y;
+            this.color = color;
+            this.size = random(3, 8);
+            this.life = 1;
+            this.vx = random(-3, 3);
+            this.vy = random(-5, -1);
+            this.gravity = 0.2;
+        }
+
+        update() {
+            this.life -= 0.03;
+            this.vy += this.gravity;
+            this.x += this.vx;
+            this.y += this.vy;
+        }
+
+        draw(ctx) {
+            ctx.globalAlpha = this.life > 0 ? this.life : 0;
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+    }
+
+    class Card {
+        constructor(def, owner) {
+            this.id = Math.random();
+            this.def = def;
+            this.owner = owner;
+            this.x = 0; this.y = 0;
+            this.targetX = 0; this.targetY = 0;
+            this.rotation = 0;
+            this.targetRotation = 0;
+            this.hovered = false;
+        }
+        
+        get cost() { return this.def.cost; }
+        get name() { return this.def.name; }
+        get attack() { return this.def.attack; }
+        get health() { return this.def.health; }
+        get emoji() { return this.def.emoji; }
+        get description() { return this.def.description; }
+        get abilities() { return this.def.abilities || []; }
+
+        update() {
+            this.x = lerp(this.x, this.targetX, 0.1);
+            this.y = lerp(this.y, this.targetY, 0.1);
+            this.rotation = lerp(this.rotation, this.targetRotation, 0.1);
+        }
+
+        draw(ctx, isSelected = false) {
+            const S = CONFIG.scale;
+            const w = 150 * S, h = 210 * S;
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.rotate(this.rotation);
+            
+            // Card shadow
+            ctx.shadowColor = 'rgba(0,0,0,0.5)';
+            ctx.shadowBlur = 20 * S;
+            ctx.shadowOffsetX = 5 * S;
+            ctx.shadowOffsetY = 5 * S;
+            
+            // Card body
+            const gradient = ctx.createLinearGradient(-w/2, -h/2, w/2, h/2);
+            gradient.addColorStop(0, '#e0eafc');
+            gradient.addColorStop(1, '#cfdef3');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(-w/2, -h/2, w, h);
+            
+            // Border
+            const canPlay = this.owner.isPlayer && this.owner.mana >= this.cost;
+            ctx.strokeStyle = isSelected ? '#ffcc00' : (canPlay ? '#4CAF50' : '#888');
+            ctx.lineWidth = isSelected ? 8 * S : (canPlay ? 6 * S : 4 * S);
+            ctx.strokeRect(-w/2, -h/2, w, h);
+            ctx.shadowColor = 'transparent';
+
+            // Cost
+            ctx.fillStyle = '#2196F3';
+            ctx.beginPath();
+            ctx.arc(-w/2 + 25 * S, -h/2 + 25 * S, 20 * S, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${28 * S}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(this.cost, -w/2 + 25 * S, -h/2 + 26 * S);
+
+            // Emoji Art
+            ctx.font = `${60 * S}px Arial`;
+            ctx.fillText(this.emoji, 0, -10 * S);
+
+            // Name
+            ctx.fillStyle = '#333';
+            ctx.font = `bold ${20 * S}px Arial`;
+            ctx.fillText(this.name, 0, h/2 - 65 * S);
+
+            // Description
+            if(this.description) {
+                ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                ctx.font = `italic ${16 * S}px Arial`;
+                ctx.fillText(this.description, 0, h/2 - 40 * S);
+            }
+
+            // Stats
+            if (this.attack !== undefined) {
+                // Attack
+                ctx.fillStyle = '#f44336';
+                ctx.beginPath();
+                ctx.arc(-w/2 + 25 * S, h/2 - 25 * S, 20 * S, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = 'white';
+                ctx.font = `bold ${24 * S}px Arial`;
+                ctx.fillText(this.attack, -w/2 + 25 * S, h/2 - 24 * S);
+                // Health
+                ctx.fillStyle = '#4CAF50';
+                ctx.beginPath();
+                ctx.arc(w/2 - 25 * S, h/2 - 25 * S, 20 * S, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = 'white';
+                ctx.font = `bold ${24 * S}px Arial`;
+                ctx.fillText(this.health, w/2 - 25 * S, h/2 - 24 * S);
+            }
+
+            ctx.restore();
+        }
+    }
+
+    class Minion extends Card {
+        constructor(card, owner) {
+            super(card.def, owner);
+            this.maxHealth = card.health;
+            this.currentHealth = card.health;
+            this.damage = card.attack;
+            this.isExhausted = !this.abilities.includes('charge'); // Minions have summoning sickness unless they have Charge.
+            this.isDead = false;
+        }
+
+        takeDamage(amount) {
+            this.currentHealth -= amount;
+            game.addDamageEffect(this.x, this.y, amount);
+            if (this.currentHealth <= 0) {
+                this.isDead = true;
+                audio.play('death');
+            } else {
+                audio.play('damage');
+            }
+        }
+
+        onTurnStart() {
+            this.isExhausted = false;
+        }
+
+        draw(ctx, isSelected = false) {
+            const S = CONFIG.scale;
+            const w = 120 * S, h = 140 * S;
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            
+            const canAttackNow = !this.isExhausted && this.owner.isPlayer && gameState === 'playerTurn';
+            const hasTaunt = this.abilities.includes('taunt');
+
+            if (isSelected) {
+                ctx.shadowColor = '#ffcc00';
+                ctx.shadowBlur = 30 * S;
+            } else if (canAttackNow) {
+                ctx.shadowColor = '#4CAF50';
+                ctx.shadowBlur = 20 * S;
+            } else {
+                ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                ctx.shadowBlur = 15 * S;
+            }
+
+            // Minion body
+            ctx.fillStyle = hasTaunt ? '#c1a57b' : '#a7c5eb';
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 4 * S;
+
+            ctx.beginPath();
+            if (hasTaunt) {
+                // Shield shape for taunt
+                ctx.moveTo(-w/2, -h/2 + 20*S);
+                ctx.lineTo(0, -h/2);
+                ctx.lineTo(w/2, -h/2 + 20*S);
+                ctx.lineTo(w/2, h/2 - 20*S);
+                ctx.quadraticCurveTo(w/2, h/2, 0, h/2 + 10*S);
+                ctx.quadraticCurveTo(-w/2, h/2, -w/2, h/2-20*S);
+                ctx.closePath();
+            } else {
+                 ctx.rect(-w/2, -h/2, w, h);
+            }
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.shadowColor = 'transparent';
+
+            // Emoji Art
+            ctx.font = `${50 * S}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(this.emoji, 0, 0);
+            if (this.isExhausted) {
+                ctx.fillStyle = 'rgba(0,0,0,0.3)';
+                ctx.fillRect(-w/2, -h/2, w, h);
+            }
+
+            // Stats
+            ctx.fillStyle = '#f44336';
+            ctx.beginPath();
+            ctx.arc(-w/2 + 20 * S, h/2 - 20 * S, 18 * S, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${22 * S}px Arial`;
+            ctx.fillText(this.damage, -w/2 + 20 * S, h/2 - 19 * S);
+            
+            ctx.fillStyle = this.currentHealth < this.maxHealth ? '#ffeb3b' : '#4CAF50';
+            ctx.beginPath();
+            ctx.arc(w/2 - 20 * S, h/2 - 20 * S, 18 * S, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${22 * S}px Arial`;
+            ctx.fillText(this.currentHealth, w/2 - 20 * S, h/2 - 19 * S);
+            
+            ctx.restore();
+        }
+    }
+
+    class Player {
+        constructor(isPlayer = true) {
+            this.isPlayer = isPlayer;
+            this.health = 30;
+            this.maxHealth = 30;
+            this.mana = 0;
+            this.maxMana = 0;
+            this.deck = [];
+            this.hand = [];
+            this.board = [];
+            this.x = CONFIG.width / 2;
+            this.y = isPlayer ? CONFIG.height - 100 * CONFIG.scale : 100 * CONFIG.scale;
+        }
+
+        shuffleDeck() {
+            for (let i = this.deck.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [this.deck[i], this.deck[j]] = [this.deck[j], this.deck[i]];
+            }
+        }
+
+        drawCard() {
+            if (this.deck.length > 0 && this.hand.length < 10) {
+                const card = this.deck.pop();
+                this.hand.push(card);
+                audio.play('draw');
+                game.repositionHand();
+            }
+        }
+
+        takeDamage(amount) {
+            this.health -= amount;
+            game.addDamageEffect(this.x, this.y, amount, '#ff0000');
+            audio.play('damage');
+            if(this.health <= 0) {
+                this.health = 0;
+                gameState = 'gameOver';
+                audio.play(this.isPlayer ? 'lose' : 'win');
+            }
+        }
+    }
+
+    class Game {
+        constructor() {
+            this.particles = [];
+            this.damageTexts = [];
+            this.selectedCard = null;
+            this.selectedMinion = null;
+            this.endTurnButton = {};
+            this.turn = 0;
+            this.init();
+        }
+
+        init() {
+            this.resize();
+            
+            this.player = new Player(true);
+            this.ai = new Player(false);
+
+            this.endTurnButton = {
+                x: CONFIG.width - 200 * CONFIG.scale,
+                y: CONFIG.height / 2,
+                w: 180 * CONFIG.scale,
+                h: 80 * CONFIG.scale,
+                text: 'End Turn',
+                color: '#f44336'
+            };
+            
+            window.addEventListener('resize', this.resize.bind(this));
+            canvas.addEventListener('mousemove', this.handleMouseMove.bind(this));
+            canvas.addEventListener('mousedown', this.handleMouseDown.bind(this));
+            window.addEventListener('keydown', this.handleKeyDown.bind(this));
+        }
+
+        startGame() {
+            this.turn = 0;
+            this.player = new Player(true);
+            this.ai = new Player(false);
+            
+            // Build decks
+            for (let i = 0; i < 30; i++) {
+                this.player.deck.push(new Card(CARD_LIBRARY[Math.floor(Math.random() * CARD_LIBRARY.length)], this.player));
+                this.ai.deck.push(new Card(CARD_LIBRARY[Math.floor(Math.random() * CARD_LIBRARY.length)], this.ai));
+            }
+            this.player.shuffleDeck();
+            this.ai.shuffleDeck();
+
+            // Initial draw
+            for (let i = 0; i < 3; i++) {
+                this.player.drawCard();
+                this.ai.drawCard();
+            }
+            
+            gameState = 'playerTurn';
+            this.startTurn(this.player);
+        }
+
+        startTurn(player) {
+            this.turn++;
+            player.maxMana = Math.min(10, Math.floor(this.turn / 2) + 1); // Each player gets a turn at each mana level
+            player.mana = player.maxMana;
+            player.board.forEach(minion => minion.onTurnStart());
+            player.drawCard();
+        }
+
+        nextTurn() {
+            this.selectedCard = null;
+            this.selectedMinion = null;
+
+            if (gameState === 'playerTurn') {
+                gameState = 'aiTurn';
+                this.startTurn(this.ai);
+                setTimeout(() => this.runAI(), 1000);
+            } else {
+                gameState = 'playerTurn';
+                this.startTurn(this.player);
+            }
+        }
+
+        runAI() {
+            if (gameState !== 'aiTurn') return;
+            
+            let aiActions = [];
+
+            // AI plays cards
+            this.ai.hand.forEach(card => {
+                if (this.ai.mana >= card.cost && this.ai.board.length < 7) {
+                    aiActions.push({ type: 'playCard', card: card });
+                }
+            });
+
+            // AI attacks
+            this.ai.board.forEach(minion => {
+                if (!minion.isExhausted) {
+                    let target = null;
+                    const playerTauntMinions = this.player.board.filter(m => m.abilities.includes('taunt'));
+                    
+                    if (playerTauntMinions.length > 0) {
+                        target = playerTauntMinions[Math.floor(Math.random() * playerTauntMinions.length)];
+                    } else {
+                        // Simple logic: attack minions it can kill, otherwise go face
+                        const killableMinions = this.player.board.filter(m => m.currentHealth <= minion.damage);
+                        if(killableMinions.length > 0) {
+                            target = killableMinions[Math.floor(Math.random() * killableMinions.length)];
+                        } else if (this.player.board.length > 0 && Math.random() > 0.5) {
+                            target = this.player.board[Math.floor(Math.random() * this.player.board.length)];
+                        } else {
+                            target = this.player;
+                        }
+                    }
+                    if (target) {
+                        aiActions.push({ type: 'attack', attacker: minion, target: target });
+                    }
+                }
+            });
+
+            const processNextAction = () => {
+                if (aiActions.length === 0 || gameState !== 'aiTurn') {
+                    setTimeout(() => this.nextTurn(), 1000);
+                    return;
+                }
+                const action = aiActions.shift();
+                
+                if (action.type === 'playCard') {
+                    if(this.ai.mana >= action.card.cost && this.ai.board.length < 7) {
+                        this.playCard(this.ai, action.card, this.ai.board.length);
+                    }
+                } else if (action.type === 'attack') {
+                    if(!action.attacker.isDead && !(action.target.isDead)) {
+                         this.performAttack(action.attacker, action.target);
+                    }
+                }
+                setTimeout(processNextAction, 800);
+            };
+
+            processNextAction();
+        }
+
+        playCard(player, card, boardIndex) {
+            if (player.mana >= card.cost && player.board.length < 7) {
+                player.mana -= card.cost;
+                player.hand = player.hand.filter(c => c.id !== card.id);
+                const newMinion = new Minion(card, player);
+                player.board.splice(boardIndex, 0, newMinion);
+                audio.play('play');
+                this.repositionBoard(this.player);
+                this.repositionBoard(this.ai);
+                this.repositionHand();
+            }
+        }
+        
+        performAttack(attacker, target) {
+            if (attacker.isExhausted || attacker.isDead) return;
+
+            attacker.isExhausted = true;
+            audio.play('attack');
+            
+            const startX = attacker.x;
+            const startY = attacker.y;
+            const endX = target.x;
+            const endY = target.y;
+            let progress = 0;
+            
+            const attackAnim = () => {
+                progress += 0.1;
+                const easedProgress = easeOutCubic(progress);
+                
+                if (progress < 1) {
+                    const backAndForth = Math.sin(easedProgress * Math.PI);
+                    attacker.x = lerp(startX, endX, backAndForth);
+                    attacker.y = lerp(startY, endY, backAndForth);
+                    requestAnimationFrame(attackAnim);
+                } else {
+                    attacker.x = startX;
+                    attacker.y = startY;
+
+                    target.takeDamage(attacker.damage);
+                    if (target instanceof Minion) {
+                        attacker.takeDamage(target.damage);
+                    }
+                    this.cleanupDeadMinions();
+                }
+            };
+            attackAnim();
+        }
+
+        cleanupDeadMinions() {
+            this.player.board = this.player.board.filter(m => !m.isDead);
+            this.ai.board = this.ai.board.filter(m => !m.isDead);
+            this.repositionBoard(this.player);
+            this.repositionBoard(this.ai);
+        }
+
+        repositionHand() {
+            const S = CONFIG.scale;
+            const handWidth = this.player.hand.length * 100 * S;
+            const startX = CONFIG.width / 2 - handWidth / 2;
+            
+            this.player.hand.forEach((card, i) => {
+                card.targetX = startX + i * 110 * S + 55 * S;
+                card.targetY = CONFIG.height - 120 * S;
+                if (card.hovered) {
+                    card.targetY -= 30 * S;
+                }
+                card.targetRotation = (i - (this.player.hand.length - 1) / 2) * 0.05;
+            });
+        }
+        
+        repositionBoard(player) {
+            const S = CONFIG.scale;
+            const boardWidth = player.board.length * 130 * S;
+            const startX = CONFIG.width / 2 - boardWidth / 2;
+            const yPos = player.isPlayer ? CONFIG.height / 2 + 100 * S : CONFIG.height / 2 - 100 * S;
+
+            player.board.forEach((minion, i) => {
+                minion.targetX = startX + i * 140 * S + 70 * S;
+                minion.targetY = yPos;
+            });
+        }
+
+        addDamageEffect(x, y, amount, color = '#fff') {
+            this.damageTexts.push({ x, y, text: `-${amount}`, life: 1, color });
+            for(let i=0; i<10; i++) {
+                this.particles.push(new Particle(x, y, '#ffc107'));
+            }
+        }
+
+        resize() {
+            const container = document.getElementById('game-container');
+            const aspectRatio = CONFIG.baseWidth / CONFIG.baseHeight;
+            let newWidth = container.clientWidth;
+            let newHeight = container.clientHeight;
+            
+            if (newWidth / newHeight > aspectRatio) {
+                newWidth = newHeight * aspectRatio;
+            } else {
+                newHeight = newWidth / aspectRatio;
+            }
+
+            canvas.width = newWidth;
+            canvas.height = newHeight;
+            CONFIG.width = newWidth;
+            CONFIG.height = newHeight;
+            CONFIG.scale = newWidth / CONFIG.baseWidth;
+            
+            if (this.player) { // Ensure player exists before repositioning
+                this.player.y = CONFIG.height - 100 * CONFIG.scale;
+                this.ai.y = 100 * CONFIG.scale;
+                this.repositionHand();
+                this.repositionBoard(this.player);
+                this.repositionBoard(this.ai);
+            }
+            if(this.endTurnButton) {
+                this.endTurnButton.w = 180 * CONFIG.scale;
+                this.endTurnButton.h = 80 * CONFIG.scale;
+                this.endTurnButton.x = CONFIG.width - 200 * CONFIG.scale;
+                this.endTurnButton.y = CONFIG.height/2 - this.endTurnButton.h/2;
+            }
+        }
+
+        handleMouseMove(e) {
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = (e.clientX - rect.left);
+            mouse.y = (e.clientY - rect.top);
+
+            if (gameState !== 'playerTurn' && gameState !== 'start') return;
+
+            this.player.hand.forEach(card => {
+                const S = CONFIG.scale;
+                const w = 150 * S, h = 210 * S;
+                card.hovered = mouse.x > card.x - w/2 && mouse.x < card.x + w/2 &&
+                               mouse.y > card.y - h/2 && mouse.y < card.y + h/2;
+            });
+            this.repositionHand();
+        }
+
+        handleMouseDown() {
+            if (gameState === 'start' || gameState === 'gameOver') {
+                gameState = 'loading';
+                setTimeout(() => this.startGame(), 200);
+                return;
+            }
+            if (gameState !== 'playerTurn') return;
+            
+            if (this.ctx && this.ctx.state === 'suspended') {
+                 audio.ctx.resume(); // For browser autoplay policies
+            }
+            audio.play('click');
+            
+            const S = CONFIG.scale;
+            // Check End Turn Button
+            if (mouse.x > this.endTurnButton.x && mouse.x < this.endTurnButton.x + this.endTurnButton.w &&
+                mouse.y > this.endTurnButton.y && mouse.y < this.endTurnButton.y + this.endTurnButton.h) {
+                this.nextTurn();
+                return;
+            }
+            
+            // Player hero click (for deselect)
+            const playerY = CONFIG.height - 100 * S;
+            if(mouse.y > playerY - 50*S && mouse.y < playerY + 50*S) {
+              if(this.selectedCard) this.selectedCard = null;
+              if(this.selectedMinion) this.selectedMinion = null;
+            }
+
+            // Click on a card in hand
+            let cardClicked = false;
+            this.player.hand.slice().reverse().forEach(card => {
+                if(cardClicked) return;
+                const w = 150 * S, h = 210 * S;
+                if (mouse.x > card.x - w/2 && mouse.x < card.x + w/2 &&
+                    mouse.y > card.y - h/2 && mouse.y < card.y + h/2) {
+                    if (this.player.mana >= card.cost) {
+                        this.selectedCard = card;
+                        this.selectedMinion = null;
+                    }
+                    cardClicked = true;
+                }
+            });
+            if(cardClicked) return;
+
+            // Click to play a card
+            if (this.selectedCard && this.player.board.length < 7) {
+                const playerBoardY = CONFIG.height / 2 + 100 * S;
+                if (mouse.y > playerBoardY - 70 * S && mouse.y < playerBoardY + 70 * S) {
+                    let boardIndex = this.player.board.length;
+                    for(let i=0; i < this.player.board.length; i++) {
+                        if (mouse.x < this.player.board[i].x) {
+                            boardIndex = i;
+                            break;
+                        }
+                    }
+                    this.playCard(this.player, this.selectedCard, boardIndex);
+                    this.selectedCard = null;
+                    return;
+                }
+            }
+
+            // Click on a minion to attack with
+            let minionClicked = false;
+            this.player.board.forEach(minion => {
+                const w = 120 * S, h = 140 * S;
+                if (!minion.isExhausted &&
+                    mouse.x > minion.x - w/2 && mouse.x < minion.x + w/2 &&
+                    mouse.y > minion.y - h/2 && mouse.y < minion.y + h/2) {
+                        this.selectedMinion = minion;
+                        this.selectedCard = null;
+                        minionClicked = true;
+                }
+            });
+            if (minionClicked) return;
+
+            // Click on a target to attack
+            if (this.selectedMinion) {
+                let target = null;
+                const aiTauntMinions = this.ai.board.filter(m => m.abilities.includes('taunt'));
+
+                // Check AI minions
+                this.ai.board.forEach(minion => {
+                    const w = 120 * S, h = 140 * S;
+                    if (mouse.x > minion.x - w/2 && mouse.x < minion.x + w/2 &&
+                        mouse.y > minion.y - h/2 && mouse.y < minion.y + h/2) {
+                        target = minion;
+                    }
+                });
+
+                // Check AI hero
+                const aiY = 100 * S;
+                if (!target && mouse.y > aiY - 50*S && mouse.y < aiY + 50*S) {
+                    target = this.ai;
+                }
+
+                if (target) {
+                    const mustAttackTaunt = aiTauntMinions.length > 0;
+                    const targetIsTaunt = target instanceof Minion && target.abilities.includes('taunt');
+
+                    if (mustAttackTaunt && !targetIsTaunt) {
+                        // Invalid target, must attack taunt. Deselect attacker.
+                        this.selectedMinion = null;
+                    } else {
+                        this.performAttack(this.selectedMinion, target);
+                        this.selectedMinion = null;
+                    }
+                } else {
+                    // Clicked on empty space, deselect
+                    this.selectedMinion = null;
+                }
+            }
+        }
+        
+        handleKeyDown(e) {
+            if (e.key.toLowerCase() === 'e' && gameState === 'playerTurn') {
+                this.nextTurn();
+            }
+            if (e.key.toLowerCase() === 'r' && gameState === 'gameOver') {
+                gameState = 'loading';
+                setTimeout(() => this.startGame(), 200);
+            }
+        }
+
+        update() {
+            this.particles.forEach(p => p.update());
+            this.particles = this.particles.filter(p => p.life > 0);
+
+            this.damageTexts.forEach(dt => {
+                dt.life -= 0.02;
+                dt.y -= 1;
+            });
+            this.damageTexts = this.damageTexts.filter(dt => dt.life > 0);
+            
+            if (this.player && this.ai) {
+                this.player.hand.forEach(c => c.update());
+                this.player.board.forEach(m => m.update());
+                this.ai.board.forEach(m => m.update());
+            }
+        }
+
+        draw() {
+            ctx.clearRect(0, 0, CONFIG.width, CONFIG.height);
+            const S = CONFIG.scale;
+
+            // Draw Board
+            const boardGradient = ctx.createRadialGradient(CONFIG.width/2, CONFIG.height/2, 50*S, CONFIG.width/2, CONFIG.height/2, CONFIG.width);
+            boardGradient.addColorStop(0, '#5c4a3c');
+            boardGradient.addColorStop(1, '#3e2e23');
+            ctx.fillStyle = boardGradient;
+            ctx.fillRect(0, 0, CONFIG.width, CONFIG.height);
+            ctx.strokeStyle = '#8c6d53';
+            ctx.lineWidth = 15 * S;
+            ctx.strokeRect(0, 0, CONFIG.width, CONFIG.height);
+            ctx.beginPath();
+            ctx.moveTo(0, CONFIG.height/2);
+            ctx.lineTo(CONFIG.width, CONFIG.height/2);
+            ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+            ctx.lineWidth = 4 * S;
+            ctx.stroke();
+
+            // Draw states
+            if (gameState === 'start') this.drawStartScreen();
+            else if (gameState === 'gameOver') this.drawGameOverScreen();
+            else {
+                this.drawGameUI();
+                
+                // AI hand
+                this.ai.hand.forEach((card, i) => {
+                    const handWidth = this.ai.hand.length * 50 * S;
+                    const startX = CONFIG.width / 2 - handWidth / 2;
+                    ctx.fillStyle = '#886644';
+                    ctx.fillRect(startX + i * 55*S, 20*S, 100*S, 140*S);
+                    ctx.strokeStyle = '#543';
+                    ctx.strokeRect(startX + i * 55*S, 20*S, 100*S, 140*S);
+                });
+
+                // Draw minions
+                this.ai.board.forEach(m => m.draw(ctx));
+                this.player.board.forEach(m => m.draw(ctx, this.selectedMinion === m));
+                
+                // Draw player hand
+                this.player.hand.forEach(c => c.draw(ctx, this.selectedCard === c));
+
+                // Draw particles
+                this.particles.forEach(p => p.draw(ctx));
+                this.damageTexts.forEach(dt => {
+                    ctx.globalAlpha = dt.life;
+                    ctx.fillStyle = dt.color;
+                    ctx.font = `bold ${40*S}px Arial`;
+                    ctx.textAlign = 'center';
+                    ctx.fillText(dt.text, dt.x, dt.y);
+                    ctx.globalAlpha = 1;
+                });
+
+                // Dragged card
+                if (this.selectedCard) {
+                    const card = this.selectedCard;
+                    const tempCard = new Card(card.def, card.owner);
+                    tempCard.x = mouse.x;
+                    tempCard.y = mouse.y;
+                    ctx.globalAlpha = 0.7;
+                    tempCard.draw(ctx, true);
+                    ctx.globalAlpha = 1;
+
+                    // Draw targeting arrow
+                    ctx.beginPath();
+                    ctx.moveTo(card.targetX, card.targetY - 105*S);
+                    ctx.lineTo(mouse.x, mouse.y);
+                    ctx.strokeStyle = '#ffcc00';
+                    ctx.lineWidth = 5 * S;
+                    ctx.stroke();
+                }
+                
+                // Attacking arrow
+                if (this.selectedMinion) {
+                    ctx.beginPath();
+                    ctx.moveTo(this.selectedMinion.x, this.selectedMinion.y);
+                    ctx.lineTo(mouse.x, mouse.y);
+                    ctx.strokeStyle = '#ff3333';
+                    ctx.lineWidth = 5 * S;
+                    ctx.stroke();
+                }
+            }
+        }
+        
+        drawPlayerUI(player, yPos, emoji) {
+            const S = CONFIG.scale;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            // Hero Portrait
+            ctx.font = `${80*S}px Arial`;
+            ctx.fillText(emoji, CONFIG.width/2, yPos);
+            
+            // Health
+            ctx.fillStyle = '#f44336';
+            ctx.beginPath();
+            ctx.arc(CONFIG.width/2 + 70*S, yPos + 20*S, 30*S, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${32*S}px Arial`;
+            ctx.fillText(player.health, CONFIG.width/2 + 70*S, yPos + 21*S);
+
+            // Deck
+            ctx.fillStyle = '#8B4513';
+            ctx.fillRect(CONFIG.width - 150*S, yPos - 70*S, 120*S, 140*S);
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${40*S}px Arial`;
+            ctx.fillText(player.deck.length, CONFIG.width - 90*S, yPos);
+
+            // Mana
+            let manaX = CONFIG.width / 2 - (player.maxMana * 20*S);
+            for(let i=0; i<player.maxMana; i++) {
+                ctx.fillStyle = i < player.mana ? '#2196F3' : '#555';
+                ctx.beginPath();
+                ctx.arc(manaX + i*25*S, yPos + 60*S, 10*S, 0, Math.PI*2);
+                ctx.fill();
+            }
+        }
+
+        drawGameUI() {
+            const S = CONFIG.scale;
+            // Player
+            this.drawPlayerUI(this.player, CONFIG.height - 100*S, '👨‍🎓');
+            // AI
+            this.drawPlayerUI(this.ai, 100*S, '🧙‍♂️');
+
+            // End Turn Button
+            const btn = this.endTurnButton;
+            const isPlayerTurn = gameState === 'playerTurn';
+            btn.color = isPlayerTurn ? '#4CAF50' : '#888';
+            ctx.fillStyle = btn.color;
+            ctx.fillRect(btn.x, btn.y, btn.w, btn.h);
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${30*S}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(isPlayerTurn ? 'End Turn' : "Opponent's Turn", btn.x + btn.w/2, btn.y + btn.h/2);
+
+            // Instructions
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            ctx.font = `${16*S}px Arial`;
+            ctx.textAlign = 'left';
+            ctx.fillText("Controls: [Click] Interact | [E] End Turn", 20 * S, CONFIG.height - 20 * S);
+        }
+
+        drawStartScreen() {
+            const S = CONFIG.scale;
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(0, 0, CONFIG.width, CONFIG.height);
+            ctx.textAlign = 'center';
+            
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${100*S}px 'Palatino Linotype', serif`;
+            ctx.fillText('Tome Tussle', CONFIG.width / 2, CONFIG.height / 2 - 100*S);
+            
+            ctx.font = `italic ${30*S}px Arial`;
+            ctx.fillText('A card battle of magical proportions!', CONFIG.width/2, CONFIG.height/2);
+
+            ctx.font = `bold ${40*S}px Arial`;
+            ctx.fillText('Click to Begin', CONFIG.width / 2, CONFIG.height / 2 + 100*S);
+        }
+        
+        drawGameOverScreen() {
+            const S = CONFIG.scale;
+            const winner = this.ai.health <= 0 ? this.player : this.ai;
+            const message = winner.isPlayer ? "You are Victorious!" : "You have been Defeated!";
+
+            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            ctx.fillRect(0, 0, CONFIG.width, CONFIG.height);
+            ctx.textAlign = 'center';
+            
+            ctx.fillStyle = winner.isPlayer ? '#ffd700' : '#c0c0c0';
+            ctx.font = `bold ${100*S}px 'Palatino Linotype', serif`;
+            ctx.fillText(message, CONFIG.width / 2, CONFIG.height / 2 - 50*S);
+            
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${40*S}px Arial`;
+            ctx.fillText('Press R or Click to Play Again', CONFIG.width / 2, CONFIG.height / 2 + 50*S);
+        }
+    }
+
+    const game = new Game();
+    
+    function gameLoop(timestamp) {
+        game.update(timestamp);
+        game.draw();
+        requestAnimationFrame(gameLoop);
+    }
+
+    gameLoop(0);
+});
+</script>
+</body>
+</html>

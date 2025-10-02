@@ -1,0 +1,8 @@
+{
+  "name": "Tome Tussle",
+  "type": "card battle game (like Hearthstone-lite)",
+  "folder": "tome_tussle",
+  "description": "Unleash legendary creatures and reality-bending spells directly from the pages of your magical tome. Master clever card combos in fast-paced duels where every turn could rewrite your victory",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
