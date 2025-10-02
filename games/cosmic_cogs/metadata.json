@@ -1,0 +1,8 @@
+{
+  "name": "Cosmic Cogs",
+  "type": "puzzle game",
+  "folder": "cosmic_cogs",
+  "description": "Align celestial cogs and manipulate gravity to solve mind-bending puzzles across the stars. Trigger spectacular chain reactions to power ancient machinery and bring entire constellations to life",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

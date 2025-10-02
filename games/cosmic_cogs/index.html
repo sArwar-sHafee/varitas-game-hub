@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cosmic Cogs</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #0a0a1a;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        canvas {
+            background: #101020;
+            display: block;
+            border-radius: 10px;
+            box-shadow: 0 0 30px rgba(100, 200, 255, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        // ES6+ JavaScript code for the Cosmic Cogs game
+        window.addEventListener('DOMContentLoaded', () => {
+
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+
+            // --- AUDIO CONTROLLER ---
+            // Uses Web Audio API to generate simple sounds without any assets
+            class AudioController {
+                constructor() {
+                    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    this.sounds = {
+                        place: { freq: 200, type: 'triangle', duration: 0.1, vol: 0.8 },
+                        remove: { freq: 150, type: 'square', duration: 0.1, vol: 0.6 },
+                        error: { freq: 100, type: 'sawtooth', duration: 0.2, vol: 0.5 },
+                        rotate: { freq: 300, type: 'sine', duration: 0.05, vol: 0.4 },
+                        winLevel: { freqs: [392, 494, 587], type: 'sine', duration: 0.15, vol: 0.7 },
+                        winGame: { freqs: [523, 659, 784, 1046], type: 'sine', duration: 0.2, vol: 0.8 },
+                    };
+                }
+
+                play(soundName) {
+                    if (!this.audioCtx || this.audioCtx.state === 'suspended') {
+                        this.audioCtx.resume();
+                    }
+                    const sound = this.sounds[soundName];
+                    if (!sound) return;
+
+                    if (sound.freqs) { // For chords/arpeggios
+                        sound.freqs.forEach((freq, i) => {
+                            setTimeout(() => this.playTone(freq, sound.type, sound.duration, sound.vol), i * (sound.duration * 1000 * 0.8));
+                        });
+                    } else {
+                        this.playTone(sound.freq, sound.type, sound.duration, sound.vol);
+                    }
+                }
+
+                playTone(freq, type, duration, vol) {
+                    const oscillator = this.audioCtx.createOscillator();
+                    const gainNode = this.audioCtx.createGain();
+
+                    gainNode.gain.setValueAtTime(vol, this.audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + duration);
+
+                    oscillator.type = type;
+                    oscillator.frequency.setValueAtTime(freq, this.audioCtx.currentTime);
+
+                    oscillator.connect(gainNode);
+                    gainNode.connect(this.audioCtx.destination);
+
+                    oscillator.start(this.audioCtx.currentTime);
+                    oscillator.stop(this.audioCtx.currentTime + duration);
+                }
+            }
+
+            // --- PARTICLE SYSTEM ---
+            // For juicy visual effects
+            class Particle {
+                constructor(x, y, color) {
+                    this.x = x;
+                    this.y = y;
+                    this.color = color;
+                    this.size = Math.random() * 5 + 2;
+                    this.life = 1;
+                    this.vx = (Math.random() - 0.5) * 4;
+                    this.vy = (Math.random() - 0.5) * 4;
+                }
+
+                update() {
+                    this.x += this.vx;
+                    this.y += this.vy;
+                    this.vy += 0.05; // gravity
+                    this.life -= 0.02;
+                }
+
+                draw() {
+                    ctx.globalAlpha = this.life > 0 ? this.life : 0;
+                    ctx.fillStyle = this.color;
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.globalAlpha = 1;
+                }
+            }
+            
+            // --- GAME CONSTANTS & STATE ---
+            const COG_SIZES = { small: 1, medium: 2, large: 3 };
+            const COG_COLORS = {
+                base: '#95A5A6',
+                driver: '#F1C40F',
+                target: '#3498DB',
+                powered: '#2ECC71',
+                hub: '#7F8C8D',
+                peg: 'rgba(255, 255, 255, 0.2)',
+            };
+            const GAME_STATES = {
+                START_SCREEN: 'start',
+                PLAYING: 'playing',
+                LEVEL_COMPLETE: 'level_complete',
+                GAME_COMPLETE: 'game_complete',
+            };
+
+            const LEVELS = [
+                {
+                    gridSize: 8,
+                    pegs: [[2, 4], [4, 4], [6, 4]],
+                    driverCogs: [{ x: 2, y: 4, size: COG_SIZES.medium }],
+                    targetCogs: [{ x: 6, y: 4, size: COG_SIZES.medium }],
+                    inventory: [{ size: COG_SIZES.medium, count: 1 }],
+                    par: 1,
+                },
+                {
+                    gridSize: 10,
+                    pegs: [[2, 3], [5, 3], [5, 6], [8, 6]],
+                    driverCogs: [{ x: 2, y: 3, size: COG_SIZES.large }],
+                    targetCogs: [{ x: 8, y: 6, size: COG_SIZES.large }],
+                    inventory: [{ size: COG_SIZES.large, count: 2 }],
+                    par: 2,
+                },
+                {
+                    gridSize: 12,
+                    pegs: [[2, 2], [5, 2], [5, 5], [8, 5], [8, 8], [10,8]],
+                    driverCogs: [{ x: 2, y: 2, size: COG_SIZES.medium }],
+                    targetCogs: [{ x: 10, y: 8, size: COG_SIZES.small }],
+                    inventory: [
+                        { size: COG_SIZES.medium, count: 2 },
+                        { size: COG_SIZES.large, count: 1 },
+                    ],
+                    par: 3,
+                },
+                {
+                    gridSize: 12,
+                    pegs: [[2,6], [5,3], [5,9], [8,6], [6,6]],
+                    driverCogs: [{ x: 2, y: 6, size: COG_SIZES.medium }],
+                    targetCogs: [{ x: 8, y: 6, size: COG_SIZES.medium }],
+                    inventory: [
+                        { size: COG_SIZES.small, count: 1},
+                        { size: COG_SIZES.large, count: 2 },
+                    ],
+                    par: 3,
+                }
+            ];
+
+            // --- MAIN GAME CLASS ---
+            class Game {
+                constructor() {
+                    this.gameState = GAME_STATES.START_SCREEN;
+                    this.audio = new AudioController();
+                    this.particles = [];
+                    this.stars = [];
+                    this.initStars();
+                    this.scale = 1;
+                    this.gridUnit = 0;
+                    this.offsetX = 0;
+                    this.offsetY = 0;
+                    
+                    this.currentLevelIndex = 0;
+                    this.cogs = [];
+                    this.pegs = [];
+                    this.inventory = [];
+                    this.selectedCogInInventory = null;
+                    this.moves = 0;
+                    this.totalMoves = 0;
+
+                    this.mouse = { x: 0, y: 0, isDown: false, gridX: -1, gridY: -1 };
+                    
+                    this.resize();
+                    this.setupEventListeners();
+                    this.gameLoop();
+                }
+
+                initStars() {
+                    for (let i = 0; i < 200; i++) {
+                        this.stars.push({
+                            x: Math.random() * 2000,
+                            y: Math.random() * 2000,
+                            size: Math.random() * 2 + 0.5,
+                            alpha: Math.random() * 0.5 + 0.2,
+                        });
+                    }
+                }
+
+                loadLevel(levelIndex) {
+                    if (levelIndex >= LEVELS.length) {
+                        this.gameState = GAME_STATES.GAME_COMPLETE;
+                        this.audio.play('winGame');
+                        return;
+                    }
+
+                    this.currentLevelIndex = levelIndex;
+                    const levelData = LEVELS[levelIndex];
+                    
+                    this.cogs = [];
+                    this.moves = 0;
+                    
+                    // Clone inventory to not mutate the original level data
+                    this.inventory = JSON.parse(JSON.stringify(levelData.inventory));
+                    this.selectedCogInInventory = null;
+
+                    this.pegs = levelData.pegs.map(p => ({ x: p[0], y: p[1], occupied: false }));
+
+                    levelData.driverCogs.forEach(cogData => {
+                        const cog = this.createCog(cogData.x, cogData.y, cogData.size);
+                        cog.isDriver = true;
+                        cog.isPowered = true;
+                        cog.rotationSpeed = 0.01;
+                        this.cogs.push(cog);
+                        this.findAndOccupyPeg(cog.gridX, cog.gridY);
+                    });
+
+                    levelData.targetCogs.forEach(cogData => {
+                        const cog = this.createCog(cogData.x, cogData.y, cogData.size);
+                        cog.isTarget = true;
+                        this.cogs.push(cog);
+                        this.findAndOccupyPeg(cog.gridX, cog.gridY);
+                    });
+                    this.propagatePower();
+                }
+
+                createCog(gridX, gridY, size) {
+                     return {
+                        gridX, gridY, size,
+                        angle: Math.random() * Math.PI * 2,
+                        rotationSpeed: 0,
+                        isDriver: false,
+                        isTarget: false,
+                        isPowered: false,
+                        isPlayerPlaced: false,
+                        scale: 0, // for animation
+                        targetScale: 1
+                    };
+                }
+
+                findAndOccupyPeg(x, y, occupied = true) {
+                    const peg = this.pegs.find(p => p.x === x && p.y === y);
+                    if (peg) peg.occupied = occupied;
+                    return peg;
+                }
+                
+                startGame() {
+                    this.gameState = GAME_STATES.PLAYING;
+                    this.totalMoves = 0;
+                    this.loadLevel(0);
+                }
+                
+                nextLevel() {
+                    this.gameState = GAME_STATES.PLAYING;
+                    this.totalMoves += this.moves;
+                    this.loadLevel(this.currentLevelIndex + 1);
+                }
+
+                // --- Input Handling ---
+                setupEventListeners() {
+                    window.addEventListener('resize', this.resize.bind(this));
+                    canvas.addEventListener('mousemove', this.handleMouseMove.bind(this));
+                    canvas.addEventListener('mousedown', this.handleMouseDown.bind(this));
+                    canvas.addEventListener('mouseup', this.handleMouseUp.bind(this));
+                    window.addEventListener('keydown', this.handleKeyDown.bind(this));
+                }
+
+                handleMouseMove(e) {
+                    const rect = canvas.getBoundingClientRect();
+                    this.mouse.x = e.clientX - rect.left;
+                    this.mouse.y = e.clientY - rect.top;
+
+                    // Convert mouse coords to grid coords
+                    const gridX = Math.round((this.mouse.x - this.offsetX) / this.gridUnit);
+                    const gridY = Math.round((this.mouse.y - this.offsetY) / this.gridUnit);
+                    this.mouse.gridX = gridX;
+                    this.mouse.gridY = gridY;
+                }
+
+                handleMouseDown(e) {
+                    this.mouse.isDown = true;
+                    // Resume audio context on first user interaction
+                    if (this.audio.audioCtx.state === 'suspended') {
+                        this.audio.audioCtx.resume();
+                    }
+
+                    if (this.gameState === GAME_STATES.PLAYING) {
+                        this.handleGameClick();
+                    } else {
+                        this.handleMenuClick();
+                    }
+                }
+                
+                handleMouseUp(e) {
+                    this.mouse.isDown = false;
+                }
+
+                handleKeyDown(e) {
+                    if (this.gameState !== GAME_STATES.PLAYING) return;
+                    
+                    if (e.key === 'Escape' && this.selectedCogInInventory) {
+                        this.selectedCogInInventory = null;
+                        this.audio.play('remove');
+                    }
+                }
+
+                handleGameClick() {
+                    // 1. Check if clicking on inventory
+                    const inventoryItemCenterY = canvas.height - this.gridUnit * 1;
+                    let wasInventoryClicked = false;
+                    
+                    const totalInventoryWidth = (this.inventory.length - 1) * 2.5 * this.gridUnit;
+                    const inventoryStartX = (canvas.width / 2) - (totalInventoryWidth / 2);
+
+                    this.inventory.forEach((item, i) => {
+                        const itemX = inventoryStartX + (i * 2.5 * this.gridUnit);
+                        const isClicked = this.mouse.y > inventoryItemCenterY - this.gridUnit * 1.2 && 
+                                          this.mouse.y < inventoryItemCenterY + this.gridUnit * 1.2 &&
+                                          this.mouse.x > itemX - this.gridUnit * 1.2 && 
+                                          this.mouse.x < itemX + this.gridUnit * 1.2;
+
+                        if (isClicked) {
+                            wasInventoryClicked = true;
+                            if (item.count > 0) {
+                                if (this.selectedCogInInventory === item) {
+                                    this.selectedCogInInventory = null; // Deselect if clicked again
+                                    this.audio.play('remove');
+                                } else {
+                                    this.selectedCogInInventory = item;
+                                    this.audio.play('place');
+                                }
+                            } else {
+                                this.audio.play('error');
+                            }
+                        }
+                    });
+
+                    if (wasInventoryClicked) return;
+
+                    // 2. Check if clicking on a placed cog to remove it
+                    // Find the last cog in the array so we can remove overlapping cogs from top
+                    const clickedCog = [...this.cogs].reverse().find(cog => {
+                        const cogScreenX = this.offsetX + cog.gridX * this.gridUnit;
+                        const cogScreenY = this.offsetY + cog.gridY * this.gridUnit;
+                        const dist = Math.sqrt(Math.pow(this.mouse.x - cogScreenX, 2) + Math.pow(this.mouse.y - cogScreenY, 2));
+                        return dist < (cog.size * this.gridUnit) && cog.isPlayerPlaced;
+                    });
+
+
+                    if (clickedCog) {
+                        this.removeCog(clickedCog);
+                        return;
+                    }
+
+                    // 3. Check if placing a cog on a peg
+                    if (this.selectedCogInInventory) {
+                        const targetPeg = this.pegs.find(p => p.x === this.mouse.gridX && p.y === this.mouse.gridY);
+                        if (targetPeg && !targetPeg.occupied) {
+                            this.placeCog(targetPeg.x, targetPeg.y, this.selectedCogInInventory.size);
+                        } else {
+                            this.audio.play('error');
+                        }
+                    }
+                }
+
+                handleMenuClick() {
+                    if (this.isMouseOverButton(this.button)) {
+                         this.audio.play('place');
+                        if (this.gameState === GAME_STATES.START_SCREEN) {
+                            this.startGame();
+                        } else if (this.gameState === GAME_STATES.LEVEL_COMPLETE) {
+                            this.nextLevel();
+                        } else if (this.gameState === GAME_STATES.GAME_COMPLETE) {
+                            this.currentLevelIndex = 0;
+                            this.startGame();
+                        }
+                    }
+                }
+
+                isMouseOverButton(button) {
+                    if (!button) return false;
+                    return this.mouse.x > button.x && this.mouse.x < button.x + button.w &&
+                           this.mouse.y > button.y && this.mouse.y < button.y + button.h;
+                }
+
+                placeCog(gridX, gridY, size) {
+                    const newCog = this.createCog(gridX, gridY, size);
+                    newCog.isPlayerPlaced = true;
+                    this.cogs.push(newCog);
+                    this.findAndOccupyPeg(gridX, gridY, true);
+
+                    this.selectedCogInInventory.count--;
+                    this.selectedCogInInventory = null;
+                    this.moves++;
+                    
+                    this.createBurst(this.offsetX + gridX * this.gridUnit, this.offsetY + gridY * this.gridUnit, COG_COLORS.base, 20);
+                    this.audio.play('place');
+                    this.propagatePower();
+                    this.checkWinCondition();
+                }
+
+                removeCog(cogToRemove) {
+                    this.cogs = this.cogs.filter(c => c !== cogToRemove);
+                    this.findAndOccupyPeg(cogToRemove.gridX, cogToRemove.gridY, false);
+
+                    const inventoryItem = this.inventory.find(item => item.size === cogToRemove.size);
+                    if (inventoryItem) {
+                        inventoryItem.count++;
+                    }
+
+                    this.createBurst(this.offsetX + cogToRemove.gridX * this.gridUnit, this.offsetY + cogToRemove.gridY * this.gridUnit, '#E74C3C', 20);
+                    this.audio.play('remove');
+                    this.propagatePower();
+                }
+
+                // --- Game Logic ---
+                propagatePower() {
+                    // Reset all non-driver cogs
+                    this.cogs.forEach(c => {
+                        if (!c.isDriver) {
+                            c.isPowered = false;
+                            c.rotationSpeed = 0;
+                        }
+                    });
+
+                    let newlyPowered = this.cogs.filter(c => c.isDriver);
+                    const processedCogs = new Set(newlyPowered);
+
+                    while (newlyPowered.length > 0) {
+                        const currentCog = newlyPowered.shift();
+                        
+                        this.cogs.forEach(otherCog => {
+                            if (!processedCogs.has(otherCog)) {
+                                const dist = Math.sqrt(Math.pow(currentCog.gridX - otherCog.gridX, 2) + Math.pow(currentCog.gridY - otherCog.gridY, 2));
+                                const requiredDist = currentCog.size + otherCog.size;
+
+                                if (Math.abs(dist - requiredDist) < 0.1) { // They are meshing
+                                    otherCog.isPowered = true;
+                                    otherCog.rotationSpeed = -currentCog.rotationSpeed * (currentCog.size / otherCog.size);
+                                    newlyPowered.push(otherCog);
+                                    processedCogs.add(otherCog);
+                                }
+                            }
+                        });
+                    }
+                }
+
+                checkWinCondition() {
+                    const allTargetsPowered = this.cogs.filter(c => c.isTarget).every(c => c.isPowered);
+                    if (allTargetsPowered) {
+                        setTimeout(() => {
+                           this.gameState = GAME_STATES.LEVEL_COMPLETE;
+                           this.audio.play('winLevel');
+                           this.createBurst(canvas.width / 2, canvas.height / 2, '#FFD700', 100);
+                        }, 500);
+                    }
+                }
+
+                update() {
+                    // Update cogs (rotation, scale animations)
+                    this.cogs.forEach(cog => {
+                        cog.angle += cog.rotationSpeed;
+                        if(cog.scale < cog.targetScale) {
+                            cog.scale += 0.1;
+                            if(cog.scale > cog.targetScale) cog.scale = cog.targetScale;
+                        }
+                    });
+
+                    // Update particles
+                    this.particles = this.particles.filter(p => p.life > 0);
+                    this.particles.forEach(p => p.update());
+                    
+                    // Update stars
+                    this.stars.forEach(star => {
+                        star.x -= 0.1;
+                        if(star.x < 0) star.x = canvas.width;
+                    });
+                }
+                
+                createBurst(x, y, color, count) {
+                    for (let i = 0; i < count; i++) {
+                        this.particles.push(new Particle(x, y, color));
+                    }
+                }
+
+                // --- Drawing ---
+                draw() {
+                    this.clearCanvas();
+                    this.drawBackground();
+                    
+                    switch (this.gameState) {
+                        case GAME_STATES.START_SCREEN:
+                            this.drawStartScreen();
+                            break;
+                        case GAME_STATES.PLAYING:
+                            this.drawGame();
+                            break;
+                        case GAME_STATES.LEVEL_COMPLETE:
+                            this.drawLevelCompleteScreen();
+                            break;
+                        case GAME_STATES.GAME_COMPLETE:
+                            this.drawGameCompleteScreen();
+                            break;
+                    }
+                    
+                    this.particles.forEach(p => p.draw());
+                }
+
+                clearCanvas() {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                }
+
+                drawBackground() {
+                    const gradient = ctx.createRadialGradient(canvas.width/2, canvas.height/2, 0, canvas.width/2, canvas.height/2, Math.max(canvas.width, canvas.height));
+                    gradient.addColorStop(0, '#1a1a3a');
+                    gradient.addColorStop(1, '#0a0a1a');
+                    ctx.fillStyle = gradient;
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                    // Draw stars
+                    ctx.fillStyle = '#FFFFFF';
+                    this.stars.forEach(star => {
+                        ctx.globalAlpha = star.alpha;
+                        ctx.beginPath();
+                        ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+                        ctx.fill();
+                    });
+                    ctx.globalAlpha = 1;
+                }
+                
+                drawGame() {
+                    // Draw Pegs
+                    this.pegs.forEach(peg => {
+                        ctx.fillStyle = COG_COLORS.peg;
+                        ctx.beginPath();
+                        ctx.arc(this.offsetX + peg.x * this.gridUnit, this.offsetY + peg.y * this.gridUnit, this.gridUnit * 0.2, 0, Math.PI * 2);
+                        ctx.fill();
+                    });
+
+                    // Draw Cogs
+                    this.cogs.forEach(cog => this.drawCog(cog));
+
+                    // Draw held cog preview
+                    if (this.selectedCogInInventory) {
+                        const targetPeg = this.pegs.find(p => p.x === this.mouse.gridX && p.y === this.mouse.gridY);
+                        const canPlace = targetPeg && !targetPeg.occupied;
+
+                        ctx.globalAlpha = 0.5;
+                        this.drawCog({
+                            gridX: this.mouse.gridX,
+                            gridY: this.mouse.gridY,
+                            size: this.selectedCogInInventory.size,
+                            angle: 0,
+                            isPowered: canPlace,
+                            scale: 1,
+                        }, true);
+                        ctx.globalAlpha = 1;
+                    }
+
+                    // Draw UI
+                    this.drawGameUI();
+                }
+
+                drawCog(cog, isPreview = false) {
+                    const x = this.offsetX + cog.gridX * this.gridUnit;
+                    const y = this.offsetY + cog.gridY * this.gridUnit;
+                    const radius = cog.size * this.gridUnit;
+                    const teeth = Math.floor(cog.size * 8);
+
+                    ctx.save();
+                    ctx.translate(x, y);
+                    ctx.scale(cog.scale, cog.scale);
+                    ctx.rotate(cog.angle);
+
+                    let color = COG_COLORS.base;
+                    if (cog.isDriver) color = COG_COLORS.driver;
+                    else if (cog.isTarget) color = COG_COLORS.target;
+                    
+                    if(cog.isPowered) {
+                        color = COG_COLORS.powered;
+                        ctx.shadowColor = color;
+                        ctx.shadowBlur = 20;
+                    }
+
+                    ctx.fillStyle = color;
+                    ctx.strokeStyle = '#333';
+                    ctx.lineWidth = 2;
+
+                    // Draw teeth
+                    ctx.beginPath();
+                    for (let i = 0; i < teeth; i++) {
+                        const angle = (i / teeth) * Math.PI * 2;
+                        const outerRadius = radius * 1.15;
+                        const innerRadius = radius * 0.9;
+                        
+                        ctx.moveTo(Math.cos(angle - 0.08) * innerRadius, Math.sin(angle - 0.08) * innerRadius);
+                        ctx.lineTo(Math.cos(angle - 0.05) * outerRadius, Math.sin(angle - 0.05) * outerRadius);
+                        ctx.lineTo(Math.cos(angle + 0.05) * outerRadius, Math.sin(angle + 0.05) * outerRadius);
+                        ctx.lineTo(Math.cos(angle + 0.08) * innerRadius, Math.sin(angle + 0.08) * innerRadius);
+                    }
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.stroke();
+                    
+                    ctx.shadowBlur = 0;
+
+                    // Draw main body
+                    ctx.beginPath();
+                    ctx.arc(0, 0, radius * 0.95, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+
+                    // Draw hub
+                    ctx.fillStyle = COG_COLORS.hub;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, radius * 0.3, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    ctx.restore();
+                }
+                
+                drawGameUI() {
+                    // Level and Moves
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                    ctx.fillRect(0, 0, canvas.width, this.gridUnit * 1.5);
+                    ctx.fillStyle = '#FFF';
+                    ctx.font = `${this.gridUnit * 0.6}px sans-serif`;
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(`Level: ${this.currentLevelIndex + 1}`, this.gridUnit * 0.5, this.gridUnit * 0.75);
+                    ctx.textAlign = 'right';
+                    ctx.fillText(`Moves: ${this.moves} (Par: ${LEVELS[this.currentLevelIndex].par})`, canvas.width - this.gridUnit * 0.5, this.gridUnit * 0.75);
+
+                    // Inventory
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                    ctx.fillRect(0, canvas.height - this.gridUnit * 2.5, canvas.width, this.gridUnit * 2.5);
+                    ctx.fillStyle = '#FFF';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('INVENTORY', canvas.width/2, canvas.height - this.gridUnit * 2);
+                    
+                    const totalInventoryWidth = (this.inventory.length - 1) * 2.5 * this.gridUnit;
+                    const inventoryStartX = (canvas.width / 2) - (totalInventoryWidth / 2);
+
+                    this.inventory.forEach((item, i) => {
+                        const itemX = inventoryStartX + (i * 2.5) * this.gridUnit;
+                        const itemY = canvas.height - this.gridUnit * 1;
+                        
+                        ctx.save();
+                        ctx.translate(itemX, itemY);
+                        
+                        if(this.selectedCogInInventory === item) {
+                            ctx.fillStyle = 'rgba(255, 255, 0, 0.3)';
+                            ctx.beginPath();
+                            ctx.arc(0, 0, item.size * this.gridUnit * 1.2, 0, Math.PI * 2);
+                            ctx.fill();
+                        }
+                        
+                        ctx.globalAlpha = item.count > 0 ? 1 : 0.3;
+                        this.drawCog({ gridX: 0, gridY: 0, size: item.size, angle: 0, scale: 1 }, true);
+                        ctx.restore();
+                        
+                        ctx.fillStyle = item.count > 0 ? '#FFF' : '#888';
+                        ctx.font = `${this.gridUnit * 0.7}px sans-serif`;
+                        ctx.fillText(`x${item.count}`, itemX, itemY + item.size * this.gridUnit + this.gridUnit*0.3);
+                    });
+
+                    // Instructions
+                    ctx.fillStyle = '#FFF';
+                    ctx.font = `${this.gridUnit * 0.4}px sans-serif`;
+                    ctx.textAlign = 'center';
+                    ctx.fillText('Click inventory to select a cog, click a peg to place. Click a placed cog to remove.', canvas.width / 2, canvas.height - this.gridUnit * 0.25);
+                }
+
+                drawStartScreen() {
+                    this.drawCenteredText('Cosmic Cogs', canvas.height / 2 - 80, 80);
+                    this.drawCenteredText('Connect the glowing yellow cog to the blue one.', canvas.height / 2, 30);
+                    this.drawCenteredText('Use the cogs from your inventory to build a chain.', canvas.height / 2 + 40, 20);
+                    this.drawButton('Start Game', canvas.width / 2, canvas.height / 2 + 120, 300, 60);
+                }
+
+                drawLevelCompleteScreen() {
+                    this.drawCenteredText(`Level ${this.currentLevelIndex + 1} Complete!`, canvas.height / 2 - 80, 60);
+                    this.drawCenteredText(`Moves: ${this.moves}`, canvas.height / 2, 30);
+                    const par = LEVELS[this.currentLevelIndex].par;
+                    const message = this.moves <= par ? 'Excellent! (On Par)' : `Good job! (Par was ${par})`;
+                    this.drawCenteredText(message, canvas.height / 2 + 40, 20);
+                    this.drawButton('Next Level', canvas.width / 2, canvas.height / 2 + 120, 300, 60);
+                }
+
+                drawGameCompleteScreen() {
+                    this.drawCenteredText('Congratulations!', canvas.height / 2 - 80, 70);
+                    this.drawCenteredText('You\'ve repaired the cosmic machinery!', canvas.height / 2, 30);
+                    this.drawCenteredText(`Total Moves: ${this.totalMoves + this.moves}`, canvas.height / 2 + 40, 25);
+                    this.drawButton('Play Again', canvas.width / 2, canvas.height / 2 + 120, 300, 60);
+                }
+
+                drawCenteredText(text, y, size) {
+                    ctx.font = `bold ${size}px sans-serif`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.shadowColor = '#3498DB';
+                    ctx.shadowBlur = 10;
+                    ctx.fillText(text, canvas.width / 2, y);
+                    ctx.shadowBlur = 0;
+                }
+                
+                drawButton(text, x, y, w, h) {
+                    const btnX = x - w / 2;
+                    const btnY = y - h / 2;
+                    this.button = { x: btnX, y: btnY, w, h };
+                    
+                    const isHovered = this.isMouseOverButton(this.button);
+                    
+                    ctx.fillStyle = isHovered ? '#3498DB' : 'transparent';
+                    ctx.strokeStyle = '#3498DB';
+                    ctx.lineWidth = 3;
+                    this.roundRect(btnX, btnY, w, h, 15);
+                    ctx.fill();
+                    ctx.stroke();
+                    
+                    ctx.fillStyle = isHovered ? '#FFF' : '#3498DB';
+                    ctx.font = 'bold 24px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(text, x, y);
+                }
+
+                roundRect(x, y, w, h, r) {
+                    ctx.beginPath();
+                    ctx.moveTo(x + r, y);
+                    ctx.arcTo(x + w, y, x + w, y + h, r);
+                    ctx.arcTo(x + w, y + h, x, y + h, r);
+                    ctx.arcTo(x, y + h, x, y, r);
+                    ctx.arcTo(x, y, x + w, y, r);
+                    ctx.closePath();
+                }
+
+                // --- Game Loop & Sizing ---
+                resize() {
+                    const container = document.getElementById('game-container');
+                    const aspectRatio = 16 / 9;
+                    let newWidth = container.clientWidth;
+                    let newHeight = container.clientHeight;
+                    
+                    if (newWidth / newHeight > aspectRatio) {
+                        newWidth = newHeight * aspectRatio;
+                    } else {
+                        newHeight = newWidth / aspectRatio;
+                    }
+
+                    canvas.width = newWidth;
+                    canvas.height = newHeight;
+
+                    const levelData = LEVELS[this.currentLevelIndex] || LEVELS[0];
+                    const gridSize = levelData.gridSize;
+                    
+                    this.scale = Math.min(canvas.width, canvas.height) / (gridSize + 4);
+                    this.gridUnit = this.scale;
+                    
+                    const gridWidth = gridSize * this.gridUnit;
+                    const gridHeight = gridSize * this.gridUnit;
+                    
+                    this.offsetX = (canvas.width - gridWidth) / 2;
+                    this.offsetY = (canvas.height - gridHeight) / 2;
+
+                    if(this.gameState !== GAME_STATES.START_SCREEN) {
+                       this.draw(); // Redraw on resize
+                    }
+                }
+
+                gameLoop() {
+                    this.update();
+                    this.draw();
+                    requestAnimationFrame(this.gameLoop.bind(this));
+                }
+            }
+
+            // --- START THE GAME ---
+            new Game();
+        });
+    </script>
+</body>
+</html>
