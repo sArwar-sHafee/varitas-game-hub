@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Echo Pop</title>
+    <style>
+        :root {
+            --bg-color: #1a1a2e;
+            --primary-color: #16213e;
+            --secondary-color: #0f3460;
+            --accent-color: #e94560;
+            --font-color: #dcdce6;
+            --shadow-color: rgba(0, 0, 0, 0.3);
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(45deg, var(--bg-color), var(--secondary-color));
+            color: var(--font-color);
+        }
+
+        #game-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+
+        canvas {
+            background-color: var(--primary-color);
+            border-radius: 50%;
+            box-shadow: 0 0 40px var(--shadow-color), inset 0 0 20px rgba(0,0,0,0.5);
+            width: 90vw;
+            height: 90vw;
+            max-width: 600px;
+            max-height: 600px;
+            aspect-ratio: 1 / 1;
+            touch-action: none; /* Prevents default touch actions like scrolling */
+        }
+
+        .ui-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            pointer-events: none; /* Allows clicks to pass through to canvas */
+            text-align: center;
+        }
+        
+        .ui-panel {
+            background-color: rgba(22, 33, 62, 0.9);
+            padding: 2rem 3rem;
+            border-radius: 20px;
+            box-shadow: 0 8px 32px 0 var(--shadow-color);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            pointer-events: all; /* Re-enable pointer events for panels */
+            transform: scale(0.9);
+            opacity: 0;
+            transition: transform 0.3s ease-out, opacity 0.3s ease-out;
+        }
+
+        .ui-panel.visible {
+            transform: scale(1);
+            opacity: 1;
+        }
+
+        h1 {
+            font-size: 3rem;
+            margin: 0 0 0.5rem 0;
+            color: var(--accent-color);
+            text-shadow: 0 0 10px var(--accent-color);
+        }
+
+        h1 .emoji {
+            display: inline-block;
+            animation: pop-in 1s ease-out forwards;
+        }
+
+        @keyframes pop-in {
+            0% { transform: scale(0); }
+            80% { transform: scale(1.2); }
+            100% { transform: scale(1); }
+        }
+
+        p {
+            margin: 0.5rem 0;
+            font-size: 1.1rem;
+            max-width: 400px;
+        }
+
+        button {
+            background-color: var(--accent-color);
+            color: var(--font-color);
+            border: none;
+            padding: 1rem 2rem;
+            margin-top: 1rem;
+            border-radius: 50px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            box-shadow: 0 4px 15px var(--shadow-color);
+        }
+
+        button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px var(--shadow-color);
+        }
+
+        #hud {
+            position: absolute;
+            top: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 1.5rem;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px var(--shadow-color);
+            display: flex;
+            gap: 2rem;
+            transition: opacity 0.3s ease-out;
+        }
+
+        #instructions {
+            position: absolute;
+            bottom: 1rem;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 0.9rem;
+            transition: opacity 0.3s ease-out;
+        }
+        
+        .controls {
+            margin-top: 1.5rem;
+            display: grid;
+            grid-template-columns: auto auto;
+            gap: 0.5rem 1.5rem;
+            justify-content: center;
+        }
+
+        .key {
+            background: rgba(255,255,255,0.1);
+            padding: 0.2rem 0.6rem;
+            border-radius: 4px;
+            font-family: monospace;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+
+        <div class="ui-overlay" id="start-screen">
+            <div class="ui-panel">
+                <h1><span class="emoji">🧠</span> Echo Pop</h1>
+                <p>Watch the sequence of colors and sounds, then repeat it back. How long can your memory streak last?</p>
+                <div class="controls">
+                    <span>Green (Top):</span><span class="key">Q</span> / <span class="key">▲</span>
+                    <span>Red (Right):</span><span class="key">W</span> / <span class="key">▶</span>
+                    <span>Yellow (Bottom):</span><span class="key">S</span> / <span class="key">▼</span>
+                    <span>Blue (Left):</span><span class="key">A</span> / <span class="key">◀</span>
+                </div>
+                <button id="start-button">Start Game</button>
+            </div>
+        </div>
+
+        <div class="ui-overlay" id="game-over-screen" style="display: none;">
+            <div class="ui-panel">
+                <h1>Game Over <span class="emoji">😵</span></h1>
+                <p>You remembered <strong id="final-score">0</strong> steps!</p>
+                <p>High Score: <strong id="high-score-display">0</strong></p>
+                <button id="restart-button">Play Again</button>
+            </div>
+        </div>
+        
+        <div id="hud">
+            <div id="score-display">Score: 0</div>
+            <div id="high-score-hud">High Score: 0</div>
+        </div>
+        
+        <div id="instructions">
+            Use your MOUSE or KEYBOARD ([Q,W,A,S] or Arrow Keys) to play.
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- Basic Setup ---
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+
+            const startScreen = document.getElementById('start-screen');
+            const gameOverScreen = document.getElementById('game-over-screen');
+            const hud = document.getElementById('hud');
+            const instructions = document.getElementById('instructions');
+            
+            const startButton = document.getElementById('start-button');
+            const restartButton = document.getElementById('restart-button');
+            
+            const scoreDisplay = document.getElementById('score-display');
+            const finalScoreDisplay = document.getElementById('final-score');
+            const highScoreDisplay = document.getElementById('high-score-display');
+            const highScoreHud = document.getElementById('high-score-hud');
+
+            // --- Game State ---
+            const GAME_STATE = {
+                START_SCREEN: 'START_SCREEN',
+                SEQUENCE_PLAYBACK: 'SEQUENCE_PLAYBACK',
+                PLAYER_INPUT: 'PLAYER_INPUT',
+                GAME_OVER: 'GAME_OVER',
+                TRANSITION: 'TRANSITION'
+            };
+            let currentState = GAME_STATE.START_SCREEN;
+            
+            let sequence = [];
+            let playerSequence = [];
+            let score = 0;
+            let highScore = localStorage.getItem('echoPopHighScore') || 0;
+
+            // --- Game Configuration ---
+            // Clockwise order: Top, Right, Bottom, Left
+            const buttons = [
+                { color: '#2ecc71', lightColor: '#58d68d', soundFreq: 261.63, key: 'q', arrow: 'ArrowUp' },    // 0: Green (Top)
+                { color: '#e74c3c', lightColor: '#f1948a', soundFreq: 329.63, key: 'w', arrow: 'ArrowRight' }, // 1: Red (Right)
+                { color: '#f1c40f', lightColor: '#f7dc6f', soundFreq: 440.00, key: 's', arrow: 'ArrowDown' },  // 2: Yellow (Bottom)
+                { color: '#3498db', lightColor: '#85c1e9', soundFreq: 392.00, key: 'a', arrow: 'ArrowLeft' },  // 3: Blue (Left)
+            ];
+
+            buttons.forEach(button => {
+                button.active = false;
+                button.scale = 1;
+            });
+
+            // --- Audio Context ---
+            let audioCtx;
+            function initAudio() {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+            }
+            
+            // Helper to get CSS variable in JS
+            function getCssVar(varName) {
+                return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+            }
+
+            function playSound(frequency, duration = 0.3) {
+                if (!audioCtx || audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+                if (!audioCtx) return;
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+
+                oscillator.type = 'triangle';
+                oscillator.frequency.setValueAtTime(frequency, audioCtx.currentTime);
+
+                gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+                gainNode.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 0.05);
+                gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + duration);
+
+                oscillator.start(audioCtx.currentTime);
+                oscillator.stop(audioCtx.currentTime + duration);
+            }
+            
+            function playErrorSound() {
+                if (!audioCtx || audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+                if (!audioCtx) return;
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                oscillator.type = 'sawtooth';
+                oscillator.frequency.setValueAtTime(150, audioCtx.currentTime);
+                oscillator.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.5);
+                gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.5);
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + 0.5);
+            }
+
+            // --- Canvas Sizing & Drawing ---
+            let size, centerX, centerY, buttonRadius;
+
+            function resizeCanvas() {
+                const container = document.getElementById('game-container');
+                let canvasSize = Math.min(container.clientWidth, container.clientHeight);
+                // Ensure canvas size is not excessively large on wide screens, respecting max-width from CSS
+                const maxCanvasSize = 600; 
+                canvasSize = Math.min(canvasSize * 0.9, maxCanvasSize);
+
+                canvas.style.width = `${canvasSize}px`;
+                canvas.style.height = `${canvasSize}px`;
+
+                const dpr = window.devicePixelRatio || 1;
+                canvas.width = canvasSize * dpr;
+                canvas.height = canvasSize * dpr;
+                ctx.scale(dpr, dpr);
+                
+                size = canvasSize;
+                centerX = size / 2;
+                centerY = size / 2;
+                buttonRadius = size * 0.45;
+            }
+
+            function drawButtons() {
+                const angleStep = (2 * Math.PI) / buttons.length;
+                const startAngleOffset = -3 * Math.PI / 4; // Start with top button
+
+                buttons.forEach((button, i) => {
+                    const angle = i * angleStep + startAngleOffset;
+                    const nextAngle = (i + 1) * angleStep + startAngleOffset;
+                    const currentScale = button.active ? 1.05 : 1.0;
+                    
+                    button.scale += (currentScale - button.scale) * 0.2;
+
+                    ctx.save();
+                    ctx.translate(centerX, centerY);
+                    ctx.scale(button.scale, button.scale);
+                    ctx.translate(-centerX, -centerY);
+
+                    ctx.beginPath();
+                    ctx.moveTo(centerX, centerY);
+                    ctx.arc(centerX, centerY, buttonRadius, angle, nextAngle);
+                    ctx.closePath();
+                    
+                    const gradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, buttonRadius);
+                    gradient.addColorStop(0, button.active ? button.lightColor : button.color);
+                    gradient.addColorStop(1, button.color);
+
+                    ctx.fillStyle = gradient;
+                    ctx.fill();
+                    
+                    ctx.strokeStyle = getCssVar('--primary-color');
+                    ctx.lineWidth = 10;
+                    ctx.stroke();
+                    ctx.restore();
+                });
+                
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, size * 0.15, 0, 2 * Math.PI);
+                ctx.fillStyle = getCssVar('--primary-color');
+                ctx.fill();
+                ctx.strokeStyle = getCssVar('--bg-color');
+                ctx.lineWidth = 5;
+                ctx.stroke();
+            }
+
+            function drawCenterText() {
+                 ctx.fillStyle = getCssVar('--font-color');
+                 ctx.textAlign = 'center';
+                 ctx.textBaseline = 'middle';
+                 
+                 let text = '';
+                 if (currentState === GAME_STATE.SEQUENCE_PLAYBACK) {
+                    text = 'WATCH';
+                    ctx.font = `bold ${size * 0.08}px sans-serif`;
+                 } else if (currentState === GAME_STATE.PLAYER_INPUT) {
+                    text = 'REPEAT';
+                    ctx.font = `bold ${size * 0.08}px sans-serif`;
+                 } else if (currentState === GAME_STATE.TRANSITION) {
+                    text = 'GET READY';
+                    ctx.font = `bold ${size * 0.06}px sans-serif`;
+                 }
+                 ctx.fillText(text, centerX, centerY);
+            }
+
+            // --- Game Logic ---
+            function startGame() {
+                initAudio();
+                startScreen.classList.remove('visible');
+                setTimeout(() => startScreen.style.display = 'none', 300);
+                hud.style.opacity = 1;
+                instructions.style.opacity = 1;
+
+                sequence = [];
+                score = 0;
+                updateScoreDisplay();
+                nextRound();
+            }
+
+            function nextRound() {
+                currentState = GAME_STATE.TRANSITION;
+                playerSequence = [];
+                sequence.push(Math.floor(Math.random() * buttons.length));
+                score = sequence.length - 1;
+                updateScoreDisplay();
+                
+                setTimeout(() => {
+                    playSequence();
+                }, 1000);
+            }
+
+            async function playSequence() {
+                currentState = GAME_STATE.SEQUENCE_PLAYBACK;
+                const delay = Math.max(200, 600 - score * 15);
+                for (const index of sequence) {
+                    await activateButton(index, delay);
+                }
+                currentState = GAME_STATE.PLAYER_INPUT;
+            }
+
+            function activateButton(index, duration = 400) {
+                return new Promise(resolve => {
+                    buttons[index].active = true;
+                    playSound(buttons[index].soundFreq, duration / 1000);
+                    setTimeout(() => {
+                        buttons[index].active = false;
+                        setTimeout(resolve, 100);
+                    }, duration);
+                });
+            }
+
+            function handlePlayerInput(index) {
+                if (currentState !== GAME_STATE.PLAYER_INPUT) return;
+                
+                activateButton(index, 300);
+                playerSequence.push(index);
+                
+                const currentStep = playerSequence.length - 1;
+                if (playerSequence[currentStep] !== sequence[currentStep]) {
+                    gameOver();
+                    return;
+                }
+
+                if (playerSequence.length === sequence.length) {
+                    nextRound();
+                }
+            }
+
+            function gameOver() {
+                currentState = GAME_STATE.GAME_OVER;
+                playErrorSound();
+                
+                if (score > highScore) {
+                    highScore = score;
+                    localStorage.setItem('echoPopHighScore', highScore);
+                }
+                
+                updateHighScoreDisplay();
+                finalScoreDisplay.textContent = score;
+                gameOverScreen.style.display = 'flex';
+                setTimeout(() => gameOverScreen.querySelector('.ui-panel').classList.add('visible'), 50);
+                
+                hud.style.opacity = 0;
+                instructions.style.opacity = 0;
+            }
+
+            function updateScoreDisplay() {
+                scoreDisplay.textContent = `Score: ${score}`;
+            }
+            
+            function updateHighScoreDisplay() {
+                highScoreDisplay.textContent = highScore;
+                highScoreHud.textContent = `High Score: ${highScore}`;
+            }
+
+            // --- Event Listeners ---
+            startButton.addEventListener('click', startGame);
+            restartButton.addEventListener('click', () => {
+                gameOverScreen.querySelector('.ui-panel').classList.remove('visible');
+                setTimeout(() => {
+                    gameOverScreen.style.display = 'none';
+                    startGame();
+                }, 300);
+            });
+
+            function getButtonIndexFromCoordinates(x, y) {
+                const dx = x - centerX;
+                const dy = y - centerY;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist > size * 0.15 && dist < buttonRadius) {
+                    let angle = Math.atan2(dy, dx); 
+                    let adjustedAngle = angle + (3 * Math.PI / 4);
+                    if (adjustedAngle < 0) {
+                        adjustedAngle += 2 * Math.PI;
+                    }
+                    const index = Math.floor(adjustedAngle / (Math.PI / 2)) % 4;
+                    return index;
+                }
+                return -1;
+            }
+
+            canvas.addEventListener('click', e => {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                const index = getButtonIndexFromCoordinates(x, y);
+                if (index !== -1) {
+                    handlePlayerInput(index);
+                }
+            });
+            
+            window.addEventListener('keydown', e => {
+                let index = -1;
+                const key = e.key.toLowerCase();
+                if (key === 'q' || e.key === 'ArrowUp') index = 0;
+                else if (key === 'w' || e.key === 'ArrowRight') index = 1;
+                else if (key === 's' || e.key === 'ArrowDown') index = 2;
+                else if (key === 'a' || e.key === 'ArrowLeft') index = 3;
+
+                if (index !== -1 && currentState === GAME_STATE.PLAYER_INPUT) {
+                    e.preventDefault(); 
+                    handlePlayerInput(index);
+                }
+            });
+
+            window.addEventListener('resize', resizeCanvas);
+
+            // --- Game Loop ---
+            function gameLoop() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height); // Use actual canvas width/height
+                drawButtons();
+                drawCenterText();
+                requestAnimationFrame(gameLoop);
+            }
+
+            // --- Initialization ---
+            function init() {
+                resizeCanvas();
+                updateHighScoreDisplay();
+                startScreen.querySelector('.ui-panel').classList.add('visible');
+                hud.style.opacity = 0;
+                instructions.style.opacity = 0;
+                gameLoop();
+            }
+
+            init();
+        });
+    </script>
+</body>
+</html>

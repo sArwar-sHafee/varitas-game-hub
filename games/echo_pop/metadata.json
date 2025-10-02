@@ -1,0 +1,8 @@
+{
+  "name": "Echo Pop",
+  "type": "simon says memory game",
+  "folder": "echo_pop",
+  "description": "Echo the electrifying patterns of light and sound in a vibrant race against your own memory. Each correct \"pop\" adds another link to the chain, pushing the sequence faster until you reach a state of perfect flow.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
