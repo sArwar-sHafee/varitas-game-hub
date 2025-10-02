@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Vector Velocity</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Courier New', Courier, monospace;
+            background: linear-gradient(0deg, #1e003b 0%, #3d007a 50%, #6a00d4 100%);
+            color: #fff;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            text-align: center;
+        }
+
+        #game-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        canvas {
+            background: #000;
+            display: block;
+            box-shadow: 0 0 30px rgba(255, 255, 255, 0.3);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        // Use strict mode for better error handling
+        'use strict';
+
+        // Wait for the DOM to be fully loaded before starting the game
+        window.addEventListener('load', function() {
+
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+
+            let lastTime = 0;
+            let score = 0;
+            let highScore = localStorage.getItem('vectorVelocityHighScore') || 0;
+            let gameState = 'start'; // 'start', 'playing', 'gameOver'
+            let gameSpeed = 3;
+            let baseGameSpeed = 3;
+            const maxGameSpeed = 12;
+
+            // --- SOUND MANAGER ---
+            class SoundManager {
+                constructor() {
+                    this.audioContext = null;
+                    this.engineSound = null;
+                    this.engineGain = null;
+                    this.isMuted = false;
+                }
+
+                init() {
+                    // AudioContext must be resumed after a user gesture
+                    if (!this.audioContext) {
+                        try {
+                            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                        } catch(e) {
+                            console.error("Web Audio API is not supported in this browser");
+                        }
+                    }
+                }
+
+                _createOscillator(type, frequency) {
+                    const oscillator = this.audioContext.createOscillator();
+                    oscillator.type = type;
+                    oscillator.frequency.setValueAtTime(frequency, this.audioContext.currentTime);
+                    return oscillator;
+                }
+
+                playStartSound() {
+                    if (!this.audioContext || this.isMuted) return;
+                    const oscillator = this._createOscillator('triangle', 440);
+                    const gainNode = this.audioContext.createGain();
+                    gainNode.gain.setValueAtTime(0.2, this.audioContext.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + 0.5);
+                    oscillator.connect(gainNode).connect(this.audioContext.destination);
+                    oscillator.start();
+                    oscillator.stop(this.audioContext.currentTime + 0.5);
+                }
+
+                playCrashSound() {
+                    if (!this.audioContext || this.isMuted) return;
+                    const oscillator = this._createOscillator('sawtooth', 200);
+                    const gainNode = this.audioContext.createGain();
+                    oscillator.frequency.exponentialRampToValueAtTime(50, this.audioContext.currentTime + 0.3);
+                    gainNode.gain.setValueAtTime(0.4, this.audioContext.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + 0.3);
+                    oscillator.connect(gainNode).connect(this.audioContext.destination);
+                    oscillator.start();
+                    oscillator.stop(this.audioContext.currentTime + 0.3);
+                }
+
+                startEngineSound() {
+                    if (!this.audioContext || this.engineSound || this.isMuted) return;
+                    this.engineSound = this._createOscillator('sawtooth', 60);
+                    this.engineGain = this.audioContext.createGain();
+                    this.engineGain.gain.setValueAtTime(0.1, this.audioContext.currentTime);
+                    this.engineSound.connect(this.engineGain).connect(this.audioContext.destination);
+                    this.engineSound.start();
+                }
+
+                stopEngineSound() {
+                    if (this.engineSound) {
+                        this.engineSound.stop();
+                        this.engineSound = null;
+                    }
+                }
+
+                updateEnginePitch(speedRatio) {
+                    if (this.engineSound && this.audioContext) {
+                        const baseFreq = 60;
+                        const maxFreq = 120;
+                        const newFreq = baseFreq + (maxFreq - baseFreq) * speedRatio;
+                        this.engineSound.frequency.setTargetAtTime(newFreq, this.audioContext.currentTime, 0.1);
+                    }
+                }
+            }
+            const soundManager = new SoundManager();
+
+            // --- INPUT HANDLER ---
+            class InputHandler {
+                constructor() {
+                    this.keys = new Set();
+                    window.addEventListener('keydown', e => this.keys.add(e.key));
+                    window.addEventListener('keyup', e => this.keys.delete(e.key));
+
+                    // Touch controls
+                    this.touchX = null;
+                    this.touching = false;
+                    canvas.addEventListener('touchstart', e => {
+                        e.preventDefault();
+                        this.touching = true;
+                        this.touchX = e.touches[0].clientX;
+                    }, { passive: false });
+                    canvas.addEventListener('touchmove', e => {
+                        e.preventDefault();
+                        if (this.touching) {
+                            this.touchX = e.touches[0].clientX;
+                        }
+                    }, { passive: false });
+                    canvas.addEventListener('touchend', e => {
+                        e.preventDefault();
+                        this.touching = false;
+                        this.touchX = null;
+                    }, { passive: false });
+                }
+            }
+            const input = new InputHandler();
+
+            // --- PLAYER ---
+            class Player {
+                constructor(gameWidth, gameHeight) {
+                    this.gameWidth = gameWidth;
+                    this.gameHeight = gameHeight;
+                    this.width = 50;
+                    this.height = 50;
+                    this.x = (this.gameWidth / 2) - (this.width / 2);
+                    this.y = this.gameHeight - this.height - 20;
+                    this.speed = 0;
+                    this.maxSpeed = 8;
+                    this.emoji = '🏎️';
+                    this.fontSize = 50;
+                }
+
+                draw(context) {
+                    context.save();
+                    context.shadowColor = 'cyan';
+                    context.shadowBlur = 20;
+                    context.font = `${this.fontSize}px Arial`;
+                    context.textAlign = 'center';
+                    context.textBaseline = 'middle';
+                    context.fillText(this.emoji, this.x + this.width / 2, this.y + this.height / 2);
+                    context.restore();
+                }
+
+                update(input, road) {
+                    // Keyboard controls
+                    if (input.keys.has('ArrowLeft') || input.keys.has('a')) this.speed = -this.maxSpeed;
+                    else if (input.keys.has('ArrowRight') || input.keys.has('d')) this.speed = this.maxSpeed;
+                    else this.speed = 0;
+                    
+                    // Touch/Mouse controls
+                    if (input.touching) {
+                        const touchTargetRatio = (input.touchX / window.innerWidth);
+                        const targetX = (road.width * touchTargetRatio) + road.left - this.width / 2;
+                        const dx = targetX - this.x;
+                        this.speed = dx * 0.2; // Proportional control
+                    }
+
+                    this.x += this.speed;
+
+                    // Keep player within road boundaries
+                    if (this.x < road.left) this.x = road.left;
+                    if (this.x > road.right - this.width) this.x = road.right - this.width;
+                }
+
+                reset() {
+                    this.x = (this.gameWidth / 2) - (this.width / 2);
+                    this.y = this.gameHeight - this.height - 20;
+                }
+            }
+
+            // --- OBSTACLES ---
+            class Obstacle {
+                constructor(gameWidth, gameHeight, road) {
+                    this.gameWidth = gameWidth;
+                    this.gameHeight = gameHeight;
+                    this.width = 50;
+                    this.height = 50;
+                    this.road = road;
+                    const laneWidth = this.road.width / 3;
+                    const lane = Math.floor(Math.random() * 3);
+                    this.x = this.road.left + (lane * laneWidth) + (laneWidth / 2) - (this.width / 2);
+                    this.y = -this.height;
+                    this.markedForDeletion = false;
+                    const emojis = ['🚗', '🚙', '🚚', '🚓', '🚑'];
+                    this.emoji = emojis[Math.floor(Math.random() * emojis.length)];
+                    this.fontSize = 50;
+                }
+
+                draw(context) {
+                    context.save();
+                    context.shadowColor = 'magenta';
+                    context.shadowBlur = 15;
+                    context.font = `${this.fontSize}px Arial`;
+                    context.textAlign = 'center';
+                    context.textBaseline = 'middle';
+                    context.fillText(this.emoji, this.x + this.width / 2, this.y + this.height / 2);
+                    context.restore();
+                }
+
+                update() {
+                    this.y += gameSpeed;
+                    if (this.y > this.gameHeight) {
+                        this.markedForDeletion = true;
+                    }
+                }
+            }
+
+            // --- PARTICLES (for explosion) ---
+            class Particle {
+                constructor(x, y) {
+                    this.x = x;
+                    this.y = y;
+                    this.size = Math.random() * 7 + 3;
+                    this.speedX = Math.random() * 6 - 3;
+                    this.speedY = Math.random() * 6 - 3;
+                    this.color = `hsl(${Math.random() * 60 + 200}, 100%, 50%)`; // Shades of blue/cyan
+                    this.life = 1;
+                    this.maxLife = Math.random() * 50 + 30;
+                }
+                update() {
+                    this.x += this.speedX;
+                    this.y += this.speedY;
+                    this.life++;
+                    if (this.life > this.maxLife) return false;
+                    return true;
+                }
+                draw(context) {
+                    context.save();
+                    context.globalAlpha = 1 - (this.life / this.maxLife);
+                    context.fillStyle = this.color;
+                    context.beginPath();
+                    context.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                    context.fill();
+                    context.restore();
+                }
+            }
+
+            // --- GAME VISUALS ---
+            class Visuals {
+                constructor(gameWidth, gameHeight) {
+                    this.gameWidth = gameWidth;
+                    this.gameHeight = gameHeight;
+                    this.roadWidth = gameWidth * 0.6;
+                    this.road = {
+                        width: this.roadWidth,
+                        left: (this.gameWidth - this.roadWidth) / 2,
+                        right: (this.gameWidth + this.roadWidth) / 2
+                    };
+                    this.roadLines = [];
+                    this.stars = [];
+                    this.particles = [];
+                    this.init();
+                }
+
+                init() {
+                    // Initialize road lines
+                    for (let i = 0; i < 10; i++) {
+                        this.roadLines.push({
+                            y: i * (this.gameHeight / 10),
+                            height: 30
+                        });
+                    }
+                    // Initialize background stars
+                    for (let i = 0; i < 100; i++) {
+                        this.stars.push({
+                            x: Math.random() * this.gameWidth,
+                            y: Math.random() * this.gameHeight,
+                            size: Math.random() * 2,
+                            speed: Math.random() * 0.5 + 0.2
+                        });
+                    }
+                }
+
+                draw(context) {
+                    // Draw Stars
+                    context.fillStyle = 'white';
+                    this.stars.forEach(star => {
+                        context.fillRect(star.x, star.y, star.size, star.size);
+                        star.y += star.speed * (gameSpeed / baseGameSpeed);
+                        if (star.y > this.gameHeight) {
+                            star.y = 0;
+                            star.x = Math.random() * this.gameWidth;
+                        }
+                    });
+
+                    // Draw Road
+                    context.fillStyle = '#222';
+                    context.fillRect(this.road.left, 0, this.road.width, this.gameHeight);
+
+                    // Draw Road markings
+                    context.fillStyle = 'white';
+                    const laneWidth = this.road.width / 3;
+                    for (let i = 1; i < 3; i++) {
+                        this.roadLines.forEach(line => {
+                            context.fillRect(this.road.left + (i * laneWidth) - 5, line.y, 10, line.height);
+                        });
+                    }
+
+                    // Draw Road edges
+                    context.fillStyle = '#cc0000';
+                    context.fillRect(this.road.left - 10, 0, 10, this.gameHeight);
+                    context.fillRect(this.road.right, 0, 10, this.gameHeight);
+                    
+                    // Draw particles
+                    this.particles.forEach((p, index) => {
+                        if (!p.update()) this.particles.splice(index, 1);
+                        else p.draw(context);
+                    });
+                }
+                
+                update() {
+                    // Animate road lines
+                    this.roadLines.forEach(line => {
+                        line.y += gameSpeed;
+                        if (line.y > this.gameHeight) {
+                            line.y = -line.height;
+                        }
+                    });
+                }
+
+                createExplosion(x, y) {
+                    for (let i = 0; i < 50; i++) {
+                        this.particles.push(new Particle(x, y));
+                    }
+                }
+
+                reset() {
+                    this.particles = [];
+                }
+            }
+
+            // --- GAME LOGIC ---
+            let player;
+            let visuals;
+            let obstacles = [];
+            let obstacleTimer = 0;
+            let obstacleInterval = 2000;
+
+            function handleObstacles(deltaTime) {
+                if (obstacleTimer > obstacleInterval) {
+                    obstacles.push(new Obstacle(canvas.width, canvas.height, visuals.road));
+                    obstacleTimer = 0;
+                    // Make the game harder over time
+                    if (obstacleInterval > 500) obstacleInterval *= 0.995;
+                } else {
+                    obstacleTimer += deltaTime;
+                }
+                obstacles.forEach(obstacle => {
+                    obstacle.update();
+                    obstacle.draw(ctx);
+                });
+                obstacles = obstacles.filter(obstacle => !obstacle.markedForDeletion);
+            }
+
+            function checkCollisions() {
+                obstacles.forEach(obstacle => {
+                    const dx = (player.x + player.width / 2) - (obstacle.x + obstacle.width / 2);
+                    const dy = (player.y + player.height / 2) - (obstacle.y + obstacle.height / 2);
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    if (distance < player.width / 2 + obstacle.width / 2 - 15) { // -15 for buffer
+                        gameState = 'gameOver';
+                        soundManager.playCrashSound();
+                        soundManager.stopEngineSound();
+                        visuals.createExplosion(player.x + player.width / 2, player.y + player.height / 2);
+                    }
+                });
+            }
+
+            function drawUI(context) {
+                context.save();
+                context.font = '30px "Courier New", Courier, monospace';
+                context.fillStyle = 'white';
+                context.shadowColor = 'black';
+                context.shadowBlur = 5;
+
+                // Score
+                context.textAlign = 'left';
+                context.fillText(`Score: ${Math.floor(score)}`, 20, 40);
+
+                // High Score
+                context.textAlign = 'right';
+                context.fillText(`High Score: ${Math.floor(highScore)}`, canvas.width - 20, 40);
+                context.restore();
+            }
+
+            function drawCenteredText(textLines, fontSize, yOffset = 0) {
+                ctx.save();
+                ctx.fillStyle = 'white';
+                ctx.textAlign = 'center';
+                ctx.shadowColor = 'magenta';
+                ctx.shadowBlur = 10;
+                ctx.font = `bold ${fontSize}px "Courier New", Courier, monospace`;
+                textLines.forEach((line, index) => {
+                    ctx.fillText(line, canvas.width / 2, canvas.height / 2 + yOffset + (index * (fontSize + 10)));
+                });
+                ctx.restore();
+            }
+
+            function showStartScreen() {
+                drawCenteredText(['VECTOR VELOCITY'], 70, -100);
+                drawCenteredText([
+                    'Use [A]/[D] or [←]/[→] to steer',
+                    'On mobile: Touch/drag to steer',
+                    '',
+                    'Click or press Enter to Start'
+                ], 24);
+            }
+
+            function showGameOverScreen() {
+                if (score > highScore) {
+                    highScore = score;
+                    localStorage.setItem('vectorVelocityHighScore', Math.floor(highScore));
+                }
+
+                drawCenteredText(['GAME OVER'], 80, -100);
+                drawCenteredText([
+                    `Your Score: ${Math.floor(score)}`,
+                    `High Score: ${Math.floor(highScore)}`,
+                    '',
+                    'Click or press Enter to Restart'
+                ], 30);
+            }
+            
+            function resetGame() {
+                player.reset();
+                obstacles = [];
+                visuals.reset();
+                score = 0;
+                gameSpeed = baseGameSpeed;
+                obstacleInterval = 2000;
+                obstacleTimer = 0;
+                gameState = 'playing';
+                soundManager.playStartSound();
+                soundManager.startEngineSound();
+            }
+
+            function handleUserAction() {
+                // Initialize audio on first user gesture
+                soundManager.init();
+                if (gameState === 'start' || gameState === 'gameOver') {
+                    resetGame();
+                }
+            }
+
+            // Event Listeners for starting/restarting
+            canvas.addEventListener('click', handleUserAction);
+            window.addEventListener('keydown', e => {
+                if (e.key === 'Enter') {
+                    handleUserAction();
+                }
+            });
+
+            // --- MAIN GAME LOOP ---
+            function animate(timestamp) {
+                const deltaTime = timestamp - lastTime;
+                lastTime = timestamp;
+
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                visuals.draw(ctx);
+
+                if (gameState === 'playing') {
+                    visuals.update();
+                    player.update(input, visuals.road);
+                    player.draw(ctx);
+                    handleObstacles(deltaTime || 0);
+                    checkCollisions();
+
+                    score += (deltaTime || 0) * 0.01;
+                    if (gameSpeed < maxGameSpeed) {
+                        gameSpeed += 0.001;
+                    }
+                    soundManager.updateEnginePitch((gameSpeed - baseGameSpeed) / (maxGameSpeed - baseGameSpeed));
+
+                } else if (gameState === 'start') {
+                    showStartScreen();
+                } else if (gameState === 'gameOver') {
+                    player.draw(ctx); // Draw player one last time
+                    obstacles.forEach(o => o.draw(ctx)); // Draw obstacles
+                    showGameOverScreen();
+                }
+                
+                drawUI(ctx);
+                
+                requestAnimationFrame(animate);
+            }
+
+            // --- RESIZE LOGIC ---
+            function resizeCanvas() {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+                
+                // Re-create components that depend on dimensions.
+                visuals = new Visuals(canvas.width, canvas.height);
+                player = new Player(canvas.width, canvas.height);
+
+                // Clear existing obstacles as their positions relative to the road are now invalid.
+                obstacles = [];
+                obstacleTimer = 0; // Prevent instant spawn
+            }
+
+            window.addEventListener('resize', resizeCanvas);
+            resizeCanvas(); // Initial size set
+
+            // Start the game loop
+            animate(0);
+        });
+    </script>
+</body>
+</html>

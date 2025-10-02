@@ -1,0 +1,8 @@
+{
+  "name": "Vector Velocity",
+  "type": "racing game (top-down or side-view)",
+  "folder": "vector_velocity",
+  "description": "Harness pure momentum as you master the perfect racing line in this stylish, top-down arcade experience. Chain together flawless drifts and boosts to maintain breakneck velocity and leave your rivals in a blur of light.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
