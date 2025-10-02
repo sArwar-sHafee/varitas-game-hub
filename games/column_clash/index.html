@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Column Clash</title>
+    <style>
+        :root {
+            --bg-gradient-start: #2c3e50;
+            --bg-gradient-end: #3498db;
+            --board-color: #2980b9;
+            --shadow-color: rgba(0, 0, 0, 0.2);
+            --text-color: #ecf0f1;
+            --glow-color: rgba(255, 255, 255, 0.7);
+            --player1-color-main: #f1c40f;
+            --player1-color-light: #f39c12;
+            --player2-color-main: #e74c3c;
+            --player2-color-light: #c0392b;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, var(--bg-gradient-start), var(--bg-gradient-end));
+            color: var(--text-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 3rem;
+            margin: 0.5em 0;
+            text-shadow: 3px 3px 5px var(--shadow-color);
+            letter-spacing: 2px;
+        }
+
+        #gameCanvas {
+            background-color: var(--board-color);
+            border-radius: 20px;
+            box-shadow: 0 10px 30px var(--shadow-color);
+            cursor: pointer;
+        }
+
+        .ui-panel {
+            display: flex;
+            justify-content: space-between;
+            width: 90%;
+            max-width: 600px;
+            margin-top: 1em;
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+
+        .player-info {
+            padding: 0.5em 1em;
+            border-radius: 10px;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .player-info.active {
+            transform: scale(1.1);
+            box-shadow: 0 0 20px var(--glow-color);
+        }
+
+        #player1-info {
+            background-color: var(--player1-color-main);
+        }
+
+        #player2-info {
+            background-color: var(--player2-color-main);
+        }
+        
+        .instructions {
+            margin-top: 1em;
+            font-size: 0.9rem;
+            opacity: 0.8;
+        }
+
+        @media (max-width: 600px) {
+            h1 {
+                font-size: 2rem;
+            }
+            .ui-panel {
+                font-size: 1rem;
+            }
+            .instructions {
+                font-size: 0.75rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="game-container">
+        <h1>Column Clash</h1>
+        <div class="ui-panel">
+            <div id="player1-info" class="player-info">Player 1 (🟡): <span id="score1">0</span></div>
+            <div id="player2-info" class="player-info">Player 2 (🔴): <span id="score2">0</span></div>
+        </div>
+        <canvas id="gameCanvas"></canvas>
+        <div class="instructions">
+            Controls: Use <strong>Mouse</strong> or <strong>Arrow Keys</strong> to select a column. <strong>Click</strong> or press <strong>Enter/Space</strong> to drop a piece.
+        </div>
+    </div>
+
+    <script>
+        // ES6+ JavaScript Game Code
+        class ColumnClashGame {
+            constructor(canvasId) {
+                // DOM Elements
+                this.canvas = document.getElementById(canvasId);
+                this.ctx = this.canvas.getContext('2d');
+                this.score1El = document.getElementById('score1');
+                this.score2El = document.getElementById('score2');
+                this.player1InfoEl = document.getElementById('player1-info');
+                this.player2InfoEl = document.getElementById('player2-info');
+
+                // Game Constants
+                this.ROWS = 6;
+                this.COLS = 7;
+                this.PLAYER1_COLOR_MAIN = getComputedStyle(document.documentElement).getPropertyValue('--player1-color-main').trim();
+                this.PLAYER1_COLOR_LIGHT = getComputedStyle(document.documentElement).getPropertyValue('--player1-color-light').trim();
+                this.PLAYER2_COLOR_MAIN = getComputedStyle(document.documentElement).getPropertyValue('--player2-color-main').trim();
+                this.PLAYER2_COLOR_LIGHT = getComputedStyle(document.documentElement).getPropertyValue('--player2-color-light').trim();
+                this.PLAYER1_EMOJI = '🟡';
+                this.PLAYER2_EMOJI = '🔴';
+                this.EMPTY_COLOR = '#FFFFFF';
+                this.WINNING_LINE_COLOR = 'rgba(255, 255, 255, 0.8)';
+                
+                // Game State
+                this.board = [];
+                this.gameState = 'START'; // START, PLAYING, GAME_OVER
+                this.currentPlayer = 1;
+                this.score = { 1: 0, 2: 0 };
+                this.winner = null;
+                this.winningLine = [];
+                this.hoverColumn = -1;
+                
+                // Animation State
+                this.droppingPiece = null;
+                this.animationFrameId = null;
+
+                // Sound Engine (Web Audio API)
+                this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+                // Bindings & Initialization
+                this.init();
+            }
+
+            init() {
+                this.setupEventListeners();
+                this.resizeCanvas();
+                this.createBoard();
+                this.startGameLoop();
+            }
+
+            setupEventListeners() {
+                window.addEventListener('resize', () => this.resizeCanvas());
+                this.canvas.addEventListener('mousemove', e => this.handleMouseMove(e));
+                this.canvas.addEventListener('mouseleave', () => { this.hoverColumn = -1; });
+                this.canvas.addEventListener('click', e => this.handleMouseClick(e));
+                window.addEventListener('keydown', e => this.handleKeyDown(e));
+            }
+            
+            // --- SOUND ---
+            playSound(type) {
+                if (!this.audioCtx || this.audioCtx.state === 'suspended') {
+                    this.audioCtx.resume();
+                }
+                if (!this.audioCtx) return;
+
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+                gainNode.gain.setValueAtTime(0.3, this.audioCtx.currentTime);
+
+                switch (type) {
+                    case 'drop':
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(200, this.audioCtx.currentTime);
+                        oscillator.frequency.exponentialRampToValueAtTime(80, this.audioCtx.currentTime + 0.3);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + 0.3);
+                        break;
+                    case 'win':
+                        this.playWinSoundSequence();
+                        return;
+                    case 'draw':
+                        oscillator.type = 'triangle';
+                        oscillator.frequency.setValueAtTime(200, this.audioCtx.currentTime);
+                        oscillator.frequency.linearRampToValueAtTime(150, this.audioCtx.currentTime + 0.5);
+                        break;
+                    case 'click':
+                        oscillator.type = 'triangle';
+                        oscillator.frequency.setValueAtTime(800, this.audioCtx.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + 0.1);
+                        break;
+                }
+                
+                oscillator.start(this.audioCtx.currentTime);
+                oscillator.stop(this.audioCtx.currentTime + 0.5);
+            }
+
+            playWinSoundSequence() {
+                const notes = [261.63, 329.63, 392.00, 523.25]; // C4, E4, G4, C5
+                let startTime = this.audioCtx.currentTime;
+                notes.forEach((note, i) => {
+                    const oscillator = this.audioCtx.createOscillator();
+                    const gainNode = this.audioCtx.createGain();
+                    oscillator.connect(gainNode);
+                    gainNode.connect(this.audioCtx.destination);
+                    
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(note, startTime + i * 0.1);
+                    gainNode.gain.setValueAtTime(0.3, startTime + i * 0.1);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, startTime + i * 0.1 + 0.2);
+                    
+                    oscillator.start(startTime + i * 0.1);
+                    oscillator.stop(startTime + i * 0.1 + 0.2);
+                });
+            }
+
+            // --- CANVAS & SIZING ---
+            resizeCanvas() {
+                const container = this.canvas.parentElement;
+                const maxWidth = container.clientWidth * 0.95;
+                const maxHeight = window.innerHeight * 0.6;
+
+                const aspectRatio = this.COLS / (this.ROWS + 1); // +1 row for hover area
+                let width = Math.min(maxWidth, maxHeight * aspectRatio);
+                let height = width / aspectRatio;
+
+                if (height > maxHeight) {
+                    height = maxHeight;
+                    width = height * aspectRatio;
+                }
+
+                this.canvas.width = width;
+                this.canvas.height = height;
+                
+                this.SQUARE_SIZE = this.canvas.width / this.COLS;
+                this.RADIUS = this.SQUARE_SIZE / 2 * 0.85;
+            }
+
+            // --- GAME LOGIC ---
+            startGame() {
+                this.createBoard();
+                this.currentPlayer = 1;
+                this.winner = null;
+                this.winningLine = [];
+                this.gameState = 'PLAYING';
+                this.updatePlayerUI();
+            }
+
+            createBoard() {
+                this.board = Array(this.ROWS).fill(null).map(() => Array(this.COLS).fill(0));
+            }
+
+            dropPiece(col) {
+                if (this.gameState !== 'PLAYING' || this.droppingPiece) return;
+                
+                const row = this.getNextOpenRow(col);
+                if (row === null) return; // Column is full
+
+                this.playSound('drop');
+                this.droppingPiece = {
+                    col,
+                    player: this.currentPlayer,
+                    x: (col + 0.5) * this.SQUARE_SIZE,
+                    y: 0,
+                    velocityY: 0,
+                    targetY: (row + 1.5) * this.SQUARE_SIZE,
+                };
+            }
+
+            getNextOpenRow(col) {
+                for (let r = this.ROWS - 1; r >= 0; r--) {
+                    if (this.board[r][col] === 0) {
+                        return r;
+                    }
+                }
+                return null; // Column is full
+            }
+
+            checkForWin() {
+                const checkLine = (a, b, c, d) => {
+                    return (a !== 0 && a === b && a === c && a === d);
+                };
+
+                // Horizontal
+                for (let r = 0; r < this.ROWS; r++) {
+                    for (let c = 0; c <= this.COLS - 4; c++) {
+                        if (checkLine(this.board[r][c], this.board[r][c + 1], this.board[r][c + 2], this.board[r][c + 3])) {
+                            this.winningLine = [{r,c}, {r,c:c+1}, {r,c:c+2}, {r,c:c+3}];
+                            return this.board[r][c];
+                        }
+                    }
+                }
+                // Vertical
+                for (let c = 0; c < this.COLS; c++) {
+                    for (let r = 0; r <= this.ROWS - 4; r++) {
+                        if (checkLine(this.board[r][c], this.board[r + 1][c], this.board[r + 2][c], this.board[r + 3][c])) {
+                            this.winningLine = [{r,c}, {r:r+1,c}, {r:r+2,c}, {r:r+3,c}];
+                            return this.board[r][c];
+                        }
+                    }
+                }
+                // Diagonal (positive slope)
+                for (let r = 0; r <= this.ROWS - 4; r++) {
+                    for (let c = 0; c <= this.COLS - 4; c++) {
+                        if (checkLine(this.board[r][c], this.board[r + 1][c + 1], this.board[r + 2][c + 2], this.board[r + 3][c + 3])) {
+                            this.winningLine = [{r,c}, {r:r+1,c:c+1}, {r:r+2,c:c+2}, {r:r+3,c:c+3}];
+                            return this.board[r][c];
+                        }
+                    }
+                }
+                // Diagonal (negative slope)
+                for (let r = 3; r < this.ROWS; r++) {
+                    for (let c = 0; c <= this.COLS - 4; c++) {
+                        if (checkLine(this.board[r][c], this.board[r - 1][c + 1], this.board[r - 2][c + 2], this.board[r - 3][c + 3])) {
+                            this.winningLine = [{r,c}, {r:r-1,c:c+1}, {r:r-2,c:c+2}, {r:r-3,c:c+3}];
+                            return this.board[r][c];
+                        }
+                    }
+                }
+                return null;
+            }
+            
+            checkForDraw() {
+                return this.board.every(row => row.every(cell => cell !== 0));
+            }
+
+            endGame(winner) {
+                this.gameState = 'GAME_OVER';
+                this.winner = winner;
+                if (winner) {
+                    this.score[winner]++;
+                    this.playSound('win');
+                } else {
+                    this.playSound('draw');
+                }
+                this.updateScoreUI();
+            }
+
+            // --- UI & DRAWING ---
+            updatePlayerUI() {
+                if (this.currentPlayer === 1) {
+                    this.player1InfoEl.classList.add('active');
+                    this.player2InfoEl.classList.remove('active');
+                } else {
+                    this.player1InfoEl.classList.remove('active');
+                    this.player2InfoEl.classList.add('active');
+                }
+            }
+            
+            updateScoreUI() {
+                this.score1El.textContent = this.score[1];
+                this.score2El.textContent = this.score[2];
+            }
+
+            draw() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                this.drawBoard();
+                this.drawPieces();
+                if (this.droppingPiece) this.drawDroppingPiece();
+                if (this.gameState === 'PLAYING') this.drawHoverIndicator();
+                if (this.gameState === 'GAME_OVER') this.drawWinningLine();
+                this.drawOverlay();
+            }
+
+            drawBoard() {
+                // The canvas background is already set in CSS, so we only need to draw the holes.
+                // This also naturally leaves the top row clear for the hover indicator.
+                for (let r = 0; r < this.ROWS; r++) {
+                    for (let c = 0; c < this.COLS; c++) {
+                        this.ctx.beginPath();
+                        const x = c * this.SQUARE_SIZE + this.SQUARE_SIZE / 2;
+                        const y = r * this.SQUARE_SIZE + this.SQUARE_SIZE / 2 + this.SQUARE_SIZE;
+                        this.ctx.arc(x, y, this.RADIUS, 0, Math.PI * 2, true); // Use true for counter-clockwise
+                        this.ctx.rect(this.canvas.width, 0, -this.canvas.width, this.canvas.height); // Create a hole
+                        this.ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--board-color').trim();
+                        this.ctx.fill();
+                    }
+                }
+            }
+            
+            drawPieces() {
+                for (let r = 0; r < this.ROWS; r++) {
+                    for (let c = 0; c < this.COLS; c++) {
+                        if (this.board[r][c] !== 0) {
+                            this.drawPiece(c, r + 1, this.board[r][c]);
+                        }
+                    }
+                }
+            }
+
+            drawDroppingPiece() {
+                if (!this.droppingPiece) return;
+                const { col, player, x, y } = this.droppingPiece;
+                this.drawPieceAtCoords(x, y, player);
+            }
+
+            drawPiece(col, row, player) {
+                const x = (col + 0.5) * this.SQUARE_SIZE;
+                const y = (row + 0.5) * this.SQUARE_SIZE;
+                this.drawPieceAtCoords(x, y, player);
+            }
+            
+            drawPieceAtCoords(x, y, player) {
+                const colorMain = player === 1 ? this.PLAYER1_COLOR_MAIN : this.PLAYER2_COLOR_MAIN;
+                const colorLight = player === 1 ? this.PLAYER1_COLOR_LIGHT : this.PLAYER2_COLOR_LIGHT;
+                
+                const gradient = this.ctx.createRadialGradient(x - this.RADIUS * 0.2, y - this.RADIUS * 0.2, this.RADIUS * 0.1, x, y, this.RADIUS);
+                gradient.addColorStop(0, colorLight);
+                gradient.addColorStop(1, colorMain);
+
+                this.ctx.beginPath();
+                this.ctx.arc(x, y, this.RADIUS, 0, Math.PI * 2);
+                this.ctx.fillStyle = gradient;
+                this.ctx.fill();
+            }
+
+            drawHoverIndicator() {
+                if (this.hoverColumn !== -1 && !this.droppingPiece) {
+                    const x = (this.hoverColumn + 0.5) * this.SQUARE_SIZE;
+                    const y = 0.5 * this.SQUARE_SIZE;
+                    const player = this.currentPlayer;
+                    
+                    this.ctx.save();
+                    this.ctx.globalAlpha = 0.6;
+                    this.drawPieceAtCoords(x, y, player);
+                    this.ctx.restore();
+                }
+            }
+
+            drawWinningLine() {
+                if (this.winningLine.length < 4) return;
+                
+                const start = this.winningLine[0];
+                const end = this.winningLine[3];
+                
+                const startX = (start.c + 0.5) * this.SQUARE_SIZE;
+                const startY = (start.r + 1.5) * this.SQUARE_SIZE;
+                const endX = (end.c + 0.5) * this.SQUARE_SIZE;
+                const endY = (end.r + 1.5) * this.SQUARE_SIZE;
+                
+                this.ctx.beginPath();
+                this.ctx.moveTo(startX, startY);
+                this.ctx.lineTo(endX, endY);
+                this.ctx.strokeStyle = this.WINNING_LINE_COLOR;
+                this.ctx.lineWidth = this.RADIUS * 0.5;
+                this.ctx.lineCap = 'round';
+                
+                this.ctx.shadowColor = 'white';
+                this.ctx.shadowBlur = 20;
+                
+                this.ctx.stroke();
+                
+                this.ctx.shadowColor = 'transparent';
+                this.ctx.shadowBlur = 0;
+            }
+
+            drawOverlay() {
+                if (this.gameState === 'START' || this.gameState === 'GAME_OVER') {
+                    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+                    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+                    this.ctx.textAlign = 'center';
+                    this.ctx.textBaseline = 'middle';
+                    this.ctx.fillStyle = 'white';
+                    
+                    if (this.gameState === 'START') {
+                        this.ctx.font = `bold ${this.canvas.width / 10}px Arial`;
+                        this.ctx.fillText('Column Clash', this.canvas.width / 2, this.canvas.height / 2 - 40);
+                        this.ctx.font = `${this.canvas.width / 25}px Arial`;
+                        this.ctx.fillText('Click or Press Enter to Start', this.canvas.width / 2, this.canvas.height / 2 + 20);
+                    } else { // GAME_OVER
+                        let message = '';
+                        if (this.winner) {
+                            const winnerEmoji = this.winner === 1 ? this.PLAYER1_EMOJI : this.PLAYER2_EMOJI;
+                            message = `Player ${this.winner} ${winnerEmoji} Wins!`;
+                        } else {
+                            message = "It's a Draw!";
+                        }
+                        this.ctx.font = `bold ${this.canvas.width / 12}px Arial`;
+                        this.ctx.fillText(message, this.canvas.width / 2, this.canvas.height / 2 - 40);
+                        this.ctx.font = `${this.canvas.width / 25}px Arial`;
+                        this.ctx.fillText('Click or Press Enter to Play Again', this.canvas.width / 2, this.canvas.height / 2 + 20);
+                    }
+                }
+            }
+
+            // --- ANIMATION & GAME LOOP ---
+            update(deltaTime) {
+                if (this.droppingPiece) {
+                    const gravity = 0.5 * (this.SQUARE_SIZE / 50); // Scale gravity with size
+                    this.droppingPiece.velocityY += gravity * (deltaTime / 16.67);
+                    this.droppingPiece.y += this.droppingPiece.velocityY;
+
+                    if (this.droppingPiece.y >= this.droppingPiece.targetY) {
+                        this.droppingPiece.y = this.droppingPiece.targetY;
+                        const row = Math.round(this.droppingPiece.targetY / this.SQUARE_SIZE - 1.5);
+                        this.board[row][this.droppingPiece.col] = this.droppingPiece.player;
+                        
+                        this.droppingPiece = null;
+                        
+                        const winner = this.checkForWin();
+                        if (winner) {
+                            this.endGame(winner);
+                        } else if (this.checkForDraw()) {
+                            this.endGame(null); // Draw
+                        } else {
+                            this.currentPlayer = this.currentPlayer === 1 ? 2 : 1;
+                            this.updatePlayerUI();
+                        }
+                    }
+                }
+            }
+            
+            startGameLoop() {
+                let lastTime = 0;
+                const loop = (timestamp) => {
+                    if (!lastTime) lastTime = timestamp;
+                    const deltaTime = timestamp - lastTime;
+                    lastTime = timestamp;
+
+                    this.update(deltaTime);
+                    this.draw();
+
+                    this.animationFrameId = requestAnimationFrame(loop);
+                };
+                this.animationFrameId = requestAnimationFrame(loop);
+            }
+            
+            // --- EVENT HANDLERS ---
+            handleMouseMove(e) {
+                if (this.gameState !== 'PLAYING') return;
+                const rect = this.canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                this.hoverColumn = Math.floor(x / this.SQUARE_SIZE);
+            }
+
+            handleMouseClick(e) {
+                this.playSound('click');
+                if (this.gameState === 'PLAYING') {
+                    if (this.hoverColumn > -1 && this.hoverColumn < this.COLS) {
+                       this.dropPiece(this.hoverColumn);
+                    }
+                } else {
+                    this.startGame();
+                }
+            }
+
+            handleKeyDown(e) {
+                if (this.gameState === 'PLAYING') {
+                    if (e.key === 'ArrowRight') {
+                        this.hoverColumn = (this.hoverColumn + 1) % this.COLS;
+                    } else if (e.key === 'ArrowLeft') {
+                        this.hoverColumn = (this.hoverColumn - 1 + this.COLS) % this.COLS;
+                    } else if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        if (this.hoverColumn !== -1) {
+                            this.dropPiece(this.hoverColumn);
+                        }
+                    }
+                } else {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        this.playSound('click');
+                        this.startGame();
+                    }
+                }
+            }
+        }
+
+        // Initialize the game when the DOM is ready
+        window.addEventListener('DOMContentLoaded', () => {
+            const game = new ColumnClashGame('gameCanvas');
+        });
+    </script>
+
+</body>
+</html>

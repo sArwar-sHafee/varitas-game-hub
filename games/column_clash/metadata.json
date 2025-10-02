@@ -1,0 +1,8 @@
+{
+  "name": "Column Clash",
+  "type": "connect four",
+  "folder": "column_clash",
+  "description": "Seize control of the columns in a tense, strategic showdown of gravity and wits! Block your rival's every move as you drop your way to a victorious four-in-a-row assault.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
