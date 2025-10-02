@@ -1,0 +1,8 @@
+{
+  "name": "Gleam Burst",
+  "type": "bubble shooter",
+  "folder": "gleam_burst",
+  "description": "Unleash spectacular chain reactions and watch shimmering bubbles shatter in a cascade of brilliant light. Master powerful boosts to clear the board in an immensely satisfying and dazzling flash",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
