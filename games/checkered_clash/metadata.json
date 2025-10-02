@@ -1,0 +1,8 @@
+{
+  "name": "Checkered Clash",
+  "type": "chess",
+  "folder": "checkered_clash",
+  "description": "Unleash devastating strategies in a lightning-fast evolution of chess where every move is a tactical clash. Outmaneuver and shatter your opponent's defenses to dominate the checkered battlefield",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
