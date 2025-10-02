@@ -1,0 +1,8 @@
+{
+  "name": "Fable Fray",
+  "type": "card battle game (like Hearthstone-lite)",
+  "folder": "fable_fray",
+  "description": "Unleash legendary heroes from twisted fairy tales and clash in lightning-fast strategic duels. Outwit your opponent by weaving powerful card combos to shatter their defenses and forge your own legend.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

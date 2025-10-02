@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fable Fray</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100%;
+            background: #1a1a2e;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #e0e0e0;
+        }
+        #game-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            height: 100%;
+        }
+        canvas {
+            display: block;
+            background: #0f0c29;
+            background: -webkit-linear-gradient(to top, #24243e, #302b63, #0f0c29);
+            background: linear-gradient(to top, #24243e, #302b63, #0f0c29);
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+        #instructions {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+            max-width: 300px;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+    <div id="instructions">
+        <strong>How to Play Fable Fray:</strong><br>
+        - Your goal is to reduce the enemy's health (top) to 0.<br>
+        - Each turn, you gain Mana to play cards.<br>
+        - Click a card in your hand to select it, then click your side of the board to play it.<br>
+        - Click one of your creatures on the board to select it, then click an enemy creature or the enemy hero to attack.<br>
+        - Creatures cannot attack the turn they are played (unless they have ⚡ Rush).<br>
+        - Click the "End Turn" button to pass to the AI.
+    </div>
+
+<script>
+class Sound {
+    constructor() {
+        this.audioCtx = null;
+        try {
+            this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        } catch (e) {
+            console.error("Web Audio API is not supported in this browser");
+        }
+    }
+
+    play(type, duration = 0.1) {
+        if (!this.audioCtx) return;
+        
+        try {
+            // Resume context on user gesture if needed
+            if (this.audioCtx.state === 'suspended') {
+                this.audioCtx.resume();
+            }
+
+            const oscillator = this.audioCtx.createOscillator();
+            const gainNode = this.audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(this.audioCtx.destination);
+
+            switch(type) {
+                case 'click':
+                    oscillator.type = 'triangle';
+                    oscillator.frequency.setValueAtTime(880, this.audioCtx.currentTime);
+                    gainNode.gain.setValueAtTime(0.1, this.audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + duration);
+                    break;
+                case 'playCard':
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(261.63, this.audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(523.25, this.audioCtx.currentTime + duration * 1.5);
+                    gainNode.gain.setValueAtTime(0.2, this.audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + duration * 1.5);
+                    break;
+                case 'attack':
+                    oscillator.type = 'square';
+                    oscillator.frequency.setValueAtTime(440, this.audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(110, this.audioCtx.currentTime + duration);
+                    gainNode.gain.setValueAtTime(0.15, this.audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + duration);
+                    break;
+                case 'damage':
+                    oscillator.type = 'sawtooth';
+                    oscillator.frequency.setValueAtTime(220, this.audioCtx.currentTime);
+                    gainNode.gain.setValueAtTime(0.2, this.audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + duration);
+                    break;
+                case 'win':
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(523.25, this.audioCtx.currentTime);
+                    oscillator.frequency.linearRampToValueAtTime(659.25, this.audioCtx.currentTime + 0.1);
+                    oscillator.frequency.linearRampToValueAtTime(783.99, this.audioCtx.currentTime + 0.2);
+                    gainNode.gain.setValueAtTime(0.2, this.audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + 0.5);
+                    break;
+                 case 'lose':
+                    oscillator.type = 'sawtooth';
+                    oscillator.frequency.setValueAtTime(220, this.audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(110, this.audioCtx.currentTime + 0.5);
+                    gainNode.gain.setValueAtTime(0.2, this.audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + 0.8);
+                    break;
+            }
+            
+            oscillator.start();
+            oscillator.stop(this.audioCtx.currentTime + duration * 2);
+        } catch (e) {
+            console.error("Sound playback failed", e);
+        }
+    }
+}
+
+const sound = new Sound();
+
+const CARD_TEMPLATES = [
+    { name: "Goblin Scout", emoji: "👺", cost: 1, attack: 1, health: 1, desc: "" },
+    { name: "Forest Sprite", emoji: "🧚", cost: 2, attack: 2, health: 2, desc: "" },
+    { name: "Armored Knight", emoji: "🛡️", cost: 3, attack: 2, health: 4, desc: "" },
+    { name: "Swift Griffin", emoji: "🦅", cost: 3, attack: 3, health: 2, desc: "⚡ Rush", abilities: ["rush"] },
+    { name: "Wise Wizard", emoji: "🧙", cost: 4, attack: 4, health: 3, desc: "" },
+    { name: "Stone Golem", emoji: "🗿", cost: 5, attack: 4, health: 6, desc: "" },
+    { name: "Shadow Assassin", emoji: "🥷", cost: 5, attack: 6, health: 2, desc: "" },
+    { name: "Charging Boar", emoji: "🐗", cost: 4, attack: 5, health: 1, desc: "⚡ Rush", abilities: ["rush"]},
+    { name: "Fire Dragon", emoji: "🐉", cost: 7, attack: 6, health: 6, desc: "" },
+    { name: "Sea Serpent", emoji: "🐍", cost: 6, attack: 7, health: 4, desc: "" },
+    { name: "Ancient Treant", emoji: "🌳", cost: 8, attack: 8, health: 8, desc: "" },
+];
+
+class Card {
+    constructor(template, owner) {
+        this.id = Math.random();
+        this.owner = owner;
+        Object.assign(this, template);
+
+        // Animation properties
+        this.x = 0; this.y = 0; this.targetX = 0; this.targetY = 0;
+        this.width = 0; this.height = 0;
+        this.rotation = (Math.random() - 0.5) * 0.1;
+        this.isHovered = false;
+    }
+
+    update(deltaTime) {
+        const speed = 0.2;
+        this.x += (this.targetX - this.x) * speed;
+        this.y += (this.targetY - this.y) * speed;
+    }
+
+    draw(ctx, isPlayable, isSelected) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.rotation);
+
+        const cardWidth = this.width;
+        const cardHeight = this.height;
+
+        // Card body
+        ctx.shadowColor = 'rgba(0,0,0,0.7)';
+        ctx.shadowBlur = this.isHovered ? 30 : 15;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 5;
+
+        const gradient = ctx.createLinearGradient(0, -cardHeight/2, 0, cardHeight/2);
+        gradient.addColorStop(0, '#6d6d8d');
+        gradient.addColorStop(1, '#4a4a6a');
+        ctx.fillStyle = gradient;
+        this.roundRect(ctx, -cardWidth/2, -cardHeight/2, cardWidth, cardHeight, 10);
+        ctx.fill();
+        
+        // Highlight
+        ctx.strokeStyle = 'transparent'; // Reset stroke style
+        ctx.lineWidth = 1;
+        if (isPlayable) {
+            ctx.shadowColor = '#00ff00';
+            ctx.shadowBlur = 30;
+            ctx.strokeStyle = 'rgba(127, 255, 127, 0.8)';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+        }
+         if (isSelected) {
+            ctx.shadowColor = '#ffff00';
+            ctx.shadowBlur = 40;
+            ctx.strokeStyle = 'rgba(255, 255, 0, 1)';
+            ctx.lineWidth = 4;
+            ctx.stroke();
+        }
+
+        ctx.shadowColor = 'transparent'; // Reset shadow for text
+
+        // Emoji art
+        const emojiSize = cardHeight * 0.4;
+        ctx.font = `${emojiSize}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(this.emoji, 0, -cardHeight * 0.05);
+
+        // Name
+        const nameFontSize = cardHeight * 0.1;
+        ctx.fillStyle = '#ffffff';
+        ctx.font = `bold ${nameFontSize}px 'Segoe UI'`;
+        ctx.fillText(this.name, 0, -cardHeight * 0.4);
+        
+        // Description
+        const descFontSize = cardHeight * 0.08;
+        ctx.font = `italic ${descFontSize}px 'Segoe UI'`;
+        ctx.fillText(this.desc, 0, cardHeight * 0.3);
+
+        // Stats
+        this.drawStatCircle(ctx, this.cost, -cardWidth/2, -cardHeight/2, cardHeight*0.15, '#3498db', '#ffffff'); // Cost
+        
+        ctx.restore();
+    }
+    
+    drawStatCircle(ctx, text, x, y, radius, bgColor, textColor) {
+        ctx.fillStyle = bgColor;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.fillStyle = textColor;
+        ctx.font = `bold ${radius * 1.2}px 'Segoe UI'`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, x, y);
+    }
+    
+    roundRect(ctx, x, y, width, height, radius) {
+        ctx.beginPath();
+        ctx.moveTo(x + radius, y);
+        ctx.lineTo(x + width - radius, y);
+        ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+        ctx.lineTo(x + width, y + height - radius);
+        ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+        ctx.lineTo(x + radius, y + height);
+        ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+        ctx.lineTo(x, y + radius);
+        ctx.quadraticCurveTo(x, y, x + radius, y);
+        ctx.closePath();
+    }
+}
+
+class Minion extends Card {
+    constructor(cardTemplate, owner) {
+        super(cardTemplate, owner);
+        this.currentHealth = this.health;
+        this.canAttack = this.abilities?.includes('rush') || false;
+        this.isPlayedThisTurn = true;
+        this.isAttacking = false;
+        this.attackTarget = null;
+    }
+
+    takeDamage(amount) {
+        this.currentHealth -= amount;
+    }
+
+    update(deltaTime) {
+        if (this.isAttacking && this.attackTarget) {
+            const dx = this.attackTarget.x - this.x;
+            const dy = this.attackTarget.y - this.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            
+            if (dist < 10) {
+                this.isAttacking = false;
+                this.x = this.targetX;
+                this.y = this.targetY;
+                this.attackTarget = null;
+            } else {
+                 this.x += dx * 0.3;
+                 this.y += dy * 0.3;
+            }
+        } else {
+            super.update(deltaTime);
+        }
+    }
+
+    draw(ctx, isSelected, canAttackNow) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.rotation);
+
+        const cardWidth = this.width;
+        const cardHeight = this.height;
+
+        // Minion body
+        ctx.shadowColor = 'rgba(0,0,0,0.7)';
+        ctx.shadowBlur = this.isHovered ? 25 : 15;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 5;
+
+        const gradient = ctx.createRadialGradient(0, 0, 5, 0, 0, cardWidth);
+        gradient.addColorStop(0, '#8e8eaf');
+        gradient.addColorStop(1, '#5a5a7a');
+        ctx.fillStyle = gradient;
+        this.roundRect(ctx, -cardWidth/2, -cardHeight/2, cardWidth, cardHeight, 10);
+        ctx.fill();
+
+        // Highlight
+        ctx.strokeStyle = 'transparent';
+        ctx.lineWidth = 1;
+        if (canAttackNow) {
+            ctx.shadowColor = '#00ff00';
+            ctx.shadowBlur = 30;
+            ctx.strokeStyle = 'rgba(127, 255, 127, 0.8)';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+        }
+        if (isSelected) {
+            ctx.shadowColor = '#ffff00';
+            ctx.shadowBlur = 40;
+            ctx.strokeStyle = 'rgba(255, 255, 0, 1)';
+            ctx.lineWidth = 4;
+            ctx.stroke();
+        }
+
+        ctx.shadowColor = 'transparent';
+
+        // Emoji
+        const emojiSize = cardHeight * 0.6;
+        ctx.font = `${emojiSize}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(this.emoji, 0, 0);
+
+        // Stats
+        this.drawStatCircle(ctx, this.attack, -cardWidth/2, cardHeight/2, cardHeight*0.15, '#e74c3c', '#ffffff'); // Attack
+        const healthColor = this.currentHealth < this.health ? '#ffdddd' : '#ffffff';
+        this.drawStatCircle(ctx, this.currentHealth, cardWidth/2, cardHeight/2, cardHeight*0.15, '#2ecc71', healthColor); // Health
+        
+        ctx.restore();
+    }
+}
+
+class Player {
+    constructor(isAI, game) {
+        this.game = game;
+        this.isAI = isAI;
+        this.maxHealth = 30;
+        this.health = this.maxHealth;
+        this.maxMana = 0;
+        this.mana = 0;
+        this.deck = [];
+        this.hand = [];
+        this.board = [];
+        this.isMyTurn = false;
+
+        // For animation
+        this.x = 0; this.y = 0; this.width = 0; this.height = 0;
+    }
+
+    initDeck() {
+        this.deck = [];
+        for(let i = 0; i < 2; i++) {
+            CARD_TEMPLATES.forEach(template => {
+                this.deck.push(new Card(template, this));
+            });
+        }
+        this.shuffleDeck();
+    }
+    
+    shuffleDeck() {
+        for (let i = this.deck.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [this.deck[i], this.deck[j]] = [this.deck[j], this.deck[i]];
+        }
+    }
+
+    drawCard() {
+        if (this.deck.length > 0 && this.hand.length < 10) {
+            const card = this.deck.pop();
+            this.hand.push(card);
+            sound.play('click', 0.2);
+        } else if (this.deck.length === 0) {
+            // Fatigue damage
+            this.game.dealDamage(this, 1);
+        }
+    }
+    
+    startTurn() {
+        this.isMyTurn = true;
+        if (this.maxMana < 10) {
+            this.maxMana++;
+        }
+        this.mana = this.maxMana;
+        this.board.forEach(minion => {
+            minion.isPlayedThisTurn = false;
+            minion.canAttack = true;
+        });
+        this.drawCard();
+    }
+
+    takeDamage(amount) {
+        this.health -= amount;
+        if (this.health < 0) this.health = 0;
+    }
+}
+
+class Particle {
+    constructor(x, y, text, color, life = 1) {
+        this.x = x;
+        this.y = y;
+        this.text = text;
+        this.color = color;
+        this.life = life;
+        this.vy = -2;
+        this.opacity = 1;
+    }
+
+    update(deltaTime) {
+        this.life -= deltaTime;
+        this.y += this.vy * deltaTime * 60;
+        this.opacity = this.life > 0 ? this.life : 0;
+    }
+
+    draw(ctx) {
+        ctx.save();
+        ctx.globalAlpha = this.opacity;
+        ctx.fillStyle = this.color;
+        ctx.font = `bold 30px 'Segoe UI'`;
+        ctx.textAlign = 'center';
+        ctx.shadowColor = 'black';
+        ctx.shadowBlur = 5;
+        ctx.fillText(this.text, this.x, this.y);
+        ctx.restore();
+    }
+}
+
+class Game {
+    constructor(canvas) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.gameState = 'START'; // START, PLAYING, GAME_OVER
+        this.winner = null;
+        
+        this.mouse = { x: 0, y: 0, down: false, clicked: false };
+        this.selectedCard = null;
+        this.selectedMinion = null;
+        this.targeting = false;
+
+        this.particles = [];
+        this.aiThinking = false;
+
+        this.resize();
+        window.addEventListener('resize', () => this.resize());
+        this.canvas.addEventListener('mousemove', e => this.handleMouseMove(e));
+        this.canvas.addEventListener('mousedown', e => this.handleMouseDown(e));
+        this.canvas.addEventListener('mouseup', e => this.handleMouseUp(e));
+
+        this.lastTime = 0;
+        this.loop = this.loop.bind(this);
+    }
+
+    init() {
+        this.player = new Player(false, this);
+        this.enemy = new Player(true, this);
+        this.player.initDeck();
+        this.enemy.initDeck();
+
+        for (let i = 0; i < 3; i++) {
+            this.player.drawCard();
+            this.enemy.drawCard();
+        }
+        
+        this.turn = 0;
+        this.player.isMyTurn = true;
+        this.enemy.isMyTurn = false;
+        
+        this.selectedCard = null;
+        this.selectedMinion = null;
+        this.targeting = false;
+        this.particles = [];
+        
+        this.gameState = 'PLAYING';
+        this.player.startTurn();
+        this.updateLayout();
+    }
+
+    resize() {
+        // Set the display size of the canvas to fill the window
+        this.canvas.style.width = `${window.innerWidth}px`;
+        this.canvas.style.height = `${window.innerHeight}px`;
+
+        const dpr = window.devicePixelRatio || 1;
+        // Get the new size
+        const rect = this.canvas.getBoundingClientRect();
+        
+        // Set the internal resolution (drawing buffer)
+        this.canvas.width = rect.width * dpr;
+        this.canvas.height = rect.height * dpr;
+
+        // Scale the context to match
+        this.ctx.scale(dpr, dpr);
+        
+        // Update game element positions if the game is running
+        if(this.gameState === 'PLAYING') this.updateLayout();
+    }
+    
+    updateLayout() {
+        if (!this.player) return; // Guard against running before init
+        const w = this.canvas.clientWidth;
+        const h = this.canvas.clientHeight;
+
+        // Hero positions
+        this.player.width = this.enemy.width = w * 0.1;
+        this.player.height = this.enemy.height = w * 0.1;
+        this.player.x = w / 2;
+        this.player.y = h - this.player.height / 2 - 20;
+        this.enemy.x = w / 2;
+        this.enemy.y = this.enemy.height / 2 + 20;
+
+        // Card and minion sizes
+        this.cardWidth = w * 0.08;
+        this.cardHeight = this.cardWidth * 1.4;
+        this.minionWidth = w * 0.07;
+        this.minionHeight = this.minionWidth * 1.2;
+
+        // End turn button
+        this.endTurnButton = {
+            x: w * 0.85,
+            y: h / 2 - 25,
+            width: w * 0.1,
+            height: 50
+        };
+        
+        this.updateCardPositions();
+    }
+    
+    updateCardPositions() {
+        if (!this.player) return;
+        const w = this.canvas.clientWidth;
+        const h = this.canvas.clientHeight;
+
+        // Player hand
+        this.player.hand.forEach((card, i) => {
+            card.width = this.cardWidth;
+            card.height = this.cardHeight;
+            const handWidth = this.player.hand.length * card.width * 0.7;
+            card.targetX = w / 2 - handWidth / 2 + i * card.width * 0.7 + card.width * 0.35;
+            card.targetY = h - card.height / 2 + (card.isHovered ? -20 : 0);
+        });
+
+        // Player board
+        this.player.board.forEach((minion, i) => {
+            minion.width = this.minionWidth;
+            minion.height = this.minionHeight;
+            const boardWidth = this.player.board.length * minion.width * 1.1;
+            minion.targetX = w / 2 - boardWidth / 2 + i * minion.width * 1.1 + minion.width * 0.55;
+            minion.targetY = h / 2 + minion.height * 0.7;
+        });
+
+        // Enemy board
+        this.enemy.board.forEach((minion, i) => {
+            minion.width = this.minionWidth;
+            minion.height = this.minionHeight;
+            const boardWidth = this.enemy.board.length * minion.width * 1.1;
+            minion.targetX = w / 2 - boardWidth / 2 + i * minion.width * 1.1 + minion.width * 0.55;
+            minion.targetY = h / 2 - minion.height * 0.7;
+        });
+    }
+
+    start() {
+        this.loop(0);
+    }
+
+    loop(timestamp) {
+        const deltaTime = (timestamp - this.lastTime) / 1000;
+        this.lastTime = timestamp;
+
+        this.update(deltaTime || 0);
+        this.draw();
+        
+        this.mouse.clicked = false;
+        requestAnimationFrame(this.loop);
+    }
+
+    update(deltaTime) {
+        if (this.gameState === 'PLAYING') {
+            this.handleHover();
+            this.handleClick();
+
+            if (this.enemy.isMyTurn && !this.aiThinking) {
+                this.aiTurn();
+            }
+            
+            this.player.hand.forEach(c => c.update(deltaTime));
+            this.player.board.forEach(m => m.update(deltaTime));
+            this.enemy.board.forEach(m => m.update(deltaTime));
+        }
+
+        this.particles = this.particles.filter(p => p.life > 0);
+        this.particles.forEach(p => p.update(deltaTime));
+    }
+    
+    aiTurn() {
+        this.aiThinking = true;
+        let actionDelay = 500;
+
+        // AI plays cards
+        setTimeout(() => {
+            let playableCards = this.enemy.hand.filter(c => c.cost <= this.enemy.mana);
+            while (playableCards.length > 0 && this.enemy.board.length < 7) {
+                const cardToPlay = playableCards[0]; // Simple AI: play first possible card
+                this.enemy.mana -= cardToPlay.cost;
+                this.enemy.hand = this.enemy.hand.filter(c => c.id !== cardToPlay.id);
+                const minion = new Minion(cardToPlay, this.enemy);
+                minion.x = this.canvas.clientWidth / 2;
+                minion.y = 0;
+                this.enemy.board.push(minion);
+                this.updateCardPositions();
+                sound.play('playCard', 0.3);
+                playableCards = this.enemy.hand.filter(c => c.cost <= this.enemy.mana);
+            }
+        }, actionDelay);
+        
+        // AI attacks
+        actionDelay += 1000;
+        setTimeout(() => {
+            const attackers = this.enemy.board.filter(m => m.canAttack);
+            attackers.forEach((minion, i) => {
+                setTimeout(() => {
+                    const playerMinions = this.player.board;
+                    let target = null;
+                    if (playerMinions.length > 0) {
+                        target = playerMinions[Math.floor(Math.random() * playerMinions.length)];
+                    } else {
+                        target = this.player;
+                    }
+
+                    if (target) {
+                        this.performAttack(minion, target);
+                    }
+                }, i * 500);
+            });
+            actionDelay += attackers.length * 500;
+        }, actionDelay);
+
+        // AI ends turn
+        actionDelay += 1000;
+        setTimeout(() => {
+            this.endTurn();
+        }, actionDelay);
+    }
+
+    handleMouseMove(e) {
+        const rect = this.canvas.getBoundingClientRect();
+        this.mouse.x = e.clientX - rect.left;
+        this.mouse.y = e.clientY - rect.top;
+    }
+
+    handleMouseDown(e) {
+        this.mouse.down = true;
+        this.mouse.clicked = true;
+        sound.play('click', 0.01); // Play a tiny sound to wake up AudioContext
+    }
+
+    handleMouseUp(e) {
+        this.mouse.down = false;
+    }
+    
+    isMouseOver(obj) {
+        if (!obj) return false;
+        return this.mouse.x > obj.x - obj.width / 2 &&
+               this.mouse.x < obj.x + obj.width / 2 &&
+               this.mouse.y > obj.y - obj.height / 2 &&
+               this.mouse.y < obj.y + obj.height / 2;
+    }
+
+    handleHover() {
+        let somethingHovered = false;
+        // Hover player hand
+        this.player.hand.forEach(card => {
+            card.isHovered = this.isMouseOver(card);
+            if(card.isHovered) somethingHovered = true;
+        });
+        
+        // Hover player board
+        this.player.board.forEach(minion => {
+            minion.isHovered = this.isMouseOver(minion);
+            if(minion.isHovered) somethingHovered = true;
+        });
+
+        // Hover enemy board
+        this.enemy.board.forEach(minion => {
+            minion.isHovered = this.isMouseOver(minion);
+            if(minion.isHovered) somethingHovered = true;
+        });
+
+        this.enemy.isHovered = this.isMouseOver(this.enemy);
+        if (this.enemy.isHovered) somethingHovered = true;
+
+        this.canvas.style.cursor = somethingHovered || this.targeting ? 'pointer' : 'default';
+
+        this.updateCardPositions();
+    }
+
+    handleClick() {
+        if (!this.mouse.clicked) return;
+
+        if (this.gameState === 'START' || this.gameState === 'GAME_OVER') {
+            this.init();
+            return;
+        }
+        
+        if (!this.player.isMyTurn) return;
+
+        // Click end turn button
+        if (this.isMouseOver(this.endTurnButton)) {
+            this.endTurn();
+            return;
+        }
+
+        // Play a card
+        if (this.selectedCard) {
+            // Check if clicking on player's board area
+            if (this.mouse.y > this.canvas.clientHeight / 2 && this.mouse.y < this.player.y - this.player.height/2 && this.player.board.length < 7) {
+                this.player.mana -= this.selectedCard.cost;
+                this.player.hand = this.player.hand.filter(c => c.id !== this.selectedCard.id);
+                const newMinion = new Minion(this.selectedCard, this.player);
+                newMinion.x = this.selectedCard.x;
+                newMinion.y = this.selectedCard.y;
+                this.player.board.push(newMinion);
+                this.updateCardPositions();
+                this.selectedCard = null;
+                sound.play('playCard', 0.3);
+            } else {
+                this.selectedCard = null; // Deselect
+            }
+            return;
+        }
+        
+        // Attack with a minion
+        if (this.selectedMinion) {
+            let target = null;
+            [...this.enemy.board, this.enemy].forEach(potentialTarget => {
+                if (this.isMouseOver(potentialTarget)) {
+                    target = potentialTarget;
+                }
+            });
+
+            if (target) {
+                this.performAttack(this.selectedMinion, target);
+            }
+            this.selectedMinion = null;
+            this.targeting = false;
+            return;
+        }
+
+        // Select a card from hand
+        const hoveredCard = this.player.hand.find(card => card.isHovered);
+        if (hoveredCard && this.player.mana >= hoveredCard.cost) {
+            this.selectedCard = hoveredCard;
+            this.selectedMinion = null;
+            return;
+        }
+
+        // Select a minion from board
+        const hoveredMinion = this.player.board.find(minion => minion.isHovered && minion.canAttack);
+        if (hoveredMinion) {
+            this.selectedMinion = hoveredMinion;
+            this.selectedCard = null;
+            this.targeting = true;
+            return;
+        }
+    }
+    
+    performAttack(attacker, target) {
+        if (!attacker || !attacker.canAttack) return;
+        attacker.isAttacking = true;
+        attacker.attackTarget = target;
+        sound.play('attack');
+
+        setTimeout(() => {
+            // Minion vs Minion
+            if (target instanceof Minion) {
+                this.dealDamage(target, attacker.attack);
+                this.dealDamage(attacker, target.attack);
+            }
+            // Minion vs Hero
+            else if (target instanceof Player) {
+                this.dealDamage(target, attacker.attack);
+            }
+            attacker.canAttack = false;
+            
+            this.cleanupBoard();
+            this.checkGameOver();
+        }, 200);
+    }
+    
+    dealDamage(target, amount) {
+        if (amount <= 0) return;
+        target.takeDamage(amount);
+        this.particles.push(new Particle(target.x, target.y, `-${amount}`, '#ff4757'));
+        sound.play('damage');
+    }
+
+    cleanupBoard() {
+        this.player.board = this.player.board.filter(m => m.currentHealth > 0);
+        this.enemy.board = this.enemy.board.filter(m => m.currentHealth > 0);
+        this.updateCardPositions();
+    }
+
+    checkGameOver() {
+        if (this.player.health <= 0) {
+            this.gameState = 'GAME_OVER';
+            this.winner = this.enemy;
+            sound.play('lose', 0.8);
+        } else if (this.enemy.health <= 0) {
+            this.gameState = 'GAME_OVER';
+            this.winner = this.player;
+            sound.play('win', 0.5);
+        }
+    }
+    
+    endTurn() {
+        this.selectedCard = null;
+        this.selectedMinion = null;
+        this.targeting = false;
+        
+        if(this.player.isMyTurn) {
+            this.player.isMyTurn = false;
+            this.enemy.isMyTurn = true;
+            this.enemy.startTurn();
+        } else {
+            this.enemy.isMyTurn = false;
+            this.player.isMyTurn = true;
+            this.player.startTurn();
+        }
+        this.aiThinking = false;
+    }
+
+    draw() {
+        const w = this.canvas.clientWidth;
+        const h = this.canvas.clientHeight;
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        
+        if (this.gameState === 'START') {
+            this.drawStartScreen();
+            return;
+        }
+        if (this.gameState === 'GAME_OVER') {
+            this.drawGameOverScreen();
+            return;
+        }
+
+        // Draw board line
+        this.ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        this.ctx.lineWidth = 2;
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, h/2);
+        this.ctx.lineTo(w, h/2);
+        this.ctx.stroke();
+
+        this.drawPlayerInfo(this.player);
+        this.drawPlayerInfo(this.enemy);
+
+        this.player.board.forEach(minion => minion.draw(this.ctx, this.selectedMinion === minion, minion.canAttack));
+        this.enemy.board.forEach(minion => minion.draw(this.ctx, false, false));
+        this.player.hand.forEach(card => card.draw(this.ctx, this.player.mana >= card.cost, this.selectedCard === card));
+        
+        // Draw enemy hand (face down)
+        const enemyCardWidth = this.cardWidth * 0.8;
+        const enemyCardHeight = this.cardHeight * 0.8;
+        const enemyHandWidth = this.enemy.hand.length * enemyCardWidth * 0.5;
+        for (let i = 0; i < this.enemy.hand.length; i++) {
+            this.drawFaceDownCard(
+                w / 2 - enemyHandWidth / 2 + i * enemyCardWidth * 0.5 + enemyCardWidth * 0.25,
+                enemyCardHeight/2,
+                enemyCardWidth,
+                enemyCardHeight
+            );
+        }
+        
+        this.drawEndTurnButton();
+        this.drawDeckInfo(this.player, w - 50, h - 50);
+        this.drawDeckInfo(this.enemy, w - 50, 50);
+
+        if (this.targeting && this.selectedMinion) {
+            this.drawTargetingArrow();
+        }
+
+        this.particles.forEach(p => p.draw(this.ctx));
+    }
+    
+    drawTargetingArrow() {
+        this.ctx.save();
+        this.ctx.beginPath();
+        this.ctx.moveTo(this.selectedMinion.x, this.selectedMinion.y);
+        this.ctx.lineTo(this.mouse.x, this.mouse.y);
+        this.ctx.strokeStyle = 'rgba(255, 0, 0, 0.7)';
+        this.ctx.lineWidth = 10;
+        this.ctx.lineCap = 'round';
+        this.ctx.shadowColor = 'red';
+        this.ctx.shadowBlur = 15;
+        this.ctx.stroke();
+        this.ctx.restore();
+    }
+    
+    drawDeckInfo(player, x, y) {
+        this.ctx.fillStyle = '#4a4a6a';
+        this.ctx.fillRect(x - 30, y - 40, 60, 80);
+        this.ctx.strokeStyle = '#2a2a4a';
+        this.ctx.strokeRect(x - 30, y - 40, 60, 80);
+        
+        this.ctx.fillStyle = 'white';
+        this.ctx.font = 'bold 24px Segoe UI';
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText(player.deck.length, x, y);
+        this.ctx.font = '12px Segoe UI';
+        this.ctx.fillText('Deck', x, y + 20);
+    }
+
+    roundRect(ctx, x, y, width, height, radius) {
+        ctx.beginPath();
+        ctx.moveTo(x + radius, y);
+        ctx.lineTo(x + width - radius, y);
+        ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+        ctx.lineTo(x + width, y + height - radius);
+        ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+        ctx.lineTo(x + radius, y + height);
+        ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+        ctx.lineTo(x, y + radius);
+        ctx.quadraticCurveTo(x, y, x + radius, y);
+        ctx.closePath();
+    }
+
+    drawFaceDownCard(x, y, w, h) {
+        this.ctx.save();
+        const gradient = this.ctx.createLinearGradient(0, y-h/2, 0, y+h/2);
+        gradient.addColorStop(0, '#8e44ad');
+        gradient.addColorStop(1, '#c0392b');
+        this.ctx.fillStyle = gradient;
+        this.roundRect(this.ctx, x-w/2, y-h/2, w, h, 10);
+        this.ctx.fill();
+
+        this.ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+        this.ctx.lineWidth = 3;
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, w * 0.2, 0, Math.PI * 2);
+        this.ctx.stroke();
+        this.ctx.restore();
+    }
+
+    drawPlayerInfo(player) {
+        const { x, y, width, height, health, maxHealth, mana, maxMana } = player;
+        const emoji = player.isAI ? '🤖' : '🙂';
+        
+        // Portrait
+        this.ctx.save();
+        this.ctx.fillStyle = player.isAI ? '#c0392b' : '#2980b9';
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, width/2, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.font = `${width*0.6}px sans-serif`;
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText(emoji, x, y);
+        this.ctx.restore();
+
+        // Health
+        this.ctx.fillStyle = '#e74c3c';
+        this.ctx.beginPath();
+        this.ctx.arc(x + width/2, y + height/2, width*0.2, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.fillStyle = 'white';
+        this.ctx.font = `bold ${width*0.2}px Segoe UI`;
+        this.ctx.fillText(health, x + width/2, y + height/2);
+
+        // Mana
+        if (!player.isAI) {
+            this.ctx.fillStyle = '#3498db';
+            const manaX = x - width * 1.5;
+            const manaY = y;
+            this.ctx.fillRect(manaX, manaY - 15, width, 30);
+            this.ctx.fillStyle = '#2980b9';
+            this.ctx.fillRect(manaX + 2, manaY - 13, width - 4, 26);
+            this.ctx.fillStyle = 'white';
+            this.ctx.font = 'bold 18px Segoe UI';
+            this.ctx.fillText(`${mana} / ${maxMana}`, manaX + width/2, manaY + 2);
+            this.ctx.font = '12px Segoe UI';
+            this.ctx.fillText('Mana', manaX + width/2, manaY - 20);
+        }
+    }
+    
+    drawEndTurnButton() {
+        const {x, y, width, height} = this.endTurnButton;
+        const isMyTurn = this.player.isMyTurn;
+        this.ctx.save();
+        this.ctx.fillStyle = isMyTurn ? '#2ecc71' : '#7f8c8d';
+        
+        if (isMyTurn) {
+            this.ctx.shadowColor = '#2ecc71';
+            this.ctx.shadowBlur = 15;
+        }
+
+        this.roundRect(this.ctx, x, y, width, height, 10);
+        this.ctx.fill();
+        
+        if (isMyTurn && this.isMouseOver(this.endTurnButton)) {
+            this.ctx.fillStyle = 'rgba(255,255,255,0.2)';
+            this.ctx.fill();
+        }
+        this.ctx.restore();
+
+        this.ctx.fillStyle = 'white';
+        this.ctx.font = 'bold 20px Segoe UI';
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText(isMyTurn ? 'End Turn' : 'Enemy Turn', x + width / 2, y + height / 2);
+    }
+    
+    drawStartScreen() {
+        const w = this.canvas.clientWidth;
+        const h = this.canvas.clientHeight;
+        this.ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        this.ctx.fillRect(0,0,w,h);
+        
+        this.ctx.fillStyle = 'white';
+        this.ctx.textAlign = 'center';
+        this.ctx.font = `bold ${w*0.08}px 'Segoe UI'`;
+        this.ctx.fillText('Fable Fray', w/2, h/3);
+        
+        this.ctx.font = `${w*0.03}px 'Segoe UI'`;
+        this.ctx.fillText('Click anywhere to begin', w/2, h/2);
+    }
+
+    drawGameOverScreen() {
+        const w = this.canvas.clientWidth;
+        const h = this.canvas.clientHeight;
+        this.ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        this.ctx.fillRect(0,0,w,h);
+        
+        const message = this.winner === this.player ? 'Victory!' : 'Defeat!';
+        this.ctx.fillStyle = this.winner === this.player ? '#2ecc71' : '#e74c3c';
+        this.ctx.textAlign = 'center';
+        this.ctx.font = `bold ${w*0.1}px 'Segoe UI'`;
+        this.ctx.fillText(message, w/2, h/3);
+        
+        this.ctx.fillStyle = 'white';
+        this.ctx.font = `${w*0.03}px 'Segoe UI'`;
+        this.ctx.fillText('Click anywhere to play again', w/2, h/2);
+    }
+}
+
+window.addEventListener('load', () => {
+    const canvas = document.getElementById('gameCanvas');
+    const game = new Game(canvas);
+    game.start();
+});
+
+</script>
+</body>
+</html>
