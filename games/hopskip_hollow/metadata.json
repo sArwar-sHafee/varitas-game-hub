@@ -1,0 +1,8 @@
+{
+  "name": "Hopskip Hollow",
+  "type": "platform adventure (Metroidvania-lite)",
+  "folder": "hopskip_hollow",
+  "description": "Master a joyful, spring-loaded moveset to bound through a whimsical, forgotten world. Chain your hops and dashes to unlock new abilities, turning the treacherous Hollow into your personal acrobatic playground.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
