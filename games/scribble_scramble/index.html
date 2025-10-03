@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Scribble Scramble</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Comic Sans MS', 'Chalkboard SE', 'Marker Felt', sans-serif;
+            background: linear-gradient(to bottom, #87CEEB, #B0E0E6);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: #333;
+        }
+        canvas {
+            display: block;
+            background: #ffffff;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.19), 0 6px 6px rgba(0,0,0,0.23);
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // ES6+ JavaScript Game Code
+        document.addEventListener('DOMContentLoaded', () => {
+
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+
+            let W, H;
+            let gameState = 'start'; // 'start', 'playing', 'gameOver'
+            let score = 0;
+            let highScore = localStorage.getItem('scribbleScrambleHighScore') || 0;
+
+            // --- Game Configuration ---
+            const GRAVITY = 0.5;
+            const PLAYER_JUMP = 15;
+            const PLAYER_MOVE_SPEED = 7;
+            const PLATFORM_COUNT = 15;
+            const SCROLL_THRESHOLD = 200;
+
+            let player, platforms = [], particles = [];
+            let keys = {
+                right: false,
+                left: false
+            };
+
+            // --- Audio Context for Programmatic Sounds ---
+            let audioCtx;
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            } catch (e) {
+                console.error("Web Audio API is not supported in this browser");
+            }
+            
+            function playSound(type) {
+                if (!audioCtx) return;
+                const now = audioCtx.currentTime;
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+
+                gainNode.connect(audioCtx.destination);
+                oscillator.connect(gainNode);
+
+                if (type === 'jump') {
+                    oscillator.type = 'square';
+                    oscillator.frequency.setValueAtTime(440, now);
+                    gainNode.gain.setValueAtTime(0.1, now);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
+                    oscillator.start(now);
+                    oscillator.stop(now + 0.2);
+                } else if (type === 'gameOver') {
+                    oscillator.type = 'sawtooth';
+                    oscillator.frequency.setValueAtTime(220, now);
+                    oscillator.frequency.exponentialRampToValueAtTime(110, now + 0.5);
+                    gainNode.gain.setValueAtTime(0.2, now);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.5);
+                    oscillator.start(now);
+                    oscillator.stop(now + 0.5);
+                }
+            }
+
+            // --- Classes ---
+            class Player {
+                constructor() {
+                    this.width = 50;
+                    this.height = 50;
+                    this.x = W / 2 - this.width / 2;
+                    this.y = H - 100;
+                    this.dx = 0;
+                    this.dy = 0;
+                    this.emoji = '✏️';
+                    this.rotation = 0;
+                }
+
+                draw() {
+                    ctx.save();
+                    ctx.translate(this.x + this.width / 2, this.y + this.height / 2);
+                    // Rotate based on horizontal velocity for a fun effect
+                    this.rotation = this.dx * 0.05;
+                    ctx.rotate(this.rotation);
+                    ctx.font = `${this.width}px Arial`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(this.emoji, 0, 0);
+                    ctx.restore();
+                }
+
+                update() {
+                    if (keys.right) this.dx = PLAYER_MOVE_SPEED;
+                    else if (keys.left) this.dx = -PLAYER_MOVE_SPEED;
+                    else this.dx = 0;
+
+                    this.x += this.dx;
+                    this.dy += GRAVITY;
+                    this.y += this.dy;
+
+                    // Screen wrapping
+                    if (this.x < -this.width) this.x = W;
+                    if (this.x > W) this.x = -this.width;
+
+                    // Game Over condition
+                    if (this.y > H) {
+                        gameState = 'gameOver';
+                        playSound('gameOver');
+                        if (score > highScore) {
+                            highScore = score;
+                            localStorage.setItem('scribbleScrambleHighScore', highScore);
+                        }
+                    }
+                }
+
+                jump() {
+                    this.dy = -PLAYER_JUMP;
+                    playSound('jump');
+                    spawnJumpParticles(this.x + this.width / 2, this.y + this.height);
+                }
+            }
+
+            class Platform {
+                constructor(x, y, isFirstPlatform = false) {
+                    this.width = W / 4.5;
+                    this.height = 20;
+                    this.x = x;
+                    this.y = y;
+                    this.isFirstPlatform = isFirstPlatform;
+                    this.color = `hsl(${Math.random() * 360}, 80%, 60%)`;
+                }
+
+                draw() {
+                    ctx.fillStyle = this.isFirstPlatform ? '#4CAF50' : this.color;
+                    ctx.strokeStyle = '#333';
+                    ctx.lineWidth = 3;
+                    
+                    // Scribble effect
+                    ctx.beginPath();
+                    ctx.moveTo(this.x, this.y + 5);
+                    ctx.quadraticCurveTo(this.x + this.width / 2, this.y - 5, this.x + this.width, this.y + 5);
+                    ctx.quadraticCurveTo(this.x + this.width / 2, this.y + this.height + 5, this.x, this.y + 5);
+                    ctx.fill();
+                    ctx.stroke();
+                }
+            }
+            
+            class Particle {
+                constructor(x, y) {
+                    this.x = x;
+                    this.y = y;
+                    this.size = Math.random() * 5 + 2;
+                    this.speedX = Math.random() * 3 - 1.5;
+                    this.speedY = Math.random() * 3 - 1.5;
+                    this.color = `hsl(${Math.random() * 50 + 20}, 100%, 50%)`; // yellow/orange
+                    this.life = 1;
+                }
+                
+                update() {
+                    this.x += this.speedX;
+                    this.y += this.speedY;
+                    this.life -= 0.05;
+                }
+
+                draw() {
+                    ctx.globalAlpha = this.life;
+                    ctx.fillStyle = this.color;
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.globalAlpha = 1;
+                }
+            }
+
+            function spawnJumpParticles(x, y) {
+                for(let i=0; i < 10; i++) {
+                    particles.push(new Particle(x, y));
+                }
+            }
+            
+            // --- Game Functions ---
+            function init() {
+                // This check is necessary because resizeCanvas calls init before W/H are set for the first time
+                if (!W || !H) return;
+
+                score = 0;
+                player = new Player();
+                platforms = [];
+                particles = [];
+                
+                // Create initial platforms
+                let firstPlatform = new Platform(W / 2 - (W / 9), H - 70, true);
+                platforms.push(firstPlatform);
+
+                for (let i = 1; i < PLATFORM_COUNT; i++) {
+                    let y = platforms[i - 1].y - (Math.random() * 80 + 80);
+                    let x = Math.random() * (W - W / 4.5);
+                    platforms.push(new Platform(x, y));
+                }
+                
+                player.x = firstPlatform.x + firstPlatform.width / 2 - player.width / 2;
+                player.y = firstPlatform.y - player.height;
+            }
+
+            function update() {
+                player.update();
+                
+                // Platform collision
+                platforms.forEach(p => {
+                    if (player.dy > 0 &&
+                        player.x < p.x + p.width &&
+                        player.x + player.width > p.x &&
+                        player.y + player.height > p.y &&
+                        player.y + player.height < p.y + p.height) {
+                        player.jump();
+                    }
+                });
+
+                // Screen scrolling
+                if (player.y < SCROLL_THRESHOLD) {
+                    let scrollAmount = SCROLL_THRESHOLD - player.y;
+                    player.y = SCROLL_THRESHOLD;
+                    score += Math.floor(scrollAmount);
+                    
+                    platforms.forEach(p => {
+                        p.y += scrollAmount;
+                    });
+                    
+                    // Remove off-screen platforms
+                    platforms = platforms.filter(p => p.y < H);
+                    
+                    // Add new platforms if needed
+                    while (platforms.length < PLATFORM_COUNT) {
+                        // Find the y-coordinate of the highest platform to build upon it
+                        const highestPlatformY = platforms.reduce((minY, p) => Math.min(minY, p.y), H);
+                        let y = highestPlatformY - (Math.random() * 80 + 80);
+                        let x = Math.random() * (W - W / 4.5);
+                        platforms.push(new Platform(x, y));
+                    }
+                }
+                
+                // Update and filter particles
+                particles.forEach(p => p.update());
+                particles = particles.filter(p => p.life > 0);
+            }
+
+            function drawBackground() {
+                const gradient = ctx.createLinearGradient(0, 0, 0, H);
+                gradient.addColorStop(0, '#E0F7FA');
+                gradient.addColorStop(1, '#B2EBF2');
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, W, H);
+
+                // Dotted background lines for sense of motion
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.1)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                for (let i = 0; i < H; i += 20) {
+                    let y = i - (score % 20);
+                    ctx.moveTo(0, y);
+                    ctx.lineTo(W, y);
+                }
+                ctx.stroke();
+            }
+
+            function drawUI() {
+                ctx.fillStyle = '#333';
+                ctx.font = '24px "Comic Sans MS", cursive';
+                ctx.textAlign = 'left';
+                ctx.fillText(`Score: ${score}`, 20, 40);
+                ctx.textAlign = 'right';
+                ctx.fillText(`High: ${highScore}`, W - 20, 40);
+            }
+
+            function drawStartScreen() {
+                drawBackground();
+                ctx.textAlign = 'center';
+                ctx.fillStyle = '#333';
+                ctx.font = 'bold 60px "Comic Sans MS", cursive';
+                ctx.fillText('Scribble Scramble', W / 2, H / 2 - 100);
+
+                ctx.font = '24px "Comic Sans MS", cursive';
+                ctx.fillText('Click or Tap to Start', W / 2, H / 2);
+
+                ctx.font = '18px "Comic Sans MS", cursive';
+                ctx.fillText('Controls:', W / 2, H / 2 + 80);
+                ctx.fillText('Arrow Keys or Mouse/Touch to Move', W / 2, H / 2 + 110);
+            }
+            
+            function drawGameOverScreen() {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                ctx.fillRect(0, 0, W, H);
+                
+                ctx.textAlign = 'center';
+                ctx.fillStyle = 'white';
+                ctx.font = 'bold 70px "Comic Sans MS", cursive';
+                ctx.fillText('Game Over', W / 2, H / 2 - 80);
+
+                ctx.font = '30px "Comic Sans MS", cursive';
+                ctx.fillText(`Your Score: ${score}`, W / 2, H / 2);
+                ctx.fillText(`High Score: ${highScore}`, W / 2, H / 2 + 50);
+
+                ctx.font = '24px "Comic Sans MS", cursive';
+                ctx.fillText('Click or Tap to Restart', W / 2, H / 2 + 120);
+            }
+            
+            function draw() {
+                ctx.clearRect(0, 0, W, H);
+                drawBackground();
+
+                platforms.forEach(p => p.draw());
+                particles.forEach(p => p.draw());
+                player.draw();
+                
+                drawUI();
+            }
+
+            function gameLoop() {
+                switch (gameState) {
+                    case 'start':
+                        drawStartScreen();
+                        break;
+                    case 'playing':
+                        update();
+                        draw();
+                        break;
+                    case 'gameOver':
+                        draw(); // Draw final game state underneath
+                        drawGameOverScreen();
+                        break;
+                }
+                requestAnimationFrame(gameLoop);
+            }
+
+            // --- Event Listeners & Controls ---
+            function handleKeyDown(e) {
+                if (e.key === 'ArrowRight' || e.key === 'd') keys.right = true;
+                if (e.key === 'ArrowLeft' || e.key === 'a') keys.left = true;
+            }
+
+            function handleKeyUp(e) {
+                if (e.key === 'ArrowRight' || e.key === 'd') keys.right = false;
+                if (e.key === 'ArrowLeft' || e.key === 'a') keys.left = false;
+            }
+
+            function handlePointerMove(e) {
+                if (gameState !== 'playing') return;
+                let rect = canvas.getBoundingClientRect();
+                let pointerX = e.clientX - rect.left;
+                if (e.touches && e.touches.length > 0) {
+                    pointerX = e.touches[0].clientX - rect.left;
+                }
+                
+                // Clamp player position to within canvas bounds
+                player.x = Math.max(0, Math.min(W - player.width, pointerX - player.width / 2));
+            }
+
+            function handlePointerDown() {
+                // Initialize AudioContext on user interaction
+                if (audioCtx && audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+
+                if (gameState === 'start' || gameState === 'gameOver') {
+                    gameState = 'playing';
+                    init();
+                }
+            }
+            
+            function resizeCanvas() {
+                const aspectRatio = 9 / 16;
+                const maxHeight = window.innerHeight * 0.95;
+                const maxWidth = window.innerWidth * 0.95;
+
+                let newHeight = maxHeight;
+                let newWidth = newHeight * aspectRatio;
+                
+                if (newWidth > maxWidth) {
+                    newWidth = maxWidth;
+                    newHeight = newWidth / aspectRatio;
+                }
+                
+                canvas.width = W = newWidth;
+                canvas.height = H = newHeight;
+                
+                // Always re-initialize on resize to avoid broken states.
+                init();
+            }
+
+            // --- Setup ---
+            window.addEventListener('resize', resizeCanvas);
+            
+            document.addEventListener('keydown', handleKeyDown);
+            document.addEventListener('keyup', handleKeyUp);
+            
+            canvas.addEventListener('mousemove', handlePointerMove);
+            canvas.addEventListener('touchmove', handlePointerMove, { passive: true });
+            
+            canvas.addEventListener('mousedown', handlePointerDown);
+            canvas.addEventListener('touchstart', handlePointerDown, { passive: true });
+            
+            // --- Start Game ---
+            resizeCanvas(); // Initial setup of canvas size and game state
+            gameLoop();
+        });
+    </script>
+</body>
+</html>

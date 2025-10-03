@@ -1,0 +1,8 @@
+{
+  "name": "Scribble Scramble",
+  "type": "doodle jump clone",
+  "folder": "scribble_scramble",
+  "description": "Bounce your way through a living sketchbook, leaping from one scribbled platform to the next in a frantic vertical climb. Dodge imaginative ink monsters and grab powerful boosts to etch your high score at the very top of the page",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
