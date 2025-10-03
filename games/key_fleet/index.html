@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Key Fleet</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            background-color: #000;
+        }
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: radial-gradient(ellipse at bottom, #1b2735 0%, #090a0f 100%);
+        }
+        canvas {
+            display: block;
+            background-color: transparent;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // ES6+ JavaScript Code
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // --- GAME CONFIGURATION ---
+        const GAME_CONFIG = {
+            INITIAL_LIVES: 5,
+            INITIAL_SPAWN_INTERVAL: 2500, // ms
+            MIN_SPAWN_INTERVAL: 600,
+            SPAWN_INTERVAL_DECREMENT: 50,
+            INITIAL_SPEED: 0.5,
+            MAX_SPEED: 3,
+            SPEED_INCREMENT: 0.05,
+            PLAYER_EMOJI: '🚀',
+            ENEMY_EMOJIS: ['🛸', '👽', '☄️', '🛰️', '👾'],
+            PARTICLE_COUNT: 40,
+            PARTICLE_LIFESPAN: 100,
+            LASER_DURATION: 15, // frames
+            SCREEN_SHAKE_DURATION: 20, // frames
+            SCREEN_SHAKE_MAGNITUDE: 10,
+        };
+
+        const WORD_LIST = [
+            'fleet', 'space', 'laser', 'alien', 'orbit', 'galaxy', 'meteor', 'comet', 'star', 'nova',
+            'nebula', 'cosmos', 'planet', 'earth', 'mars', 'venus', 'jupiter', 'saturn', 'uranus',
+            'neptune', 'pluto', 'rocket', 'pilot', 'hyperdrive', 'warp', 'lightspeed', 'explore',
+            'gravity', 'asteroid', 'crater', 'eclipse', 'lunar', 'solar', 'quasar', 'pulsar',
+            'voyage', 'station', 'shuttle', 'universe', 'celestial', 'astronomy', 'zodiac',
+            'constellation', 'interstellar', 'supernova', 'wormhole', 'terra', 'vacuum', 'mission'
+        ];
+
+        // --- GAME STATE ---
+        let gameState = 'start'; // 'start', 'playing', 'gameOver'
+        let score = 0;
+        let lives = GAME_CONFIG.INITIAL_LIVES;
+        let spawnInterval = GAME_CONFIG.INITIAL_SPAWN_INTERVAL;
+        let lastSpawnTime = 0;
+        let currentSpeed = GAME_CONFIG.INITIAL_SPEED;
+
+        let stars = [];
+        let wordShips = [];
+        let particles = [];
+        let lasers = [];
+        
+        let currentTarget = null;
+        let currentInput = '';
+
+        let screenShake = { duration: 0, magnitude: 0 };
+
+        // --- AUDIO ENGINE ---
+        let audioContext;
+        const sound = {
+            init() {
+                try {
+                    // AudioContext must be created after a user gesture (like a click)
+                    if (!audioContext) {
+                        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    }
+                } catch (e) {
+                    console.warn('Web Audio API is not supported in this browser');
+                }
+            },
+            play(type) {
+                if (!audioContext) return;
+
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+
+                const now = audioContext.currentTime;
+
+                switch (type) {
+                    case 'laser':
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(880, now);
+                        gainNode.gain.setValueAtTime(0.1, now);
+                        oscillator.frequency.exponentialRampToValueAtTime(220, now + 0.2);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+                        break;
+                    case 'explosion':
+                        oscillator.type = 'sawtooth';
+                        oscillator.frequency.setValueAtTime(440, now);
+                        gainNode.gain.setValueAtTime(0.2, now);
+                        oscillator.frequency.exponentialRampToValueAtTime(50, now + 0.4);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+                        break;
+                    case 'error':
+                        oscillator.type = 'square';
+                        oscillator.frequency.setValueAtTime(150, now);
+                        gainNode.gain.setValueAtTime(0.1, now);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+                        break;
+                    case 'gameOver':
+                        oscillator.type = 'triangle';
+                        oscillator.frequency.setValueAtTime(440, now);
+                        gainNode.gain.setValueAtTime(0.2, now);
+                        oscillator.frequency.exponentialRampToValueAtTime(110, now + 1.0);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 1.0);
+                        break;
+                }
+
+                oscillator.start(now);
+                oscillator.stop(now + 1);
+            }
+        };
+
+
+        // --- UTILITY & SETUP ---
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            createStars(); // Recreate stars for new size
+        }
+
+        function init() {
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+            window.addEventListener('keydown', handleKeyDown);
+            canvas.addEventListener('click', handleClick);
+            gameLoop();
+        }
+
+        function resetGame() {
+            score = 0;
+            lives = GAME_CONFIG.INITIAL_LIVES;
+            spawnInterval = GAME_CONFIG.INITIAL_SPAWN_INTERVAL;
+            currentSpeed = GAME_CONFIG.INITIAL_SPEED;
+            wordShips = [];
+            particles = [];
+            lasers = [];
+            currentTarget = null;
+            currentInput = '';
+            lastSpawnTime = 0; // Reset spawn timer
+            gameState = 'playing';
+            sound.init(); // Init audio on user interaction
+        }
+
+        // --- GAME OBJECTS & CLASSES ---
+
+        class Star {
+            constructor() {
+                this.x = Math.random() * canvas.width;
+                this.y = Math.random() * canvas.height;
+                this.size = Math.random() * 2 + 0.5;
+                this.speed = Math.random() * 0.5 + 0.25;
+            }
+
+            update() {
+                this.y += this.speed;
+                if (this.y > canvas.height) {
+                    this.y = 0;
+                    this.x = Math.random() * canvas.width;
+                }
+            }
+
+            draw() {
+                ctx.fillStyle = `rgba(255, 255, 255, ${this.size / 2.5})`;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function createStars() {
+            stars = [];
+            const starCount = Math.floor((canvas.width * canvas.height) / 2000);
+            for (let i = 0; i < starCount; i++) {
+                stars.push(new Star());
+            }
+        }
+
+        class WordShip {
+            constructor() {
+                this.word = WORD_LIST[Math.floor(Math.random() * WORD_LIST.length)];
+                this.emoji = GAME_CONFIG.ENEMY_EMOJIS[Math.floor(Math.random() * GAME_CONFIG.ENEMY_EMOJIS.length)];
+                const fontSize = getResponsiveFontSize(24);
+                ctx.font = `${fontSize}px 'Courier New', monospace`;
+                const textWidth = ctx.measureText(this.word).width;
+                this.width = Math.max(fontSize * 2, textWidth + 20);
+                this.x = Math.random() * (canvas.width - this.width) + this.width / 2;
+                this.y = -50;
+                this.speed = currentSpeed + (Math.random() - 0.5) * 0.2;
+            }
+
+            update() {
+                this.y += this.speed;
+            }
+
+            draw() {
+                const fontSize = getResponsiveFontSize(24);
+                const isTarget = this === currentTarget;
+
+                // Glowing effect for target
+                if (isTarget) {
+                    ctx.shadowColor = '#0ff';
+                    ctx.shadowBlur = 20;
+                }
+
+                // Draw Emoji
+                ctx.font = `${fontSize * 1.5}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.fillText(this.emoji, this.x, this.y);
+
+                // Draw word box
+                ctx.font = `${fontSize}px 'Courier New', monospace`;
+                const textMetrics = ctx.measureText(this.word);
+                const boxPadding = 10;
+                const boxWidth = textMetrics.width + boxPadding * 2;
+                const boxHeight = fontSize + boxPadding;
+                const boxY = this.y + fontSize * 0.5;
+                
+                ctx.fillStyle = isTarget ? 'rgba(0, 255, 255, 0.2)' : 'rgba(100, 100, 100, 0.3)';
+                ctx.strokeStyle = isTarget ? '#0ff' : '#888';
+                ctx.lineWidth = 2;
+                roundRect(ctx, this.x - boxWidth / 2, boxY, boxWidth, boxHeight, 8);
+                ctx.fill();
+                ctx.stroke();
+
+                // Draw word text (typed part in green)
+                const typedPart = isTarget ? this.word.substring(0, currentInput.length) : '';
+                const untypedPart = isTarget ? this.word.substring(currentInput.length) : this.word;
+                const typedWidth = ctx.measureText(typedPart).width;
+
+                ctx.textAlign = 'left';
+                const textY = boxY + fontSize * 0.8;
+                const textX = this.x - textMetrics.width / 2;
+                
+                if (isTarget && currentInput) {
+                    ctx.fillStyle = '#0f0';
+                    ctx.fillText(typedPart, textX, textY);
+                    ctx.fillStyle = '#fff';
+                    ctx.fillText(untypedPart, textX + typedWidth, textY);
+                } else {
+                    ctx.fillStyle = '#fff';
+                    ctx.fillText(this.word, textX, textY);
+                }
+
+                ctx.shadowBlur = 0; // Reset shadow
+            }
+        }
+
+        class Particle {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.vx = (Math.random() - 0.5) * 5;
+                this.vy = (Math.random() - 0.5) * 5;
+                this.lifespan = GAME_CONFIG.PARTICLE_LIFESPAN;
+                this.size = Math.random() * 4 + 2;
+                const hue = Math.random() * 60 + 180; // Cyan/blue/purple range
+                this.color = `hsla(${hue}, 100%, 70%, 1)`;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vx *= 0.98;
+                this.vy *= 0.98;
+                this.lifespan--;
+            }
+
+            draw() {
+                ctx.fillStyle = this.color.replace('1)', `${this.lifespan / GAME_CONFIG.PARTICLE_LIFESPAN})`);
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        class Laser {
+             constructor(targetX, targetY) {
+                this.startX = canvas.width / 2;
+                this.startY = canvas.height - 50;
+                this.endX = targetX;
+                this.endY = targetY;
+                this.duration = GAME_CONFIG.LASER_DURATION;
+             }
+
+             update() {
+                this.duration--;
+             }
+
+             draw() {
+                ctx.save();
+                ctx.strokeStyle = '#0f0';
+                ctx.lineWidth = 4;
+                ctx.shadowColor = '#0f0';
+                ctx.shadowBlur = 20;
+                
+                ctx.beginPath();
+                ctx.moveTo(this.startX, this.startY);
+                ctx.lineTo(this.endX, this.endY);
+                ctx.stroke();
+
+                // Core beam
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = '#fff';
+                ctx.stroke();
+
+                ctx.restore();
+             }
+        }
+
+        function createExplosion(x, y) {
+            for (let i = 0; i < GAME_CONFIG.PARTICLE_COUNT; i++) {
+                particles.push(new Particle(x, y));
+            }
+            sound.play('explosion');
+        }
+
+        // --- DRAWING HELPERS ---
+        function getResponsiveFontSize(baseSize) {
+            const scale = Math.min(canvas.width / 1200, 1);
+            return Math.max(12, baseSize * scale);
+        }
+
+        function roundRect(ctx, x, y, width, height, radius) {
+            ctx.beginPath();
+            ctx.moveTo(x + radius, y);
+            ctx.lineTo(x + width - radius, y);
+            ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+            ctx.lineTo(x + width, y + height - radius);
+            ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+            ctx.lineTo(x + radius, y + height);
+            ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+            ctx.lineTo(x, y + radius);
+            ctx.quadraticCurveTo(x, y, x + radius, y);
+            ctx.closePath();
+        }
+
+        // --- GAME LOGIC & LOOP ---
+
+        function update() {
+            if (gameState !== 'playing') return;
+
+            // Spawn new ships
+            const now = Date.now();
+            if (now - lastSpawnTime > spawnInterval) {
+                lastSpawnTime = now;
+                wordShips.push(new WordShip());
+            }
+
+            // Update entities
+            stars.forEach(s => s.update());
+            lasers.forEach(l => l.update());
+            particles.forEach(p => p.update());
+
+            // FIX: Use a reverse for loop to safely remove items while iterating
+            for (let i = wordShips.length - 1; i >= 0; i--) {
+                const ship = wordShips[i];
+                ship.update();
+                // Ship reaches bottom
+                if (ship.y > canvas.height + 50) { // Add buffer
+                    wordShips.splice(i, 1);
+                    lives--;
+                    screenShake.duration = GAME_CONFIG.SCREEN_SHAKE_DURATION;
+                    screenShake.magnitude = GAME_CONFIG.SCREEN_SHAKE_MAGNITUDE;
+                    sound.play('error');
+                    if (ship === currentTarget) {
+                        currentTarget = null;
+                        currentInput = '';
+                    }
+                }
+            }
+
+            // Filter out dead entities
+            particles = particles.filter(p => p.lifespan > 0);
+            lasers = lasers.filter(l => l.duration > 0);
+
+            // Check for game over
+            if (lives <= 0) {
+                lives = 0; // prevent negative lives display
+                gameState = 'gameOver';
+                sound.play('gameOver');
+            }
+            
+            // Update screen shake
+            if (screenShake.duration > 0) {
+                screenShake.duration--;
+            }
+        }
+
+        function draw() {
+            ctx.save();
+            // Apply screen shake
+            if (screenShake.duration > 0) {
+                const dx = (Math.random() - 0.5) * screenShake.magnitude;
+                const dy = (Math.random() - 0.5) * screenShake.magnitude;
+                ctx.translate(dx, dy);
+            }
+
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw background
+            stars.forEach(s => s.draw());
+
+            // Draw game entities
+            lasers.forEach(l => l.draw());
+            wordShips.forEach(s => s.draw());
+            particles.forEach(p => p.draw());
+
+            // Draw player ship
+            const playerFontSize = getResponsiveFontSize(60);
+            ctx.font = `${playerFontSize}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.fillText(GAME_CONFIG.PLAYER_EMOJI, canvas.width / 2, canvas.height - 50);
+
+            // Draw UI
+            const uiFontSize = getResponsiveFontSize(28);
+            ctx.font = `bold ${uiFontSize}px 'Arial', sans-serif`;
+            ctx.fillStyle = '#fff';
+            ctx.textAlign = 'left';
+            ctx.fillText(`Score: ${score}`, 20, 40);
+
+            ctx.textAlign = 'right';
+            let lifeDisplay = '';
+            for (let i = 0; i < lives; i++) lifeDisplay += '❤️';
+            ctx.fillText(`Lives: ${lifeDisplay}`, canvas.width - 20, 40);
+            
+            ctx.restore();
+        }
+
+        function drawStartScreen() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            stars.forEach(s => { s.update(); s.draw(); }); // Keep background animated
+
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#fff';
+            
+            const titleFontSize = getResponsiveFontSize(80);
+            ctx.font = `bold ${titleFontSize}px 'Courier New', monospace`;
+            ctx.shadowColor = '#0ff';
+            ctx.shadowBlur = 20;
+            ctx.fillText('Key Fleet', canvas.width / 2, canvas.height * 0.3);
+            ctx.shadowBlur = 0;
+
+            const instructionsFontSize = getResponsiveFontSize(24);
+            ctx.font = `${instructionsFontSize}px 'Arial', sans-serif`;
+            ctx.fillText('Type the words on the enemy ships to destroy them.', canvas.width / 2, canvas.height * 0.5);
+            ctx.fillText('Don\'t let them reach your base!', canvas.width / 2, canvas.height * 0.5 + instructionsFontSize * 1.5);
+
+            const startFontSize = getResponsiveFontSize(32);
+            ctx.font = `bold ${startFontSize}px 'Arial', sans-serif`;
+            ctx.fillStyle = '#0f0';
+            ctx.fillText('Click or Press any key to Start', canvas.width / 2, canvas.height * 0.7);
+        }
+
+        function drawGameOverScreen() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            stars.forEach(s => { s.update(); s.draw(); });
+
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.textAlign = 'center';
+            
+            const goFontSize = getResponsiveFontSize(80);
+            ctx.font = `bold ${goFontSize}px 'Courier New', monospace`;
+            ctx.fillStyle = '#f00';
+            ctx.shadowColor = '#f00';
+            ctx.shadowBlur = 20;
+            ctx.fillText('GAME OVER', canvas.width / 2, canvas.height * 0.35);
+            ctx.shadowBlur = 0;
+            
+            const scoreFontSize = getResponsiveFontSize(40);
+            ctx.font = `bold ${scoreFontSize}px 'Arial', sans-serif`;
+            ctx.fillStyle = '#fff';
+            ctx.fillText(`Final Score: ${score}`, canvas.width / 2, canvas.height * 0.5);
+            
+            const restartFontSize = getResponsiveFontSize(28);
+            ctx.font = `${restartFontSize}px 'Arial', sans-serif`;
+            ctx.fillStyle = '#0f0';
+            ctx.fillText('Click or Press any key to Restart', canvas.width / 2, canvas.height * 0.65);
+        }
+
+        function gameLoop() {
+            switch (gameState) {
+                case 'start':
+                    drawStartScreen();
+                    break;
+                case 'playing':
+                    update();
+                    draw();
+                    break;
+                case 'gameOver':
+                    drawGameOverScreen();
+                    break;
+            }
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- EVENT HANDLERS ---
+        function handleKeyDown(e) {
+            if (gameState === 'start' || gameState === 'gameOver') {
+                // Let any key start the game, but avoid system keys from doing so if they don't produce a character
+                if (e.key.length === 1 || e.key === 'Enter' || e.key === ' ') {
+                   resetGame();
+                }
+                return;
+            }
+            
+            if (gameState !== 'playing') return;
+
+            const key = e.key.toLowerCase();
+
+            // Allow typing only a-z
+            if (key.length === 1 && key >= 'a' && key <= 'z') {
+                if (!currentTarget) {
+                    // Find a new target, prioritizing the lowest one on screen
+                    let bestTarget = null;
+                    let max_y = -1;
+                    for (const ship of wordShips) {
+                        if (ship.word.startsWith(key) && ship.y > max_y) {
+                            bestTarget = ship;
+                            max_y = ship.y;
+                        }
+                    }
+                    if (bestTarget) {
+                        currentTarget = bestTarget;
+                        currentInput = key;
+                    }
+
+                } else {
+                    // Continue typing on current target
+                    if (currentTarget.word.startsWith(currentInput + key)) {
+                        currentInput += key;
+                        // Word complete
+                        if (currentInput === currentTarget.word) {
+                            score += currentTarget.word.length * 10;
+                            createExplosion(currentTarget.x, currentTarget.y);
+                            lasers.push(new Laser(currentTarget.x, currentTarget.y));
+                            sound.play('laser');
+                            
+                            // Remove ship
+                            wordShips = wordShips.filter(s => s !== currentTarget);
+                            
+                            // Reset target
+                            currentTarget = null;
+                            currentInput = '';
+
+                            // Increase difficulty
+                            spawnInterval = Math.max(GAME_CONFIG.MIN_SPAWN_INTERVAL, spawnInterval - GAME_CONFIG.SPAWN_INTERVAL_DECREMENT);
+                            currentSpeed = Math.min(GAME_CONFIG.MAX_SPEED, currentSpeed + GAME_CONFIG.SPEED_INCREMENT);
+                        }
+                    } else {
+                        // Typing error
+                        sound.play('error');
+                        // Optional: Punish error by deselecting target
+                        currentTarget = null;
+                        currentInput = '';
+                    }
+                }
+            } else if (key === 'escape' || key === 'backspace') {
+                 // Allow deselecting a target
+                 currentTarget = null;
+                 currentInput = '';
+            }
+        }
+
+        function handleClick() {
+            if (gameState === 'start' || gameState === 'gameOver') {
+                resetGame();
+            }
+        }
+
+        // --- START GAME ---
+        init();
+
+    </script>
+</body>
+</html>

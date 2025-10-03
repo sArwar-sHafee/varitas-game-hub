@@ -1,0 +1,8 @@
+{
+  "name": "Key Fleet",
+  "type": "typing speed game",
+  "folder": "key_fleet",
+  "description": "Command your fleet of starships and obliterate enemy vessels by typing words to unleash a powerful barrage. Your keyboard is the ultimate weapon in this high-speed test of skill and destructive power",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
