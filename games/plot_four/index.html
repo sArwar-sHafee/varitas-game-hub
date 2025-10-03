@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plot Four</title>
+    <style>
+        :root {
+            --bg-grad-start: #1a237e;
+            --bg-grad-end: #0d47a1;
+            --board-color: #fdd835;
+            --board-shadow: #c6a700;
+            --player1-color: #e53935;
+            --player2-color: #00e676;
+            --text-color: #ffffff;
+            --glow-color: rgba(255, 255, 255, 0.8);
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-image: linear-gradient(135deg, var(--bg-grad-start), var(--bg-grad-end));
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Arial', 'Helvetica', sans-serif;
+            color: var(--text-color);
+        }
+
+        #game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        canvas {
+            background-color: transparent;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+            cursor: pointer;
+            touch-action: none;
+        }
+
+        #instructions {
+            margin-top: 15px;
+            font-size: 1.2em;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="instructions">Use mouse or keys 1-7 to drop a piece.</div>
+    </div>
+
+    <script>
+        class PlotFourGame {
+            constructor(canvasId) {
+                this.canvas = document.getElementById(canvasId);
+                this.ctx = this.canvas.getContext('2d');
+                
+                // --- Game Constants ---
+                this.ROWS = 6;
+                this.COLS = 7;
+                this.PLAYER1_EMOJI = '🔴';
+                this.PLAYER2_EMOJI = '🟢';
+                this.EMPTY = 0;
+                
+                // --- Game State ---
+                this.board = [];
+                this.scores = { player1: 0, player2: 0 };
+                this.currentPlayer = 1;
+                this.gameState = 'START'; // START, PLAYING, GAME_OVER
+                this.winner = null;
+                this.winningLine = [];
+                this.isDropping = false;
+                this.hoverColumn = -1;
+
+                // --- Animation ---
+                this.fallingPiece = null;
+                this.lastTime = 0;
+                this.animationId = null;
+                
+                // --- Audio ---
+                this.audioCtx = null;
+
+                // --- Responsiveness ---
+                this.cellSize = 80;
+                this.boardWidth = this.COLS * this.cellSize;
+                this.boardHeight = (this.ROWS + 1) * this.cellSize;
+
+                this.init();
+            }
+
+            init() {
+                this.setupEventListeners();
+                this.resizeCanvas();
+                this.gameLoop(0);
+            }
+
+            // --- Game Setup and State Management ---
+
+            startGame() {
+                this.board = Array(this.ROWS).fill(null).map(() => Array(this.COLS).fill(this.EMPTY));
+                this.gameState = 'PLAYING';
+                this.winner = null;
+                this.winningLine = [];
+                this.isDropping = false;
+                // Alternate who starts each round
+                this.currentPlayer = this.scores.player1 + this.scores.player2 === 0 ? 1 : (this.scores.player1 + this.scores.player2) % 2 + 1;
+            }
+            
+            setupEventListeners() {
+                window.addEventListener('resize', () => this.resizeCanvas());
+                this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+                this.canvas.addEventListener('mouseleave', () => this.hoverColumn = -1);
+                this.canvas.addEventListener('click', (e) => this.handleMouseClick(e));
+                window.addEventListener('keydown', (e) => this.handleKeyDown(e));
+            }
+
+            resizeCanvas() {
+                const container = document.getElementById('game-container');
+                const availableWidth = container.clientWidth * 0.9;
+                const availableHeight = window.innerHeight * 0.8;
+                
+                const ratioX = availableWidth / (this.COLS);
+                const ratioY = availableHeight / (this.ROWS + 1);
+                
+                this.cellSize = Math.floor(Math.min(ratioX, ratioY));
+                
+                this.boardWidth = this.COLS * this.cellSize;
+                this.boardHeight = (this.ROWS + 1) * this.cellSize;
+                
+                this.canvas.width = this.boardWidth;
+                this.canvas.height = this.boardHeight;
+            }
+
+            // --- Game Logic ---
+
+            dropPiece(col) {
+                if (this.isDropping || this.gameState !== 'PLAYING') return;
+
+                const row = this.getNextOpenRow(col);
+                if (row === -1) {
+                    this.playSound('invalid');
+                    return; // Column is full
+                }
+
+                this.isDropping = true;
+                this.fallingPiece = {
+                    col,
+                    row,
+                    x: (col + 0.5) * this.cellSize,
+                    y: 0,
+                    player: this.currentPlayer,
+                    targetY: (row + 1.5) * this.cellSize,
+                    velocityY: 0,
+                    gravity: 0.03 * this.cellSize
+                };
+
+                this.playSound('drop');
+            }
+
+            updateFallingPiece(deltaTime) {
+                if (!this.fallingPiece) return;
+
+                const piece = this.fallingPiece;
+                piece.velocityY += piece.gravity * (deltaTime / 16); // Normalize gravity
+                piece.y += piece.velocityY;
+
+                if (piece.y >= piece.targetY) {
+                    piece.y = piece.targetY;
+                    this.board[piece.row][piece.col] = piece.player;
+                    this.fallingPiece = null;
+                    this.isDropping = false;
+                    this.postMoveChecks();
+                }
+            }
+            
+            postMoveChecks() {
+                const winInfo = this.checkForWin();
+                if (winInfo) {
+                    this.gameState = 'GAME_OVER';
+                    this.winner = winInfo.winner;
+                    this.winningLine = winInfo.line;
+                    if (this.winner === 1) this.scores.player1++;
+                    else this.scores.player2++;
+                    this.playSound('win');
+                } else if (this.isBoardFull()) {
+                    this.gameState = 'GAME_OVER';
+                    this.winner = 'draw';
+                    this.playSound('draw');
+                } else {
+                    this.currentPlayer = this.currentPlayer === 1 ? 2 : 1;
+                }
+            }
+
+            getNextOpenRow(col) {
+                for (let r = this.ROWS - 1; r >= 0; r--) {
+                    if (this.board[r][col] === this.EMPTY) {
+                        return r;
+                    }
+                }
+                return -1; // Column is full
+            }
+            
+            isBoardFull() {
+                return this.board[0].every(cell => cell !== this.EMPTY);
+            }
+
+            checkForWin() {
+                const checkLine = (a, b, c, d) => {
+                    return (a !== 0 && a === b && a === c && a === d);
+                };
+
+                // Horizontal
+                for (let r = 0; r < this.ROWS; r++) {
+                    for (let c = 0; c < this.COLS - 3; c++) {
+                        if (checkLine(this.board[r][c], this.board[r][c+1], this.board[r][c+2], this.board[r][c+3])) {
+                            return { winner: this.board[r][c], line: [{r,c}, {r,c:c+1}, {r,c:c+2}, {r,c:c+3}] };
+                        }
+                    }
+                }
+                // Vertical
+                for (let c = 0; c < this.COLS; c++) {
+                    for (let r = 0; r < this.ROWS - 3; r++) {
+                        if (checkLine(this.board[r][c], this.board[r+1][c], this.board[r+2][c], this.board[r+3][c])) {
+                            return { winner: this.board[r][c], line: [{r,c}, {r:r+1,c}, {r:r+2,c}, {r:r+3,c}] };
+                        }
+                    }
+                }
+                // Diagonal (down-right)
+                for (let r = 0; r < this.ROWS - 3; r++) {
+                    for (let c = 0; c < this.COLS - 3; c++) {
+                        if (checkLine(this.board[r][c], this.board[r+1][c+1], this.board[r+2][c+2], this.board[r+3][c+3])) {
+                            return { winner: this.board[r][c], line: [{r,c}, {r:r+1,c:c+1}, {r:r+2,c:c+2}, {r:r+3,c:c+3}] };
+                        }
+                    }
+                }
+                // Diagonal (up-right)
+                for (let r = 3; r < this.ROWS; r++) {
+                    for (let c = 0; c < this.COLS - 3; c++) {
+                        if (checkLine(this.board[r][c], this.board[r-1][c+1], this.board[r-2][c+2], this.board[r-3][c+3])) {
+                           return { winner: this.board[r][c], line: [{r,c}, {r:r-1,c:c+1}, {r:r-2,c:c+2}, {r:r-3,c:c+3}] };
+                        }
+                    }
+                }
+                return null;
+            }
+
+            // --- Drawing ---
+
+            draw() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                switch(this.gameState) {
+                    case 'START':
+                        this.drawStartScreen();
+                        break;
+                    case 'PLAYING':
+                        this.drawGame();
+                        break;
+                    case 'GAME_OVER':
+                        this.drawGame(); // Draw final board state
+                        this.drawGameOverScreen();
+                        break;
+                }
+            }
+
+            drawGame() {
+                this.drawBoard();
+                this.drawPieces();
+                if (this.fallingPiece) {
+                    this.drawFallingPiece();
+                }
+                this.drawHoverIndicator();
+                this.drawUI();
+            }
+
+            drawBoard() {
+                const boardColor = getComputedStyle(document.documentElement).getPropertyValue('--board-color').trim();
+                const boardShadowColor = getComputedStyle(document.documentElement).getPropertyValue('--board-shadow').trim();
+                const radius = this.cellSize * 0.4;
+
+                this.ctx.fillStyle = boardColor;
+                this.ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                this.ctx.shadowBlur = 15;
+                this.ctx.shadowOffsetY = 5;
+
+                const boardPath = new Path2D();
+                boardPath.rect(0, this.cellSize, this.boardWidth, this.boardHeight - this.cellSize);
+                
+                for (let r = 0; r < this.ROWS; r++) {
+                    for (let c = 0; c < this.COLS; c++) {
+                        const x = (c + 0.5) * this.cellSize;
+                        const y = (r + 1.5) * this.cellSize;
+                        boardPath.moveTo(x + radius, y);
+                        boardPath.arc(x, y, radius, 0, Math.PI * 2, true);
+                    }
+                }
+
+                this.ctx.fill(boardPath);
+                
+                // Clear shadow from main fill before drawing other elements
+                this.ctx.shadowColor = 'transparent';
+                this.ctx.shadowBlur = 0;
+                this.ctx.shadowOffsetY = 0;
+
+                // Add a 3D effect highlight
+                this.ctx.save();
+                this.ctx.strokeStyle = boardShadowColor;
+                this.ctx.lineWidth = this.cellSize * 0.08;
+                this.ctx.lineJoin = 'round';
+                this.ctx.strokeRect(this.ctx.lineWidth/2, this.cellSize + this.ctx.lineWidth/2, this.boardWidth - this.ctx.lineWidth, this.boardHeight - this.cellSize - this.ctx.lineWidth);
+                this.ctx.restore();
+            }
+
+            drawPieces() {
+                const radius = this.cellSize * 0.4;
+                this.ctx.font = `${radius * 2}px sans-serif`;
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                
+                for (let r = 0; r < this.ROWS; r++) {
+                    for (let c = 0; c < this.COLS; c++) {
+                        const piece = this.board[r][c];
+                        if (piece !== this.EMPTY) {
+                            const x = (c + 0.5) * this.cellSize;
+                            const y = (r + 1.5) * this.cellSize;
+                            const emoji = piece === 1 ? this.PLAYER1_EMOJI : this.PLAYER2_EMOJI;
+                            this.ctx.fillText(emoji, x, y);
+                        }
+                    }
+                }
+            }
+            
+            drawFallingPiece() {
+                const piece = this.fallingPiece;
+                const radius = this.cellSize * 0.4;
+                this.ctx.font = `${radius * 2}px sans-serif`;
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                const emoji = piece.player === 1 ? this.PLAYER1_EMOJI : this.PLAYER2_EMOJI;
+                this.ctx.fillText(emoji, piece.x, piece.y);
+            }
+
+            drawHoverIndicator() {
+                if (this.hoverColumn !== -1 && !this.isDropping && this.gameState === 'PLAYING') {
+                    const radius = this.cellSize * 0.4;
+                    const x = (this.hoverColumn + 0.5) * this.cellSize;
+                    const y = 0.5 * this.cellSize;
+                    
+                    this.ctx.globalAlpha = 0.5;
+                    this.ctx.font = `${radius * 2}px sans-serif`;
+                    this.ctx.textAlign = 'center';
+                    this.ctx.textBaseline = 'middle';
+                    const emoji = this.currentPlayer === 1 ? this.PLAYER1_EMOJI : this.PLAYER2_EMOJI;
+                    this.ctx.fillText(emoji, x, y);
+                    this.ctx.globalAlpha = 1.0;
+                }
+            }
+
+            drawUI() {
+                const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text-color').trim();
+                const player1Color = getComputedStyle(document.documentElement).getPropertyValue('--player1-color').trim();
+                const player2Color = getComputedStyle(document.documentElement).getPropertyValue('--player2-color').trim();
+
+                this.ctx.fillStyle = textColor;
+                this.ctx.font = `${this.cellSize * 0.3}px Arial`;
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+
+                // Scores
+                this.ctx.fillText(`${this.PLAYER1_EMOJI} ${this.scores.player1} - ${this.scores.player2} ${this.PLAYER2_EMOJI}`, this.boardWidth / 2, this.cellSize * 0.3);
+
+                // Current Player Indicator
+                if(this.gameState === 'PLAYING') {
+                    const indicatorText = `Player ${this.currentPlayer}'s Turn`;
+                    const x = this.boardWidth / 2;
+                    const y = this.cellSize * 0.7;
+                    this.ctx.fillStyle = this.currentPlayer === 1 ? player1Color : player2Color;
+                    this.ctx.fillText(indicatorText, x, y);
+                }
+            }
+            
+            drawStartScreen() {
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+                const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text-color').trim();
+                this.ctx.fillStyle = textColor;
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+
+                this.ctx.font = `bold ${this.cellSize}px Arial`;
+                this.ctx.fillText("Plot Four", this.canvas.width / 2, this.canvas.height / 2 - this.cellSize * 0.5);
+
+                this.ctx.font = `${this.cellSize * 0.4}px Arial`;
+                this.ctx.fillText("Click or Press Enter to Start", this.canvas.width / 2, this.canvas.height / 2 + this.cellSize * 0.5);
+            }
+
+            drawGameOverScreen() {
+                // Dim the background
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+                // Draw pulsing winning line
+                if (this.winner !== 'draw') {
+                    this.drawWinningLine();
+                }
+
+                // Draw text
+                const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text-color').trim();
+                this.ctx.fillStyle = textColor;
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                this.ctx.font = `bold ${this.cellSize * 0.8}px Arial`;
+
+                let message;
+                if (this.winner === 'draw') {
+                    message = "It's a Draw!";
+                } else {
+                    const emoji = this.winner === 1 ? this.PLAYER1_EMOJI : this.PLAYER2_EMOJI;
+                    message = `${emoji} Player ${this.winner} Wins!`;
+                }
+
+                this.ctx.fillText(message, this.canvas.width / 2, this.canvas.height / 2 - this.cellSize * 0.3);
+                
+                this.ctx.font = `${this.cellSize * 0.3}px Arial`;
+                this.ctx.fillText("Click or Press Enter to Play Again", this.canvas.width / 2, this.canvas.height / 2 + this.cellSize * 0.5);
+            }
+            
+            drawWinningLine() {
+                if (this.winningLine.length < 4) return;
+                
+                const start = this.winningLine[0];
+                const end = this.winningLine[3];
+
+                const startX = (start.c + 0.5) * this.cellSize;
+                const startY = (start.r + 1.5) * this.cellSize;
+                const endX = (end.c + 0.5) * this.cellSize;
+                const endY = (end.r + 1.5) * this.cellSize;
+                
+                const glowColor = getComputedStyle(document.documentElement).getPropertyValue('--glow-color').trim();
+                const pulse = Math.sin(Date.now() * 0.005) * 0.25 + 0.75; // 0.5 to 1.0
+
+                this.ctx.beginPath();
+                this.ctx.moveTo(startX, startY);
+                this.ctx.lineTo(endX, endY);
+                this.ctx.strokeStyle = glowColor;
+                this.ctx.lineWidth = this.cellSize * 0.2 * pulse;
+                this.ctx.lineCap = 'round';
+                this.ctx.shadowColor = glowColor;
+                this.ctx.shadowBlur = 20 * pulse;
+                this.ctx.stroke();
+                
+                this.ctx.shadowColor = 'transparent';
+                this.ctx.shadowBlur = 0;
+            }
+
+            // --- Event Handlers ---
+            
+            handleMouseClick(e) {
+                this.initAudio();
+                
+                if (this.gameState === 'START' || this.gameState === 'GAME_OVER') {
+                    this.startGame();
+                    return;
+                }
+                
+                if (this.gameState === 'PLAYING' && !this.isDropping) {
+                    const rect = this.canvas.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const col = Math.floor(x / this.cellSize);
+                    this.dropPiece(col);
+                }
+            }
+
+            handleMouseMove(e) {
+                if (this.gameState !== 'PLAYING') {
+                    this.hoverColumn = -1;
+                    return;
+                }
+                const rect = this.canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                this.hoverColumn = Math.floor(x / this.cellSize);
+            }
+
+            handleKeyDown(e) {
+                this.initAudio();
+                
+                if (this.gameState === 'START' || this.gameState === 'GAME_OVER') {
+                    if (e.key === 'Enter') {
+                        this.startGame();
+                    }
+                    return;
+                }
+
+                if (this.gameState === 'PLAYING' && !this.isDropping) {
+                    if (e.key >= '1' && e.key <= '7') {
+                        const col = parseInt(e.key) - 1;
+                        this.dropPiece(col);
+                    }
+                }
+            }
+            
+            // --- Game Loop ---
+
+            gameLoop(timestamp) {
+                const deltaTime = timestamp - this.lastTime;
+                this.lastTime = timestamp;
+
+                if (this.isDropping) {
+                    this.updateFallingPiece(deltaTime);
+                }
+
+                this.draw();
+                
+                this.animationId = requestAnimationFrame((t) => this.gameLoop(t));
+            }
+            
+            // --- Audio ---
+            initAudio() {
+                if (!this.audioCtx) {
+                    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+            }
+
+            playSound(type) {
+                if (!this.audioCtx) return;
+                
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+                gainNode.gain.setValueAtTime(0.2, this.audioCtx.currentTime);
+
+                switch(type) {
+                    case 'drop':
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(200, this.audioCtx.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + 0.3);
+                        oscillator.frequency.exponentialRampToValueAtTime(50, this.audioCtx.currentTime + 0.3);
+                        break;
+                    case 'win':
+                        oscillator.type = 'triangle';
+                        const now = this.audioCtx.currentTime;
+                        oscillator.frequency.setValueAtTime(440, now);
+                        oscillator.frequency.linearRampToValueAtTime(660, now + 0.1);
+                        oscillator.frequency.linearRampToValueAtTime(880, now + 0.2);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+                        break;
+                    case 'draw':
+                        oscillator.type = 'sawtooth';
+                        const drawNow = this.audioCtx.currentTime;
+                        oscillator.frequency.setValueAtTime(330, drawNow);
+                        oscillator.frequency.linearRampToValueAtTime(220, drawNow + 0.2);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, drawNow + 0.4);
+                        break;
+                    case 'invalid':
+                        oscillator.type = 'square';
+                        oscillator.frequency.setValueAtTime(100, this.audioCtx.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + 0.2);
+                        break;
+                }
+
+                oscillator.start();
+                oscillator.stop(this.audioCtx.currentTime + 0.5);
+            }
+        }
+
+        // --- Entry Point ---
+        window.addEventListener('load', () => {
+            new PlotFourGame('gameCanvas');
+        });
+
+    </script>
+</body>
+</html>

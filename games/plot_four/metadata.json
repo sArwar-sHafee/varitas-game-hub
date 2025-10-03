@@ -1,0 +1,8 @@
+{
+  "name": "Plot Four",
+  "type": "connect four",
+  "folder": "plot_four",
+  "description": "Outwit your rival by plotting a devious path to victory, secretly building traps with every drop. It's a thrilling race of wits to see whose four-point master plan will connect first",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
