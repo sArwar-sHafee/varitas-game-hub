@@ -1,0 +1,8 @@
+{
+  "name": "Swerve Storm",
+  "type": "racing game (top-down or side-view)",
+  "folder": "swerve_storm",
+  "description": "Brace for a high-speed tempest of twisted tracks and explosive hazards where survival is measured in milliseconds. Chain together impossibly close calls and perfect swerves to unleash a devastating speed boost and blow your rivals away.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

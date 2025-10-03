@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Swerve Storm</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        html, body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100%;
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(180deg, #1e3c72 0%, #2a5298 100%);
+            color: #fff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        canvas {
+            background-color: #333;
+            display: block;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+            cursor: pointer;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+    // --- WRAP ENTIRE GAME IN IIFE FOR SCOPE ISOLATION ---
+    (() => {
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // --- GAME STATE & CONFIGURATION ---
+        let gameState = 'START'; // 'START', 'PLAYING', 'GAME_OVER'
+        let score = 0;
+        let highScore = parseInt(localStorage.getItem('swerveStormHighScore') || '0', 10);
+        let gameSpeed = 3;
+        let lastTime = 0;
+        let timeToNextObstacle = 0;
+
+        const PLAYER_EMOJI = '🏎️';
+        const OBSTACLE_EMOJIS = ['🚓', '🚑', '🚚', '🚕', '🚌', '🛵'];
+        
+        let player, obstacles, particles, roadLines;
+
+        // --- AUDIO ENGINE ---
+        class AudioEngine {
+            constructor() {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                this.sounds = {};
+                this.isMuted = false;
+                this.engineSound = null;
+            }
+
+            _createSound(freq, type, duration, volume) {
+                if (!this.audioContext || this.isMuted) return;
+                const oscillator = this.audioContext.createOscillator();
+                const gainNode = this.audioContext.createGain();
+
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioContext.destination);
+
+                oscillator.type = type;
+                oscillator.frequency.setValueAtTime(freq, this.audioContext.currentTime);
+                gainNode.gain.setValueAtTime(volume, this.audioContext.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + duration);
+
+                oscillator.start(this.audioContext.currentTime);
+                oscillator.stop(this.audioContext.currentTime + duration);
+            }
+
+            playStartSound() {
+                this._createSound(261.63, 'sine', 0.1, 0.2); // C4
+                setTimeout(() => this._createSound(329.63, 'sine', 0.15, 0.2), 100); // E4
+            }
+
+            playCrashSound() {
+                const duration = 0.5;
+                if (!this.audioContext || this.isMuted) return;
+                const bufferSize = this.audioContext.sampleRate * duration;
+                const buffer = this.audioContext.createBuffer(1, bufferSize, this.audioContext.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = Math.random() * 2 - 1;
+                }
+                const noise = this.audioContext.createBufferSource();
+                noise.buffer = buffer;
+                const gainNode = this.audioContext.createGain();
+                gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + duration);
+                noise.connect(gainNode).connect(this.audioContext.destination);
+                noise.start();
+            }
+
+            playScoreSound() {
+                 this._createSound(523.25, 'triangle', 0.1, 0.1); // C5
+            }
+            
+            startEngine() {
+                if (this.engineSound || !this.audioContext || this.isMuted) return;
+                this.engineSound = this.audioContext.createOscillator();
+                const gainNode = this.audioContext.createGain();
+                this.engineSound.connect(gainNode);
+                gainNode.connect(this.audioContext.destination);
+                
+                this.engineSound.type = 'sawtooth';
+                this.engineSound.frequency.setValueAtTime(50, this.audioContext.currentTime);
+                gainNode.gain.setValueAtTime(0.05, this.audioContext.currentTime);
+                this.engineSound.start();
+            }
+            
+            stopEngine() {
+                if (this.engineSound) {
+                    this.engineSound.stop();
+                    this.engineSound = null;
+                }
+            }
+        }
+        const audio = new AudioEngine();
+        
+        // --- INPUT HANDLER ---
+        class InputHandler {
+            constructor() {
+                this.keys = new Set();
+                this.mousePos = { x: canvas.width / 2, y: canvas.height * 0.8 };
+                this.isUsingMouse = false;
+
+                window.addEventListener('keydown', e => this.keys.add(e.key));
+                window.addEventListener('keyup', e => this.keys.delete(e.key));
+                
+                canvas.addEventListener('mousemove', e => {
+                    this.isUsingMouse = true;
+                    const rect = canvas.getBoundingClientRect();
+                    this.mousePos.x = e.clientX - rect.left;
+                });
+                
+                canvas.addEventListener('touchmove', e => {
+                    e.preventDefault();
+                    this.isUsingMouse = true;
+                    const rect = canvas.getBoundingClientRect();
+                    this.mousePos.x = e.touches[0].clientX - rect.left;
+                }, { passive: false });
+            }
+        }
+        const input = new InputHandler();
+
+        // --- GAME OBJECTS ---
+        class Player {
+            constructor() {
+                this.w = canvas.width * 0.1;
+                this.h = this.w;
+                this.x = canvas.width / 2 - this.w / 2;
+                this.y = canvas.height * 0.8;
+                this.speed = 8;
+                this.emojiSize = this.w * 0.9;
+            }
+
+            draw() {
+                ctx.font = `${this.emojiSize}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(PLAYER_EMOJI, this.x + this.w / 2, this.y + this.h / 2);
+            }
+
+            update(road, dt) {
+                // Keyboard controls
+                if (!input.isUsingMouse) {
+                    if (input.keys.has('ArrowLeft') || input.keys.has('a')) {
+                        this.x -= this.speed * dt;
+                    }
+                    if (input.keys.has('ArrowRight') || input.keys.has('d')) {
+                        this.x += this.speed * dt;
+                    }
+                } else { // Mouse/Touch controls
+                    const targetX = input.mousePos.x * (canvas.width / canvas.clientWidth) - this.w / 2;
+                    // Smoothly follow the mouse
+                    this.x += (targetX - this.x) * 0.1;
+                }
+                
+                // Keep player within road bounds
+                this.x = Math.max(road.x, Math.min(this.x, road.x + road.w - this.w));
+            }
+        }
+
+        class Obstacle {
+            constructor(road) {
+                this.w = canvas.width * 0.12;
+                this.h = this.w;
+                this.road = road;
+                const laneWidth = road.w / 4;
+                const lane = Math.floor(Math.random() * 4);
+                this.x = road.x + (lane * laneWidth) + (laneWidth / 2) - (this.w / 2);
+                this.y = -this.h;
+                this.emoji = OBSTACLE_EMOJIS[Math.floor(Math.random() * OBSTACLE_EMOJIS.length)];
+                this.emojiSize = this.w * 0.9;
+            }
+
+            draw() {
+                ctx.font = `${this.emojiSize}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(this.emoji, this.x + this.w / 2, this.y + this.h / 2);
+            }
+
+            update(dt) {
+                this.y += gameSpeed * dt;
+            }
+        }
+
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.size = Math.random() * 5 + 2;
+                this.speedX = Math.random() * 3 - 1.5;
+                this.speedY = Math.random() * 3 - 1.5;
+                this.color = color;
+                this.life = 1;
+                this.sizeDecay = 0.05;
+            }
+            
+            draw() {
+                ctx.fillStyle = `rgba(${this.color}, ${this.life})`;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            update(dt) {
+                this.x += this.speedX * dt;
+                this.y += this.speedY * dt;
+                this.life -= 0.02 * dt;
+                if (this.size > this.sizeDecay) this.size -= this.sizeDecay * dt;
+            }
+        }
+        
+        class RoadLine {
+            constructor(y) {
+                this.w = canvas.width * 0.015;
+                this.h = canvas.height * 0.08;
+                this.x = canvas.width / 2 - this.w / 2;
+                this.y = y;
+            }
+            
+            draw(road) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                const laneWidth = road.w / 4;
+                for (let i = 1; i < 4; i++) {
+                    ctx.fillRect(road.x + i * laneWidth - this.w / 2, this.y, this.w, this.h);
+                }
+            }
+            
+            update(dt) {
+                this.y += gameSpeed * dt;
+                if (this.y > canvas.height) {
+                    this.y = -this.h * 2;
+                }
+            }
+        }
+
+        // --- GAME LOGIC ---
+        function init() {
+            score = 0;
+            gameSpeed = 3;
+            timeToNextObstacle = 1000; // Initial delay
+            player = new Player();
+            obstacles = [];
+            particles = [];
+            roadLines = [];
+            for (let i = 0; i < 5; i++) {
+                roadLines.push(new RoadLine(i * (canvas.height * 0.3)));
+            }
+        }
+        
+        function createExplosion(x, y) {
+            audio.playCrashSound();
+            for (let i = 0; i < 50; i++) {
+                particles.push(new Particle(x, y, '150, 150, 150')); // Smoke
+            }
+            for (let i = 0; i < 30; i++) {
+                particles.push(new Particle(x, y, '255, 165, 0')); // Fire
+            }
+        }
+        
+        function handleCollisions() {
+            for (let i = 0; i < obstacles.length; i++) {
+                const obs = obstacles[i];
+                if (
+                    player.x < obs.x + obs.w &&
+                    player.x + player.w > obs.x &&
+                    player.y < obs.y + obs.h &&
+                    player.y + player.h > obs.y
+                ) {
+                    audio.stopEngine();
+                    createExplosion(player.x + player.w / 2, player.y + player.h / 2);
+                    gameState = 'GAME_OVER';
+                    if (score > highScore) {
+                        highScore = score;
+                        localStorage.setItem('swerveStormHighScore', Math.floor(highScore));
+                    }
+                }
+            }
+        }
+
+        let lastScoreSoundTime = 0;
+        function update(dt, deltaTime) {
+            if (gameState !== 'PLAYING') return;
+            
+            const road = getRoadDimensions();
+
+            player.update(road, dt);
+            
+            roadLines.forEach(line => line.update(dt));
+
+            obstacles.forEach(obs => obs.update(dt));
+            obstacles = obstacles.filter(obs => obs.y < canvas.height);
+            
+            particles.forEach(p => p.update(dt));
+            particles = particles.filter(p => p.life > 0);
+
+            handleCollisions();
+            
+            // Spawn new obstacles based on a timer
+            timeToNextObstacle -= deltaTime;
+            if (timeToNextObstacle <= 0) {
+                obstacles.push(new Obstacle(road));
+                const spawnInterval = 3000 / (gameSpeed * 0.5);
+                timeToNextObstacle = Math.max(500, spawnInterval);
+            }
+
+            // Update score and game speed
+            score += gameSpeed * dt * 0.5;
+            gameSpeed += 0.001 * dt;
+
+            // Play score sound every 1000 points
+            if (Math.floor(score / 1000) > Math.floor(lastScoreSoundTime / 1000)) {
+                audio.playScoreSound();
+            }
+            lastScoreSoundTime = score;
+        }
+
+        // --- DRAWING ---
+        function getRoadDimensions() {
+            const roadWidth = canvas.width * 0.8;
+            return {
+                x: (canvas.width - roadWidth) / 2,
+                y: 0,
+                w: roadWidth,
+                h: canvas.height
+            };
+        }
+
+        function drawRoad() {
+            const road = getRoadDimensions();
+            // Road
+            ctx.fillStyle = '#444';
+            ctx.fillRect(road.x, road.y, road.w, road.h);
+
+            // Scenery (Grass)
+            ctx.fillStyle = '#2c6b2f';
+            ctx.fillRect(0, 0, road.x, canvas.height);
+            ctx.fillRect(road.x + road.w, 0, canvas.width - (road.x + road.w), canvas.height);
+        }
+
+        function drawUI() {
+            ctx.fillStyle = '#fff';
+            ctx.font = `${canvas.width * 0.04}px sans-serif`;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.fillText(`Score: ${Math.floor(score)}`, 20, 20);
+            ctx.textAlign = 'right';
+            ctx.fillText(`High: ${Math.floor(highScore)}`, canvas.width - 20, 20);
+        }
+        
+        function drawOverlay(alpha) {
+            ctx.fillStyle = `rgba(0, 0, 0, ${alpha})`;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+        
+        function drawCenteredText(text, y, size, color = '#fff') {
+            ctx.fillStyle = color;
+            ctx.font = `${size}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, canvas.width / 2, y);
+        }
+
+        function drawStartScreen() {
+            drawRoad();
+            drawOverlay(0.6);
+            drawCenteredText('Swerve Storm', canvas.height * 0.2, canvas.width * 0.15);
+            drawCenteredText('Dodge the traffic!', canvas.height * 0.35, canvas.width * 0.06);
+            
+            drawCenteredText('Controls:', canvas.height * 0.5, canvas.width * 0.05);
+            drawCenteredText('← Left / A', canvas.height * 0.58, canvas.width * 0.04);
+            drawCenteredText('→ Right / D', canvas.height * 0.65, canvas.width * 0.04);
+            drawCenteredText('Mouse / Touch also works!', canvas.height * 0.72, canvas.width * 0.04);
+            
+            drawCenteredText('Click or Press any key to Start', canvas.height * 0.9, canvas.width * 0.05, '#a2ff99');
+        }
+
+        function drawGameOverScreen() {
+            drawRoad();
+            roadLines.forEach(line => line.draw(getRoadDimensions()));
+            obstacles.forEach(obs => obs.draw());
+            particles.forEach(p => p.draw());
+
+            drawOverlay(0.7);
+            drawCenteredText('GAME OVER', canvas.height * 0.3, canvas.width * 0.15, '#ff6b6b');
+            drawCenteredText(`Score: ${Math.floor(score)}`, canvas.height * 0.45, canvas.width * 0.08);
+            drawCenteredText(`High Score: ${Math.floor(highScore)}`, canvas.height * 0.55, canvas.width * 0.06);
+            drawCenteredText('Click to Restart', canvas.height * 0.8, canvas.width * 0.05, '#a2ff99');
+        }
+
+        function draw() {
+            drawRoad();
+            const road = getRoadDimensions();
+            roadLines.forEach(line => line.draw(road));
+            
+            obstacles.forEach(obs => obs.draw());
+            player.draw();
+            particles.forEach(p => p.draw());
+
+            drawUI();
+        }
+
+        // --- MAIN GAME LOOP ---
+        function gameLoop(timestamp) {
+            if (!lastTime) lastTime = timestamp;
+            const deltaTime = timestamp - lastTime;
+            lastTime = timestamp;
+            
+            // Normalize deltaTime to a 60 FPS baseline for consistent physics
+            const dt = deltaTime / (1000 / 60);
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            switch (gameState) {
+                case 'START':
+                    drawStartScreen();
+                    break;
+                case 'PLAYING':
+                    update(dt, deltaTime);
+                    draw();
+                    break;
+                case 'GAME_OVER':
+                    particles.forEach(p => p.update(dt)); // keep explosion animating
+                    drawGameOverScreen();
+                    break;
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- EVENT HANDLERS & INITIALIZATION ---
+        function handleResize() {
+            const dpr = window.devicePixelRatio || 1;
+            
+            let width, height;
+            const aspectRatio = 9 / 16;
+            
+            if (window.innerHeight * aspectRatio > window.innerWidth) {
+                width = window.innerWidth * 0.95;
+                height = width / aspectRatio;
+            } else {
+                height = window.innerHeight * 0.95;
+                width = height * aspectRatio;
+            }
+            
+            canvas.style.width = `${width}px`;
+            canvas.style.height = `${height}px`;
+
+            canvas.width = Math.floor(width * dpr);
+            canvas.height = Math.floor(height * dpr);
+            
+            // Game elements are sized relative to canvas dimensions, so re-initializing
+            // ensures they are scaled correctly after a resize.
+            if (gameState === 'PLAYING' || gameState === 'GAME_OVER') {
+                 init();
+            }
+        }
+        
+        function startGame() {
+            if (gameState === 'PLAYING') return;
+            // User interaction is needed to start AudioContext
+            if (audio.audioContext.state === 'suspended') {
+                audio.audioContext.resume();
+            }
+            audio.playStartSound();
+            audio.startEngine();
+            init();
+            gameState = 'PLAYING';
+            input.isUsingMouse = false; // Reset input method preference
+        }
+
+        function handleClick(event) {
+             // Unified click/touch handler
+            if (audio.audioContext.state === 'suspended') {
+                audio.audioContext.resume();
+            }
+            
+            if (gameState === 'START' || gameState === 'GAME_OVER') {
+                startGame();
+            }
+        }
+
+        window.addEventListener('resize', handleResize, false);
+        canvas.addEventListener('click', handleClick);
+        canvas.addEventListener('touchstart', handleClick, { passive: true });
+
+        window.addEventListener('keydown', e => {
+            if (gameState === 'START' || gameState === 'GAME_OVER') {
+                startGame();
+            }
+        });
+
+        // Initial setup
+        handleResize();
+        requestAnimationFrame(gameLoop);
+    })();
+    </script>
+</body>
+</html>
