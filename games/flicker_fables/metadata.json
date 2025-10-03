@@ -1,0 +1,8 @@
+{
+  "name": "Flicker Fables",
+  "type": "text adventure / interactive fiction",
+  "folder": "flicker_fables",
+  "description": "Command a story that's alive, where your choices cause the very text to flicker and rewrite reality around you. Unravel a twisting narrative that changes, glitches, and fights back with every decision you make.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
