@@ -1,0 +1,8 @@
+{
+  "name": "Gravity Grid",
+  "type": "connect four",
+  "folder": "gravity_grid",
+  "description": "Harness the power of gravity to outwit your opponent in a thrilling vertical duel. Every disc you drop can forge your victory or spring the perfect trap in the race to connect four",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

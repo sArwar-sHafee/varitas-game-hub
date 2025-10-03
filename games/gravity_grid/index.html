@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gravity Grid</title>
+    <style>
+        :root {
+            --color-bg-1: #1e3c72;
+            --color-bg-2: #2a5298;
+            --color-board: #0d2a4e;
+            --color-shadow: rgba(0, 0, 0, 0.4);
+            --color-light: rgba(255, 255, 255, 0.2);
+            --color-p1: #d93e3e;
+            --color-p1-dark: #a82727;
+            --color-p2: #f7b733;
+            --color-p2-dark: #c48d1a;
+            --color-win: #ffffff;
+            --font-family: 'Arial', 'Helvetica', sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: linear-gradient(45deg, var(--color-bg-1), var(--color-bg-2));
+            font-family: var(--font-family);
+            color: white;
+        }
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #game-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        canvas {
+            display: block;
+            background-color: transparent;
+            max-width: 100vw;
+            max-height: 100vh;
+            box-shadow: 0 20px 40px var(--color-shadow);
+            border-radius: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        class Sound {
+            constructor() {
+                this.audioCtx = null;
+            }
+
+            _init() {
+                if (!this.audioCtx) {
+                    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+            }
+
+            _createOscillator(freq, type, duration) {
+                if (!this.audioCtx) return;
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+
+                oscillator.type = type;
+                oscillator.frequency.setValueAtTime(freq, this.audioCtx.currentTime);
+                
+                gainNode.gain.setValueAtTime(0.5, this.audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + duration);
+
+                oscillator.start();
+                oscillator.stop(this.audioCtx.currentTime + duration);
+            }
+
+            playDrop() {
+                this._init();
+                this._createOscillator(100, 'sine', 0.2);
+                setTimeout(() => this._createOscillator(80, 'sine', 0.1), 50);
+            }
+
+            playWin() {
+                this._init();
+                const notes = [261.63, 329.63, 392.00, 523.25]; // C4, E4, G4, C5
+                notes.forEach((note, i) => {
+                    setTimeout(() => this._createOscillator(note, 'triangle', 0.2), i * 100);
+                });
+            }
+
+            playDraw() {
+                this._init();
+                this._createOscillator(200, 'sawtooth', 0.15);
+                setTimeout(() => this._createOscillator(150, 'sawtooth', 0.2), 150);
+            }
+            
+            playClick() {
+                this._init();
+                this._createOscillator(440, 'triangle', 0.1);
+            }
+        }
+
+        class Game {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
+                
+                this.sound = new Sound();
+                
+                // Resolve CSS variables into actual colors for canvas rendering
+                const style = getComputedStyle(document.documentElement);
+                this.PLAYER1_COLOR = style.getPropertyValue('--color-p1').trim();
+                this.PLAYER2_COLOR = style.getPropertyValue('--color-p2').trim();
+                this.PLAYER1_DARK_COLOR = style.getPropertyValue('--color-p1-dark').trim();
+                this.PLAYER2_DARK_COLOR = style.getPropertyValue('--color-p2-dark').trim();
+                this.BOARD_COLOR = style.getPropertyValue('--color-board').trim();
+                this.WIN_COLOR = style.getPropertyValue('--color-win').trim();
+                this.SHADOW_COLOR = style.getPropertyValue('--color-shadow').trim();
+
+                // Game constants
+                this.ROWS = 6;
+                this.COLS = 7;
+                
+                // Game state
+                this.gameState = 'START'; // START, PLAYING, GAME_OVER
+                this.board = [];
+                this.currentPlayer = 1;
+                this.scores = { 1: 0, 2: 0 };
+                this.winner = null;
+                this.winningPieces = [];
+                this.isDraw = false;
+                
+                // Input handling
+                this.hoverColumn = -1;
+                this.animatingPiece = null;
+                
+                // Timing for animations
+                this.lastTime = 0;
+                
+                this.init();
+            }
+
+            init() {
+                this.resize();
+                this.addEventListeners();
+                this.resetBoard();
+                this.gameLoop(0);
+            }
+
+            resize() {
+                const { width, height } = this.canvas.parentElement.getBoundingClientRect();
+                
+                // Maintain aspect ratio for the game board area
+                const boardAspectRatio = (this.COLS + 1) / (this.ROWS + 2);
+                let newWidth = width;
+                let newHeight = newWidth / boardAspectRatio;
+
+                if (newHeight > height) {
+                    newHeight = height;
+                    newWidth = newHeight * boardAspectRatio;
+                }
+                
+                this.canvas.width = newWidth;
+                this.canvas.height = newHeight;
+                
+                this.cellSize = this.canvas.width / (this.COLS + 1);
+                this.pieceRadius = this.cellSize * 0.4;
+                this.boardX = this.cellSize / 2;
+                this.boardY = this.cellSize * 1.5;
+            }
+
+            addEventListeners() {
+                window.addEventListener('resize', () => this.resize());
+                
+                this.canvas.addEventListener('mousemove', e => {
+                    if (this.gameState !== 'PLAYING') return;
+                    const rect = this.canvas.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    this.hoverColumn = Math.floor((x - this.boardX) / this.cellSize);
+                    if (this.hoverColumn < 0 || this.hoverColumn >= this.COLS) {
+                        this.hoverColumn = -1;
+                    }
+                });
+
+                this.canvas.addEventListener('mouseleave', () => {
+                    this.hoverColumn = -1;
+                });
+                
+                this.canvas.addEventListener('click', e => {
+                    if (this.gameState === 'START' || this.gameState === 'GAME_OVER') {
+                        if (this.gameState === 'START') this.sound._init();
+                        this.sound.playClick();
+                        this.restartGame();
+                    } else if (this.gameState === 'PLAYING' && this.hoverColumn !== -1) {
+                        this.dropPiece(this.hoverColumn);
+                    }
+                });
+
+                window.addEventListener('keydown', e => {
+                    if (this.gameState !== 'PLAYING') {
+                         if (e.key === 'Enter' || e.key === ' ') {
+                            if (this.gameState === 'START') this.sound._init();
+                            this.sound.playClick();
+                            this.restartGame();
+                         }
+                         return;
+                    }
+
+                    if (e.key === 'ArrowRight') {
+                        this.hoverColumn = (this.hoverColumn + 1) % this.COLS;
+                    } else if (e.key === 'ArrowLeft') {
+                        this.hoverColumn = (this.hoverColumn - 1 + this.COLS) % this.COLS;
+                    } else if ((e.key === ' ' || e.key === 'Enter' || e.key === 'ArrowDown') && this.hoverColumn !== -1) {
+                        e.preventDefault();
+                        this.dropPiece(this.hoverColumn);
+                    }
+                });
+            }
+
+            resetBoard() {
+                this.board = Array(this.ROWS).fill(null).map(() => Array(this.COLS).fill(0));
+            }
+
+            restartGame() {
+                this.resetBoard();
+                this.gameState = 'PLAYING';
+                this.currentPlayer = 1;
+                this.winner = null;
+                this.winningPieces = [];
+                this.isDraw = false;
+            }
+            
+            dropPiece(col) {
+                if (this.animatingPiece || this.board[0][col] !== 0) {
+                    return; // Column is full or animation in progress
+                }
+
+                this.sound.playClick();
+                let targetRow = -1;
+                for (let r = this.ROWS - 1; r >= 0; r--) {
+                    if (this.board[r][col] === 0) {
+                        targetRow = r;
+                        break;
+                    }
+                }
+                
+                if (targetRow !== -1) {
+                    this.animatingPiece = {
+                        col,
+                        targetRow,
+                        player: this.currentPlayer,
+                        x: this.boardX + (col + 0.5) * this.cellSize,
+                        y: this.boardY - this.cellSize,
+                        targetY: this.boardY + (targetRow + 0.5) * this.cellSize,
+                        velocityY: 0,
+                        gravity: this.cellSize * 0.003
+                    };
+                    this.hoverColumn = -1; // Hide preview while animating
+                }
+            }
+
+            update(deltaTime) {
+                if (this.animatingPiece) {
+                    const piece = this.animatingPiece;
+                    piece.velocityY += piece.gravity * deltaTime;
+                    piece.y += piece.velocityY;
+
+                    if (piece.y >= piece.targetY) {
+                        piece.y = piece.targetY;
+                        const row = piece.targetRow;
+                        this.board[row][piece.col] = piece.player;
+                        this.animatingPiece = null;
+                        this.sound.playDrop();
+                        
+                        this.checkForWin(row, piece.col);
+                        if(this.gameState === 'PLAYING') {
+                           this.checkForDraw();
+                        }
+                        if(this.gameState === 'PLAYING') {
+                           this.currentPlayer = this.currentPlayer === 1 ? 2 : 1;
+                        }
+                    }
+                }
+            }
+            
+            checkForWin(r, c) {
+                const player = this.board[r][c];
+                const directions = [
+                    { x: 1, y: 0 },  // Horizontal
+                    { x: 0, y: 1 },  // Vertical
+                    { x: 1, y: 1 },  // Diagonal /
+                    { x: 1, y: -1 }  // Diagonal \
+                ];
+
+                for (const dir of directions) {
+                    let count = 1;
+                    let line = [{ r, c }];
+
+                    // Check in one direction
+                    for (let i = 1; i < 4; i++) {
+                        const newR = r + dir.y * i;
+                        const newC = c + dir.x * i;
+                        if (this.isValid(newR, newC) && this.board[newR][newC] === player) {
+                            count++;
+                            line.push({r: newR, c: newC});
+                        } else {
+                            break;
+                        }
+                    }
+
+                    // Check in the opposite direction
+                    for (let i = 1; i < 4; i++) {
+                        const newR = r - dir.y * i;
+                        const newC = c - dir.x * i;
+                        if (this.isValid(newR, newC) && this.board[newR][newC] === player) {
+                            count++;
+                            line.push({r: newR, c: newC});
+                        } else {
+                            break;
+                        }
+                    }
+
+                    if (count >= 4) {
+                        this.gameState = 'GAME_OVER';
+                        this.winner = player;
+                        this.scores[player]++;
+                        this.winningPieces = line;
+                        this.sound.playWin();
+                        return;
+                    }
+                }
+            }
+
+            checkForDraw() {
+                if (this.board[0].every(cell => cell !== 0)) {
+                    this.gameState = 'GAME_OVER';
+                    this.isDraw = true;
+                    this.sound.playDraw();
+                }
+            }
+            
+            isValid(r, c) {
+                return r >= 0 && r < this.ROWS && c >= 0 && c < this.COLS;
+            }
+
+            draw() {
+                // Clear canvas
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+                // Draw based on game state
+                switch (this.gameState) {
+                    case 'START':
+                        this.drawStartScreen();
+                        break;
+                    case 'PLAYING':
+                        this.drawGameUI();
+                        this.drawBoard();
+                        this.drawPieces();
+                        this.drawHoverPiece();
+                        if (this.animatingPiece) this.drawAnimatingPiece();
+                        break;
+                    case 'GAME_OVER':
+                        this.drawGameUI();
+                        this.drawBoard();
+                        this.drawPieces();
+                        this.drawWinningLine();
+                        this.drawGameOverScreen();
+                        break;
+                }
+            }
+
+            drawStartScreen() {
+                this.ctx.textAlign = 'center';
+                this.ctx.fillStyle = 'white';
+                
+                const titleSize = this.canvas.width * 0.1;
+                this.ctx.font = `bold ${titleSize}px ${getComputedStyle(document.body).fontFamily}`;
+                this.ctx.fillText('Gravity Grid', this.canvas.width / 2, this.canvas.height / 3);
+
+                const subSize = this.canvas.width * 0.035;
+                this.ctx.font = `${subSize}px ${getComputedStyle(document.body).fontFamily}`;
+                this.ctx.fillText('Click or Press Enter to Start', this.canvas.width / 2, this.canvas.height / 2);
+
+                const instructionsSize = this.canvas.width * 0.025;
+                this.ctx.font = `${instructionsSize}px ${getComputedStyle(document.body).fontFamily}`;
+                this.ctx.fillText('Use Mouse or Arrow Keys + Enter to play', this.canvas.width / 2, this.canvas.height / 2 + subSize * 1.5);
+            }
+            
+            drawGameOverScreen() {
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+                this.ctx.textAlign = 'center';
+                this.ctx.fillStyle = 'white';
+                let message;
+                if (this.isDraw) {
+                    message = "It's a Draw!";
+                } else {
+                    const winnerColor = this.winner === 1 ? 'Red' : 'Yellow';
+                    message = `${winnerColor} Player Wins!`;
+                }
+                const titleSize = this.canvas.width * 0.08;
+                this.ctx.font = `bold ${titleSize}px ${getComputedStyle(document.body).fontFamily}`;
+                this.ctx.fillText(message, this.canvas.width / 2, this.canvas.height / 2);
+                
+                const subSize = this.canvas.width * 0.03;
+                this.ctx.font = `${subSize}px ${getComputedStyle(document.body).fontFamily}`;
+                this.ctx.fillText('Click or Press Enter to Play Again', this.canvas.width / 2, this.canvas.height / 2 + titleSize);
+            }
+
+            drawGameUI() {
+                // Scores
+                const fontSize = this.cellSize * 0.4;
+                this.ctx.font = `bold ${fontSize}px ${getComputedStyle(document.body).fontFamily}`;
+                this.ctx.textAlign = 'center';
+
+                // Player 1 Score
+                this.ctx.fillStyle = this.PLAYER1_COLOR;
+                this.ctx.fillText(`Red: ${this.scores[1]}`, this.canvas.width * 0.2, this.cellSize * 0.7);
+
+                // Player 2 Score
+                this.ctx.fillStyle = this.PLAYER2_COLOR;
+                this.ctx.fillText(`Yellow: ${this.scores[2]}`, this.canvas.width * 0.8, this.cellSize * 0.7);
+
+                // Current Player Turn
+                if(this.gameState === 'PLAYING') {
+                    const turnText = `Turn: ${this.currentPlayer === 1 ? 'Red' : 'Yellow'}`;
+                    this.ctx.fillStyle = this.currentPlayer === 1 ? this.PLAYER1_COLOR : this.PLAYER2_COLOR;
+                    this.ctx.fillText(turnText, this.canvas.width / 2, this.cellSize * 0.7);
+                }
+            }
+
+            drawBoard() {
+                const boardWidth = this.COLS * this.cellSize;
+                const boardHeight = this.ROWS * this.cellSize;
+                
+                this.ctx.save();
+                this.ctx.fillStyle = this.BOARD_COLOR;
+                this.ctx.shadowColor = this.SHADOW_COLOR;
+                this.ctx.shadowBlur = 15;
+                this.ctx.shadowOffsetY = 5;
+                
+                // Create a path for the board with holes
+                const boardPath = new Path2D();
+                boardPath.rect(this.boardX, this.boardY, boardWidth, boardHeight);
+                for (let r = 0; r < this.ROWS; r++) {
+                    for (let c = 0; c < this.COLS; c++) {
+                        const x = this.boardX + (c + 0.5) * this.cellSize;
+                        const y = this.boardY + (r + 0.5) * this.cellSize;
+                        boardPath.moveTo(x + this.pieceRadius, y);
+                        boardPath.arc(x, y, this.pieceRadius, 0, Math.PI * 2, true);
+                    }
+                }
+                this.ctx.fill(boardPath, 'evenodd');
+                this.ctx.restore();
+            }
+
+            drawPieces() {
+                for (let r = 0; r < this.ROWS; r++) {
+                    for (let c = 0; c < this.COLS; c++) {
+                        if (this.board[r][c] !== 0) {
+                            const x = this.boardX + (c + 0.5) * this.cellSize;
+                            const y = this.boardY + (r + 0.5) * this.cellSize;
+                            const player = this.board[r][c];
+                            this.drawPiece(x, y, player);
+                        }
+                    }
+                }
+            }
+            
+            drawPiece(x, y, player) {
+                const color = player === 1 ? this.PLAYER1_COLOR : this.PLAYER2_COLOR;
+                const darkColor = player === 1 ? this.PLAYER1_DARK_COLOR : this.PLAYER2_DARK_COLOR;
+
+                this.ctx.save();
+                
+                // Main circle
+                this.ctx.fillStyle = color;
+                this.ctx.beginPath();
+                this.ctx.arc(x, y, this.pieceRadius, 0, Math.PI * 2);
+                this.ctx.fill();
+
+                // 3D effect - shadow
+                this.ctx.fillStyle = darkColor;
+                this.ctx.beginPath();
+                this.ctx.arc(x, y, this.pieceRadius * 0.85, Math.PI * 0.25, Math.PI * 1.25);
+                this.ctx.fill();
+                
+                // 3D effect - highlight
+                const grad = this.ctx.createRadialGradient(x - this.pieceRadius * 0.3, y - this.pieceRadius * 0.3, 0, x, y, this.pieceRadius);
+                grad.addColorStop(0, 'rgba(255,255,255,0.4)');
+                grad.addColorStop(1, 'rgba(255,255,255,0)');
+                this.ctx.fillStyle = grad;
+                this.ctx.beginPath();
+                this.ctx.arc(x, y, this.pieceRadius, 0, Math.PI * 2);
+                this.ctx.fill();
+
+                this.ctx.restore();
+            }
+
+            drawHoverPiece() {
+                if (this.hoverColumn !== -1 && this.animatingPiece === null) {
+                    const x = this.boardX + (this.hoverColumn + 0.5) * this.cellSize;
+                    const y = this.boardY - this.cellSize / 2;
+                    
+                    this.ctx.save();
+                    this.ctx.globalAlpha = 0.5 + Math.sin(Date.now() / 200) * 0.2;
+                    this.drawPiece(x, y, this.currentPlayer);
+                    this.ctx.restore();
+                }
+            }
+            
+            drawAnimatingPiece() {
+                if(this.animatingPiece) {
+                    this.drawPiece(this.animatingPiece.x, this.animatingPiece.y, this.animatingPiece.player);
+                }
+            }
+
+            drawWinningLine() {
+                if (this.winningPieces.length < 4) return;
+                
+                const startPiece = this.winningPieces[0];
+                const endPiece = this.winningPieces[this.winningPieces.length - 1];
+
+                const startX = this.boardX + (startPiece.c + 0.5) * this.cellSize;
+                const startY = this.boardY + (startPiece.r + 0.5) * this.cellSize;
+                const endX = this.boardX + (endPiece.c + 0.5) * this.cellSize;
+                const endY = this.boardY + (endPiece.r + 0.5) * this.cellSize;
+                
+                this.ctx.save();
+                this.ctx.beginPath();
+                this.ctx.moveTo(startX, startY);
+                this.ctx.lineTo(endX, endY);
+                this.ctx.strokeStyle = this.WIN_COLOR;
+                this.ctx.lineWidth = this.pieceRadius * 0.3;
+                this.ctx.lineCap = 'round';
+                this.ctx.shadowColor = this.SHADOW_COLOR;
+                this.ctx.shadowBlur = 10;
+                this.ctx.stroke();
+                this.ctx.restore();
+            }
+
+            gameLoop(timestamp) {
+                const deltaTime = timestamp - this.lastTime;
+                this.lastTime = timestamp;
+
+                this.update(deltaTime);
+                this.draw();
+
+                requestAnimationFrame(this.gameLoop.bind(this));
+            }
+        }
+
+        window.addEventListener('load', () => {
+            const canvas = document.getElementById('gameCanvas');
+            new Game(canvas);
+        });
+
+    </script>
+</body>
+</html>
