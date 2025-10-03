@@ -1,0 +1,8 @@
+{
+  "name": "Numeral Nexus",
+  "type": "number guessing game",
+  "folder": "numeral_nexus",
+  "description": "Challenge your mind by deciphering a nexus of cryptic clues to reveal the secret number. Each deduction is a thrilling step closer to cracking the code in this fast-paced test of logic",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

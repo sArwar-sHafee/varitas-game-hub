@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Numeral Nexus</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Arial', sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+        }
+        #game-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            height: 100%;
+        }
+        canvas {
+            display: block;
+            background: #16213e;
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.5);
+            border-radius: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+
+            let canvasWidth, canvasHeight;
+
+            // --- Game State & Variables ---
+            let gameState = 'start'; // 'start', 'playing', 'gameOver'
+            let targetNumber;
+            let currentGuess = '';
+            let guesses = [];
+            let attemptsLeft = 10;
+            let score = 0;
+            let highScore = localStorage.getItem('numeralNexusHighScore') || 0;
+            let message = '';
+            let messageTimer = 0;
+
+            // --- Visual Effects ---
+            let particles = [];
+            let backgroundNumbers = [];
+            let screenShake = { duration: 0, magnitude: 0 };
+
+            // --- Audio ---
+            let audioCtx;
+            let soundsEnabled = false;
+
+            const initAudio = () => {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                soundsEnabled = true;
+            };
+
+            const playSound = (type) => {
+                if (!soundsEnabled || !audioCtx) return;
+
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                
+                gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+                gainNode.gain.linearRampToValueAtTime(0.3, audioCtx.currentTime + 0.05);
+
+                switch (type) {
+                    case 'type':
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(440 + Math.random() * 100, audioCtx.currentTime);
+                        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.1);
+                        break;
+                    case 'correct':
+                        const now = audioCtx.currentTime;
+                        oscillator.type = 'triangle';
+                        oscillator.frequency.setValueAtTime(523.25, now); // C5
+                        oscillator.frequency.setValueAtTime(659.25, now + 0.1); // E5
+                        oscillator.frequency.setValueAtTime(783.99, now + 0.2); // G5
+                        gainNode.gain.linearRampToValueAtTime(0, now + 0.4);
+                        break;
+                    case 'wrong':
+                        oscillator.type = 'square';
+                        oscillator.frequency.setValueAtTime(220, audioCtx.currentTime);
+                        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.2);
+                        break;
+                    case 'winLevel':
+                         oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // A5
+                        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
+                        break;
+                    case 'gameOver':
+                        oscillator.type = 'sawtooth';
+                        oscillator.frequency.setValueAtTime(150, audioCtx.currentTime);
+                        oscillator.frequency.linearRampToValueAtTime(50, audioCtx.currentTime + 0.8);
+                        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.8);
+                        break;
+                    case 'click':
+                        oscillator.type = 'triangle';
+                        oscillator.frequency.setValueAtTime(600, audioCtx.currentTime);
+                        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.1);
+                        break;
+                }
+
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + 1);
+            };
+
+
+            // --- Game Setup ---
+            const resizeCanvas = () => {
+                const container = document.getElementById('game-container');
+                const aspectRatio = 9 / 16;
+                let newWidth = container.clientWidth;
+                let newHeight = container.clientHeight;
+                
+                if (newHeight * aspectRatio > newWidth) {
+                    newHeight = newWidth / aspectRatio;
+                } else {
+                    newWidth = newHeight * aspectRatio;
+                }
+
+                canvas.width = newWidth;
+                canvas.height = newHeight;
+                canvasWidth = canvas.width;
+                canvasHeight = canvas.height;
+                
+                if (backgroundNumbers.length === 0) {
+                    for (let i = 0; i < 50; i++) {
+                        createBackgroundNumber(true);
+                    }
+                }
+            };
+
+            const startGame = () => {
+                gameState = 'playing';
+                score = 0;
+                resetLevel();
+            };
+            
+            const restartGame = () => {
+                gameState = 'start';
+                score = 0;
+                attemptsLeft = 10;
+                guesses = [];
+                currentGuess = '';
+                message = '';
+                messageTimer = 0;
+            };
+
+            const resetLevel = () => {
+                targetNumber = Math.floor(Math.random() * 100) + 1;
+                attemptsLeft = 10;
+                guesses = [];
+                currentGuess = '';
+                message = 'New number generated!';
+                messageTimer = 120; // 2 seconds
+            };
+
+            const submitGuess = () => {
+                if (currentGuess === '') return;
+                const guessNum = parseInt(currentGuess, 10);
+
+                let feedback;
+                if (guessNum === targetNumber) {
+                    feedback = 'correct';
+                    handleCorrectGuess();
+                } else {
+                    attemptsLeft--;
+                    feedback = guessNum > targetNumber ? 'high' : 'low';
+                    if (attemptsLeft <= 0) {
+                        handleGameOver();
+                    } else {
+                        playSound('wrong');
+                        triggerScreenShake(5, 15);
+                    }
+                }
+
+                guesses.unshift({ guess: guessNum, feedback: feedback });
+                if (guesses.length > 5) guesses.pop();
+                currentGuess = '';
+            };
+
+            const handleCorrectGuess = () => {
+                playSound('winLevel');
+                score += attemptsLeft * 10;
+                if (score > highScore) {
+                    highScore = score;
+                    localStorage.setItem('numeralNexusHighScore', highScore);
+                }
+                createExplosion(canvasWidth / 2, canvasHeight / 2, 100, '🌟');
+                message = `Correct! It was ${targetNumber}.`;
+                messageTimer = 180; // 3 seconds
+                setTimeout(resetLevel, 2000);
+            };
+
+
+
+            const handleGameOver = () => {
+                playSound('gameOver');
+                gameState = 'gameOver';
+                message = `Game Over! The number was ${targetNumber}.`;
+                triggerScreenShake(15, 30);
+            };
+
+            // --- Input Handling ---
+            const getMousePos = (e) => {
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                let clientX = e.clientX || (e.touches && e.touches[0].clientX);
+                let clientY = e.clientY || (e.touches && e.touches[0].clientY);
+                return {
+                    x: (clientX - rect.left) * scaleX,
+                    y: (clientY - rect.top) * scaleY
+                };
+            };
+            
+            const handleInput = (key) => {
+                 if (gameState !== 'playing') return;
+                 
+                 if (key >= '0' && key <= '9' && currentGuess.length < 3) {
+                    currentGuess += key;
+                    playSound('type');
+                } else if (key === 'Backspace' || key === '⌫') {
+                    currentGuess = currentGuess.slice(0, -1);
+                    playSound('type');
+                } else if (key === 'Enter' || key === '✔️') {
+                    submitGuess();
+                }
+            };
+            
+            window.addEventListener('keydown', (e) => {
+                if (gameState === 'start' || gameState === 'gameOver') {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        initAudio();
+                        playSound('click');
+                        gameState === 'start' ? startGame() : restartGame();
+                    }
+                    return;
+                }
+                handleInput(e.key);
+            });
+
+            canvas.addEventListener('click', (e) => {
+                initAudio();
+                const pos = getMousePos(e);
+                
+                if (gameState === 'start') {
+                    playSound('click');
+                    startGame();
+                } else if (gameState === 'gameOver') {
+                    playSound('click');
+                    restartGame();
+                } else if (gameState === 'playing') {
+                    getNumpadLayout().flat().forEach(btn => {
+                        if (pos.x > btn.x && pos.x < btn.x + btn.w && pos.y > btn.y && pos.y < btn.y + btn.h) {
+                           handleInput(btn.key);
+                        }
+                    });
+                }
+            });
+
+
+            // --- Visual Effects Functions ---
+            const createParticle = (x, y, emoji) => {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 5 + 2;
+                particles.push({
+                    x, y,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed,
+                    emoji: emoji || '✨',
+                    alpha: 1,
+                    size: Math.random() * 20 + 10,
+                    rotation: 0,
+                    rotationSpeed: (Math.random() - 0.5) * 0.2
+                });
+            };
+
+            const createExplosion = (x, y, count, emoji) => {
+                for (let i = 0; i < count; i++) {
+                    createParticle(x, y, emoji);
+                }
+            };
+            
+            const createBackgroundNumber = (isInitial = false) => {
+                backgroundNumbers.push({
+                    x: Math.random() * canvasWidth,
+                    y: isInitial ? Math.random() * canvasHeight : canvasHeight + 20,
+                    value: Math.floor(Math.random() * 10),
+                    speed: Math.random() * 0.5 + 0.2,
+                    size: Math.random() * 20 + 15,
+                    alpha: Math.random() * 0.2 + 0.05
+                });
+            };
+            
+            const triggerScreenShake = (magnitude, duration) => {
+                screenShake.magnitude = magnitude;
+                screenShake.duration = duration;
+            };
+
+            // --- Update Functions ---
+            const updateParticles = (dt) => {
+                for (let i = particles.length - 1; i >= 0; i--) {
+                    const p = particles[i];
+                    p.x += p.vx * dt;
+                    p.y += p.vy * dt;
+                    p.vy += 0.1 * dt; // gravity
+                    p.alpha -= 0.02 * dt;
+                    p.rotation += p.rotationSpeed * dt;
+                    if (p.alpha <= 0) {
+                        particles.splice(i, 1);
+                    }
+                }
+            };
+            
+            const updateBackground = (dt) => {
+                for (let i = backgroundNumbers.length - 1; i >= 0; i--) {
+                    const n = backgroundNumbers[i];
+                    n.y -= n.speed * dt;
+                    if (n.y < -20) {
+                        backgroundNumbers.splice(i, 1);
+                        createBackgroundNumber();
+                    }
+                }
+                if (backgroundNumbers.length < 50) {
+                    createBackgroundNumber();
+                }
+            };
+            
+            const updateScreenShake = () => {
+                if (screenShake.duration > 0) {
+                    screenShake.duration--;
+                    const sx = (Math.random() - 0.5) * screenShake.magnitude;
+                    const sy = (Math.random() - 0.5) * screenShake.magnitude;
+                    ctx.translate(sx, sy);
+                }
+            };
+
+            const update = (dt) => {
+                if (messageTimer > 0) messageTimer -= dt;
+                updateParticles(dt);
+                updateBackground(dt);
+            };
+
+            // --- Drawing Functions ---
+            const drawGradientBackground = () => {
+                const gradient = ctx.createRadialGradient(
+                    canvasWidth / 2, canvasHeight / 2, 0,
+                    canvasWidth / 2, canvasHeight / 2, canvasWidth
+                );
+                gradient.addColorStop(0, '#0f172a');
+                gradient.addColorStop(1, '#1e293b');
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+            };
+
+            const drawBackgroundNumbers = () => {
+                ctx.font = `bold ${canvasWidth * 0.05}px sans-serif`;
+                backgroundNumbers.forEach(n => {
+                    ctx.fillStyle = `rgba(224, 224, 255, ${n.alpha})`;
+                    ctx.fillText(n.value, n.x, n.y);
+                });
+            };
+
+            const drawParticles = () => {
+                particles.forEach(p => {
+                    ctx.save();
+                    ctx.globalAlpha = p.alpha;
+                    ctx.translate(p.x, p.y);
+                    ctx.rotate(p.rotation);
+                    ctx.font = `${p.size}px sans-serif`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(p.emoji, 0, 0);
+                    ctx.restore();
+                });
+            };
+            
+            const drawText = (text, x, y, size, color, align = 'center', baseline = 'middle', font = 'sans-serif') => {
+                ctx.font = `${size}px ${font}`;
+                ctx.fillStyle = color;
+                ctx.textAlign = align;
+                ctx.textBaseline = baseline;
+                ctx.fillText(text, x, y);
+            };
+            
+            const drawGlassmorphismRect = (x, y, w, h, radius, fill) => {
+                ctx.fillStyle = fill;
+                ctx.beginPath();
+                ctx.moveTo(x + radius, y);
+                ctx.lineTo(x + w - radius, y);
+                ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+                ctx.lineTo(x + w, y + h - radius);
+                ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+                ctx.lineTo(x + radius, y + h);
+                ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+                ctx.lineTo(x, y + radius);
+                ctx.quadraticCurveTo(x, y, x + radius, y);
+                ctx.closePath();
+                ctx.fill();
+            };
+
+            const drawStartScreen = () => {
+                const titleSize = canvasWidth * 0.12;
+                const subSize = canvasWidth * 0.04;
+
+                drawText('Numeral', canvasWidth / 2, canvasHeight * 0.3, titleSize, '#fca311', 'center', 'bottom', 'Impact');
+                drawText('Nexus', canvasWidth / 2, canvasHeight * 0.3, titleSize, '#e0e0e0', 'center', 'top', 'Impact');
+                
+                drawText('Guess the number between 1 and 100.', canvasWidth / 2, canvasHeight * 0.55, subSize, '#e0e0e0');
+                drawText('🖱️ Click or ⌨️ Press Enter to Start', canvasWidth / 2, canvasHeight * 0.65, subSize, '#a0a0e0');
+            };
+
+            const drawGameScreen = () => {
+                // UI Panels
+                const panelFill = 'rgba(255, 255, 255, 0.05)';
+                const radius = canvasWidth * 0.03;
+                
+                // Header
+                drawGlassmorphismRect(canvasWidth * 0.05, canvasHeight * 0.03, canvasWidth * 0.9, canvasHeight * 0.08, radius, panelFill);
+                drawText(`Score: ${score}`, canvasWidth * 0.25, canvasHeight * 0.07, canvasWidth * 0.04, '#e0e0e0', 'center');
+                drawText(`High Score: ${highScore}`, canvasWidth * 0.75, canvasHeight * 0.07, canvasWidth * 0.04, '#e0e0e0', 'center');
+
+                // Guess Input Box
+                const guessY = canvasHeight * 0.15;
+                drawGlassmorphismRect(canvasWidth * 0.1, guessY, canvasWidth * 0.8, canvasHeight * 0.12, radius, panelFill);
+                const guessText = currentGuess === '' ? '?' : currentGuess;
+                drawText(guessText, canvasWidth / 2, guessY + canvasHeight * 0.06, canvasWidth * 0.1, '#fca311');
+
+                // Attempts Left
+                const attemptsY = canvasHeight * 0.3;
+                drawText(`Attempts Left: ${attemptsLeft} ❤️`, canvasWidth / 2, attemptsY, canvasWidth * 0.05, '#e0e0e0');
+
+                // Guesses History
+                const historyY = canvasHeight * 0.35;
+                guesses.forEach((g, i) => {
+                    const yPos = historyY + i * (canvasHeight * 0.05);
+                    let feedbackText, color;
+                    if (g.feedback === 'high') {
+                        feedbackText = ` ${g.guess} was too high 🔼`;
+                        color = '#ff8c8c';
+                    } else if (g.feedback === 'low') {
+                        feedbackText = ` ${g.guess} was too low 🔽`;
+                        color = '#8cceff';
+                    } else {
+                        feedbackText = ` ${g.guess} was correct! ✅`;
+                        color = '#8cff8c';
+                    }
+                    drawText(feedbackText, canvasWidth / 2, yPos, canvasWidth * 0.04, color);
+                });
+                
+                // Numpad
+                drawNumpad();
+
+                // Message
+                if (messageTimer > 0) {
+                    const alpha = Math.min(1, messageTimer / 60);
+                    ctx.globalAlpha = alpha;
+                    drawText(message, canvasWidth / 2, canvasHeight * 0.95, canvasWidth * 0.035, '#a0a0e0');
+                    ctx.globalAlpha = 1;
+                }
+            };
+            
+            const getNumpadLayout = () => {
+                const padWidth = canvasWidth * 0.8;
+                const padHeight = canvasHeight * 0.3;
+                const padX = canvasWidth * 0.1;
+                const padY = canvasHeight * 0.6;
+                const btnW = padWidth / 3.5;
+                const btnH = padHeight / 4.5;
+                const gapX = (padWidth - 3 * btnW) / 2;
+                const gapY = (padHeight - 4 * btnH) / 3;
+
+                const keys = [
+                    ['7', '8', '9'],
+                    ['4', '5', '6'],
+                    ['1', '2', '3'],
+                    ['⌫', '0', '✔️']
+                ];
+                
+                return keys.map((row, r) => row.map((key, c) => ({
+                    key,
+                    x: padX + c * (btnW + gapX),
+                    y: padY + r * (btnH + gapY),
+                    w: btnW,
+                    h: btnH
+                })));
+            };
+
+            const drawNumpad = () => {
+                const layout = getNumpadLayout();
+                const radius = canvasWidth * 0.02;
+
+                layout.flat().forEach(btn => {
+                    const isSpecial = ['⌫', '✔️'].includes(btn.key);
+                    const color = isSpecial ? 'rgba(252, 163, 17, 0.3)' : 'rgba(255, 255, 255, 0.1)';
+                    drawGlassmorphismRect(btn.x, btn.y, btn.w, btn.h, radius, color);
+                    drawText(btn.key, btn.x + btn.w / 2, btn.y + btn.h / 2, btn.h * 0.5, '#e0e0e0');
+                });
+            };
+
+            const drawGameOverScreen = () => {
+                const titleSize = canvasWidth * 0.15;
+                const subSize = canvasWidth * 0.05;
+
+                drawText('GAME OVER', canvasWidth / 2, canvasHeight * 0.3, titleSize, '#ff4d4d', 'center', 'center', 'Impact');
+                
+                drawText(`The number was: ${targetNumber}`, canvasWidth / 2, canvasHeight * 0.45, subSize * 1.2, '#fca311');
+                drawText(`Your Score: ${score}`, canvasWidth / 2, canvasHeight * 0.55, subSize, '#e0e0e0');
+                
+                drawText('🖱️ Click or ⌨️ Press Enter to Restart', canvasWidth / 2, canvasHeight * 0.7, subSize * 0.8, '#a0a0e0');
+            };
+
+            // --- Main Game Loop ---
+            let lastTime = 0;
+            const gameLoop = (timestamp) => {
+                if (lastTime === 0) {
+                    lastTime = timestamp;
+                }
+                const deltaTime = (timestamp - lastTime) / (1000 / 60); // Normalize to 60 FPS
+                lastTime = timestamp;
+
+                update(deltaTime);
+
+                ctx.save();
+                updateScreenShake();
+                
+                drawGradientBackground();
+                drawBackgroundNumbers();
+                
+                if (gameState === 'start') {
+                    drawStartScreen();
+                } else if (gameState === 'playing') {
+                    drawGameScreen();
+                } else if (gameState === 'gameOver') {
+                    drawGameOverScreen();
+                }
+                
+                drawParticles();
+                
+                ctx.restore();
+                
+                requestAnimationFrame(gameLoop);
+            };
+
+            // --- Initialization ---
+            window.addEventListener('resize', resizeCanvas);
+            resizeCanvas();
+            requestAnimationFrame(gameLoop);
+        });
+    </script>
+</body>
+</html>
