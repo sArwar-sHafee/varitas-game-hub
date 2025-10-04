@@ -1,0 +1,8 @@
+{
+  "name": "Glimmer Pop",
+  "type": "bubble shooter",
+  "folder": "glimmer_pop",
+  "description": "Launch glowing orbs to trigger spectacular, shimmering chain reactions. Blast your way through dazzling puzzles in a satisfying cascade of glittering light and victory",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Glimmer Pop</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Arial', 'Helvetica Neue', Helvetica, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background: #1a1a2e;
+            background: radial-gradient(circle, #16222A 0%, #1a1a2e 100%);
+            color: #e0e0e0;
+            overflow: hidden;
+        }
+        #game-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            height: 100%;
+        }
+        canvas {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            box-shadow: 0 0 30px rgba(127, 255, 212, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            max-width: 100vw;
+            max-height: 100vh;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+<script>
+class GlimmerPopGame {
+    constructor(canvas) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.gameState = 'START'; // START, PLAYING, GAME_OVER
+        this.score = 0;
+        this.shotsFired = 0;
+        
+        this.mouse = { x: 0, y: 0 };
+        this.colors = ['#ff4757', '#ffa502', '#2ed573', '#1e90ff', '#8e44ad', '#f1c40f'];
+        this.emojis = ['😡', '🍊', '🤢', '💧', '😈', '🌟'];
+        
+        this.sound = new Sound();
+        this.resize();
+        this.initEventListeners();
+        
+        this.lastTime = 0;
+        this.gameLoop = this.gameLoop.bind(this);
+        requestAnimationFrame(this.gameLoop);
+    }
+
+    initGame() {
+        this.score = 0;
+        this.shotsFired = 0;
+        this.grid = new Grid(this);
+        this.player = new Player(this);
+        this.projectiles = [];
+        this.particles = [];
+        this.floatingBubbles = [];
+        this.rowsToAdd = 0;
+        this.addRowCounter = 0;
+        this.gameState = 'PLAYING';
+    }
+
+    resize() {
+        const aspectRatio = 9 / 16;
+        const screenHeight = window.innerHeight * 0.95;
+        const screenWidth = window.innerWidth * 0.95;
+
+        let canvasHeight = screenHeight;
+        let canvasWidth = canvasHeight * aspectRatio;
+
+        if (canvasWidth > screenWidth) {
+            canvasWidth = screenWidth;
+            canvasHeight = canvasWidth / aspectRatio;
+        }
+        
+        this.canvas.width = canvasWidth;
+        this.canvas.height = canvasHeight;
+
+        this.scale = this.canvas.width / 450; // Base width is 450
+        this.bubbleRadius = 18 * this.scale;
+        this.gridCols = 11;
+        this.gridRows = 15;
+        this.gameOverY = this.canvas.height - this.bubbleRadius * 2.5;
+
+        if (this.grid) {
+            this.grid.resize();
+            this.player.resize();
+        }
+    }
+
+    initEventListeners() {
+        window.addEventListener('resize', () => this.resize());
+        this.canvas.addEventListener('mousemove', e => {
+            const rect = this.canvas.getBoundingClientRect();
+            this.mouse.x = e.clientX - rect.left;
+            this.mouse.y = e.clientY - rect.top;
+        });
+        this.canvas.addEventListener('click', () => {
+            if (this.gameState === 'START' || this.gameState === 'GAME_OVER') {
+                this.initGame();
+                this.sound.playStart();
+            } else if (this.gameState === 'PLAYING') {
+                this.player.shoot();
+            }
+        });
+        window.addEventListener('keydown', e => {
+            if (e.code === 'Space' && this.gameState === 'PLAYING') {
+                e.preventDefault();
+                this.player.shoot();
+            }
+        });
+    }
+
+    gameLoop(timestamp) {
+        const deltaTime = timestamp - this.lastTime;
+        this.lastTime = timestamp;
+
+        this.update(deltaTime);
+        this.draw();
+
+        requestAnimationFrame(this.gameLoop);
+    }
+
+    update(deltaTime) {
+        if (this.gameState !== 'PLAYING') return;
+
+        this.player.update();
+        
+        this.projectiles.forEach(p => p.update());
+        this.projectiles = this.projectiles.filter(p => !p.collided);
+
+        this.particles.forEach(p => p.update());
+        this.particles = this.particles.filter(p => p.life > 0);
+
+        this.floatingBubbles.forEach(b => b.updateFloating());
+        this.floatingBubbles = this.floatingBubbles.filter(b => b.y <= this.canvas.height);
+
+        if (this.rowsToAdd > 0) {
+            this.grid.shiftDown();
+            this.rowsToAdd--;
+        }
+        
+        if (this.grid.checkGameOver()) {
+            this.gameState = 'GAME_OVER';
+            this.sound.playGameOver();
+        }
+    }
+    
+    draw() {
+        // Clear and draw background
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        const gradient = this.ctx.createLinearGradient(0, 0, 0, this.canvas.height);
+        gradient.addColorStop(0, '#2c3e50');
+        gradient.addColorStop(1, '#1a1a2e');
+        this.ctx.fillStyle = gradient;
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        switch(this.gameState) {
+            case 'START':
+                this.drawStartScreen();
+                break;
+            case 'PLAYING':
+                this.drawGame();
+                break;
+            case 'GAME_OVER':
+                this.drawGameOverScreen();
+                break;
+        }
+    }
+
+    drawGame() {
+        this.grid.draw();
+        this.player.draw();
+        this.projectiles.forEach(p => p.draw());
+        this.particles.forEach(p => p.draw());
+        this.floatingBubbles.forEach(b => b.draw());
+        
+        // Draw Game Over line
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, this.gameOverY);
+        this.ctx.lineTo(this.canvas.width, this.gameOverY);
+        this.ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
+        this.ctx.setLineDash([5 * this.scale, 5 * this.scale]);
+        this.ctx.lineWidth = 2 * this.scale;
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+
+        this.drawUI();
+    }
+
+    drawUI() {
+        this.ctx.fillStyle = '#fff';
+        this.ctx.font = `${Math.round(20 * this.scale)}px Arial`;
+        this.ctx.textAlign = 'left';
+        this.ctx.fillText(`Score: ${this.score}`, 10 * this.scale, 30 * this.scale);
+        
+        this.ctx.textAlign = 'right';
+        this.ctx.fillText(`Next:`, this.canvas.width - 70 * this.scale, 30 * this.scale);
+        this.player.nextBubble.x = this.canvas.width - 40 * this.scale;
+        this.player.nextBubble.y = 22 * this.scale;
+        this.player.nextBubble.draw();
+    }
+
+    drawStartScreen() {
+        this.drawCenteredText("Glimmer Pop", 60, this.canvas.height * 0.3);
+        this.drawCenteredText("Click to Start", 30, this.canvas.height * 0.5);
+        this.drawCenteredText("Aim with Mouse, Click/Space to Shoot", 20, this.canvas.height * 0.6);
+        this.drawCenteredText("Match 3+ to pop bubbles", 20, this.canvas.height * 0.65);
+    }
+
+    drawGameOverScreen() {
+        this.drawGame();
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        
+        this.drawCenteredText("Game Over", 60, this.canvas.height * 0.4);
+        this.drawCenteredText(`Final Score: ${this.score}`, 35, this.canvas.height * 0.5);
+        this.drawCenteredText("Click to Restart", 25, this.canvas.height * 0.6);
+    }
+    
+    drawCenteredText(text, fontSize, y) {
+        this.ctx.fillStyle = 'white';
+        this.ctx.font = `bold ${Math.round(fontSize * this.scale)}px 'Arial'`;
+        this.ctx.textAlign = 'center';
+        this.ctx.shadowColor = 'aqua';
+        this.ctx.shadowBlur = 15;
+        this.ctx.fillText(text, this.canvas.width / 2, y);
+        this.ctx.shadowBlur = 0;
+    }
+
+    createParticles(x, y, color, count) {
+        for (let i = 0; i < count; i++) {
+            this.particles.push(new Particle(this, x, y, color));
+        }
+    }
+}
+
+class Bubble {
+    constructor(game, row, col, colorIndex) {
+        this.game = game;
+        this.row = row;
+        this.col = col;
+        this.colorIndex = colorIndex;
+        this.color = this.game.colors[colorIndex];
+        this.emoji = this.game.emojis[colorIndex];
+        this.radius = this.game.bubbleRadius;
+        this.isPopping = false;
+        this.popAnimation = 0;
+        this.recalculatePosition();
+    }
+
+    recalculatePosition() {
+        this.x = this.col * this.radius * 2 + (this.row % 2 === 1 ? this.radius : 0) + this.radius;
+        this.y = this.row * this.radius * 1.75 + this.radius;
+    }
+
+    draw() {
+        this.ctx = this.game.ctx;
+        this.ctx.save();
+        this.ctx.translate(this.x, this.y);
+        
+        if (this.isPopping) {
+            const scale = 1 - this.popAnimation;
+            this.ctx.scale(scale, scale);
+            this.popAnimation += 0.1;
+        }
+
+        // Glow
+        this.ctx.shadowColor = this.color;
+        this.ctx.shadowBlur = 10 * this.game.scale;
+
+        // Bubble body
+        const gradient = this.ctx.createRadialGradient(-this.radius * 0.3, -this.radius * 0.3, 0, 0, 0, this.radius);
+        gradient.addColorStop(0, 'rgba(255,255,255,0.7)');
+        gradient.addColorStop(0.7, this.color);
+        gradient.addColorStop(1, this.color);
+        this.ctx.fillStyle = gradient;
+        
+        this.ctx.beginPath();
+        this.ctx.arc(0, 0, this.radius - 1, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.restore();
+        
+        // Emoji
+        this.ctx.font = `${Math.round(this.radius * 1.2)}px Arial`;
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText(this.emoji, this.x, this.y);
+        
+        this.ctx.shadowBlur = 0;
+    }
+
+    updateFloating() {
+        this.vy = (this.vy || 0) + 0.2 * this.game.scale;
+        this.y += this.vy;
+    }
+}
+
+class Projectile extends Bubble {
+    constructor(game, x, y, angle, colorIndex) {
+        super(game, -1, -1, colorIndex);
+        this.x = x;
+        this.y = y;
+        this.angle = angle;
+        const speed = 20 * this.game.scale;
+        this.vx = Math.cos(angle) * speed;
+        this.vy = Math.sin(angle) * speed;
+        this.collided = false;
+    }
+
+    update() {
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // Wall collision
+        if (this.x - this.radius < 0 || this.x + this.radius > this.game.canvas.width) {
+            this.vx *= -1;
+            this.game.sound.playBounce();
+        }
+
+        // Top collision
+        if (this.y - this.radius < 0) {
+            this.y = this.radius;
+            this.snapToGrid();
+            return;
+        }
+
+        // Grid collision
+        for (let r = 0; r < this.game.grid.bubbles.length; r++) {
+            for (let c = 0; c < this.game.grid.bubbles[r].length; c++) {
+                const bubble = this.game.grid.bubbles[r][c];
+                if (bubble) {
+                    const dx = this.x - bubble.x;
+                    const dy = this.y - bubble.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist < this.radius * 2) {
+                        this.snapToGrid();
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    
+    snapToGrid() {
+        if (this.collided) return;
+        this.collided = true;
+        
+        // Find nearest empty cell
+        let closestCell = null;
+        let minDist = Infinity;
+
+        for (let r = 0; r < this.game.gridRows; r++) {
+            for (let c = 0; c < this.game.gridCols; c++) {
+                const isOffset = r % 2 === 1;
+                const cellX = c * this.radius * 2 + (isOffset ? this.radius : 0) + this.radius;
+                const cellY = r * this.radius * 1.75 + this.radius;
+                
+                if (cellX + this.radius > this.game.canvas.width) continue;
+
+                const dx = this.x - cellX;
+                const dy = this.y - cellY;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist < minDist) {
+                    minDist = dist;
+                    closestCell = { r, c };
+                }
+            }
+        }
+        
+        if (closestCell) {
+            // Adjust for grid growth
+            while (this.game.grid.bubbles.length <= closestCell.r) {
+                this.game.grid.bubbles.push(new Array(this.game.gridCols).fill(null));
+            }
+            if (this.game.grid.bubbles[closestCell.r][closestCell.c] === null) {
+                const newBubble = new Bubble(this.game, closestCell.r, closestCell.c, this.colorIndex);
+                this.game.grid.addBubble(newBubble);
+            } else {
+                 // Failsafe: if somehow the closest cell is occupied, find another one
+                 const occupiedBubble = this.game.grid.bubbles[closestCell.r][closestCell.c];
+                 let r = closestCell.r;
+                 let c = closestCell.c;
+                 if (this.y < occupiedBubble.y) r--;
+                 if (r < 0) r = 0;
+                 // Use occupiedBubble.x for comparison to avoid TypeError
+                 if (this.x < occupiedBubble.x) c--; else c++;
+                 if (c < 0) c = 0;
+                 if (c >= this.game.gridCols) c = this.game.gridCols - 1;
+                 
+                 const newBubble = new Bubble(this.game, r, c, this.colorIndex);
+                 this.game.grid.addBubble(newBubble);
+            }
+        }
+    }
+}
+
+class Player {
+    constructor(game) {
+        this.game = game;
+        this.angle = -Math.PI / 2;
+        this.cooldown = 0;
+        this.loadBubbles();
+        this.resize();
+    }
+    
+    resize() {
+        this.x = this.game.canvas.width / 2;
+        this.y = this.game.canvas.height - 30 * this.game.scale;
+        if(this.currentBubble) {
+            this.currentBubble.radius = this.game.bubbleRadius;
+            this.nextBubble.radius = this.game.bubbleRadius;
+        }
+    }
+    
+    getAvailableColors() {
+        const colorsInGrid = new Set();
+        this.game.grid.bubbles.forEach(row => {
+            row.forEach(bubble => {
+                if (bubble) colorsInGrid.add(bubble.colorIndex);
+            });
+        });
+        return colorsInGrid.size > 0 ? Array.from(colorsInGrid) : [0,1,2];
+    }
+
+    loadBubbles() {
+        const availableColors = this.getAvailableColors();
+        const nextColorIndex = availableColors[Math.floor(Math.random() * availableColors.length)];
+        
+        this.currentBubble = this.nextBubble || new Bubble(this.game, -1, -1, nextColorIndex);
+        this.nextBubble = new Bubble(this.game, -1, -1, availableColors[Math.floor(Math.random() * availableColors.length)]);
+    }
+
+    update() {
+        if (this.cooldown > 0) this.cooldown--;
+        
+        const dx = this.game.mouse.x - this.x;
+        const dy = this.game.mouse.y - this.y;
+        this.angle = Math.atan2(dy, dx);
+        
+        if (this.angle > -0.1) this.angle = -0.1;
+        if (this.angle < -Math.PI + 0.1) this.angle = -Math.PI + 0.1;
+    }
+
+    draw() {
+        const ctx = this.game.ctx;
+        
+        // Aiming line
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(this.x, this.y);
+        ctx.lineTo(
+            this.x + Math.cos(this.angle) * this.game.canvas.height,
+            this.y + Math.sin(this.angle) * this.game.canvas.height
+        );
+        ctx.setLineDash([5 * this.game.scale, 10 * this.game.scale]);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.lineWidth = 2 * this.game.scale;
+        ctx.stroke();
+        ctx.restore();
+
+        // Shooter base
+        ctx.fillStyle = '#4a4a4a';
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 30 * this.game.scale, Math.PI, 0);
+        ctx.fill();
+
+        // Current bubble
+        this.currentBubble.x = this.x;
+        this.currentBubble.y = this.y;
+        this.currentBubble.draw();
+    }
+
+    shoot() {
+        if (this.cooldown === 0) {
+            this.game.sound.playShoot();
+            this.game.projectiles.push(new Projectile(this.game, this.x, this.y, this.angle, this.currentBubble.colorIndex));
+            this.loadBubbles();
+            this.cooldown = 20; // frames
+            
+            this.game.shotsFired++;
+            if (this.game.shotsFired % 6 === 0) {
+                this.game.rowsToAdd++;
+            }
+        }
+    }
+}
+
+class Grid {
+    constructor(game) {
+        this.game = game;
+        this.bubbles = [];
+        this.init();
+    }
+    
+    resize() {
+        this.bubbles.forEach(row => {
+            row.forEach(bubble => {
+                if (bubble) {
+                    bubble.radius = this.game.bubbleRadius;
+                    bubble.recalculatePosition();
+                }
+            });
+        });
+    }
+
+    init() {
+        for (let r = 0; r < 7; r++) {
+            this.bubbles[r] = [];
+            for (let c = 0; c < this.game.gridCols; c++) {
+                if (this.game.gridCols - (r % 2 === 1 ? 1 : 0) > c) {
+                     const colorIndex = Math.floor(Math.random() * this.game.colors.length);
+                     this.bubbles[r][c] = new Bubble(this.game, r, c, colorIndex);
+                } else {
+                    this.bubbles[r][c] = null;
+                }
+            }
+        }
+    }
+    
+    addBubble(bubble) {
+        if (!this.bubbles[bubble.row]) {
+            this.bubbles[bubble.row] = new Array(this.game.gridCols).fill(null);
+        }
+        this.bubbles[bubble.row][bubble.col] = bubble;
+        
+        const matches = this.findMatches(bubble);
+        if (matches.length >= 3) {
+            this.popBubbles(matches);
+            const floating = this.findFloatingBubbles();
+            if (floating.length > 0) {
+                this.popBubbles(floating, true);
+            }
+        } else {
+            this.game.sound.playStick();
+        }
+    }
+
+    getNeighbors(bubble) {
+        const neighbors = [];
+        const parity = bubble.row % 2;
+        const directions = [
+            { r: 0, c: -1 }, { r: 0, c: 1 }, // left, right
+            { r: -1, c: 0 + parity }, { r: -1, c: -1 + parity }, // top-left, top-right -- Fixed hex logic
+            { r: 1, c: 0 + parity }, { r: 1, c: -1 + parity }  // bottom-left, bottom-right -- Fixed hex logic
+        ];
+
+        directions.forEach(dir => {
+            const newRow = bubble.row + dir.r;
+            const newCol = bubble.col + dir.c;
+            if (this.bubbles[newRow] && this.bubbles[newRow][newCol]) {
+                neighbors.push(this.bubbles[newRow][newCol]);
+            }
+        });
+        return neighbors;
+    }
+
+    findMatches(startBubble) {
+        const toCheck = [startBubble];
+        const checked = new Set([`${startBubble.row},${startBubble.col}`]);
+        const matches = [startBubble];
+
+        while (toCheck.length > 0) {
+            const current = toCheck.pop();
+            const neighbors = this.getNeighbors(current);
+
+            for (const neighbor of neighbors) {
+                const id = `${neighbor.row},${neighbor.col}`;
+                if (!checked.has(id) && neighbor.colorIndex === startBubble.colorIndex) {
+                    checked.add(id);
+                    toCheck.push(neighbor);
+                    matches.push(neighbor);
+                }
+            }
+        }
+        return matches;
+    }
+    
+    findFloatingBubbles() {
+        const connected = new Set();
+        const toCheck = [];
+
+        // All bubbles in the top row are connected
+        if (this.bubbles[0]) {
+            for (let c = 0; c < this.game.gridCols; c++) {
+                if (this.bubbles[0][c]) {
+                    toCheck.push(this.bubbles[0][c]);
+                    connected.add(`${0},${c}`);
+                }
+            }
+        }
+        
+        while (toCheck.length > 0) {
+            const current = toCheck.pop();
+            const neighbors = this.getNeighbors(current);
+            for (const neighbor of neighbors) {
+                const id = `${neighbor.row},${neighbor.col}`;
+                if (neighbor && !connected.has(id)) {
+                    connected.add(id);
+                    toCheck.push(neighbor);
+                }
+            }
+        }
+        
+        const floating = [];
+        for (let r = 0; r < this.bubbles.length; r++) {
+            if (!this.bubbles[r]) continue;
+            for (let c = 0; c < this.game.gridCols; c++) {
+                const id = `${r},${c}`;
+                if (this.bubbles[r][c] && !connected.has(id)) {
+                    floating.push(this.bubbles[r][c]);
+                }
+            }
+        }
+        return floating;
+    }
+
+    popBubbles(bubblesToPop, isFloating = false) {
+        let popCount = 0;
+        bubblesToPop.forEach(bubble => {
+            if (bubble && this.bubbles[bubble.row] && this.bubbles[bubble.row][bubble.col]) {
+                popCount++;
+                this.game.createParticles(bubble.x, bubble.y, bubble.color, 15);
+                this.bubbles[bubble.row][bubble.col] = null;
+                
+                if (isFloating) {
+                    this.game.floatingBubbles.push(bubble);
+                }
+            }
+        });
+        const scoreToAdd = popCount * 10 + (isFloating ? popCount * 20 : 0) + Math.max(0, (popCount - 3) * 10);
+        this.game.score += scoreToAdd;
+        if(popCount > 0) this.game.sound.playPop(popCount);
+    }
+
+    shiftDown() {
+        const newRow = [];
+        for (let c = 0; c < this.game.gridCols; c++) {
+             // New top row (r=0) is not offset
+            if (this.game.gridCols > c) {
+                 const colorIndex = Math.floor(Math.random() * this.game.colors.length);
+                 newRow[c] = new Bubble(this.game, 0, c, colorIndex);
+            } else {
+                newRow[c] = null;
+            }
+        }
+        this.bubbles.unshift(newRow);
+        
+        for (let r = 0; r < this.bubbles.length; r++) {
+            if(!this.bubbles[r]) continue;
+            for (let c = 0; c < this.game.gridCols; c++) {
+                if (this.bubbles[r][c]) {
+                    this.bubbles[r][c].row = r;
+                    this.bubbles[r][c].recalculatePosition();
+                }
+            }
+        }
+        this.game.sound.playShift();
+    }
+    
+    checkGameOver() {
+        for (const row of this.bubbles) {
+            if (!row) continue;
+            for (const bubble of row) {
+                if (bubble && (bubble.y + bubble.radius) > this.game.gameOverY) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    draw() {
+        this.bubbles.forEach(row => {
+            if(row) row.forEach(bubble => {
+                if (bubble) bubble.draw();
+            });
+        });
+    }
+}
+
+class Particle {
+    constructor(game, x, y, color) {
+        this.game = game;
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        this.size = Math.random() * 5 * this.game.scale + 2 * this.game.scale;
+        this.speedX = Math.random() * 6 - 3;
+        this.speedY = Math.random() * 6 - 3;
+        this.life = Math.random() * 30 + 30;
+    }
+
+    update() {
+        this.x += this.speedX;
+        this.y += this.speedY;
+        this.life--;
+        if(this.size > 0.1) this.size -= 0.1;
+    }
+
+    draw() {
+        this.game.ctx.fillStyle = this.color;
+        this.game.ctx.globalAlpha = this.life / 60;
+        this.game.ctx.beginPath();
+        this.game.ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        this.game.ctx.fill();
+        this.game.ctx.globalAlpha = 1;
+    }
+}
+
+class Sound {
+    constructor() {
+        this.audioCtx = null;
+        try {
+            this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        } catch(e) {
+            console.error("Web Audio API is not supported in this browser");
+        }
+    }
+    
+    _playSound(freq, type, duration, vol) {
+        if (!this.audioCtx) return;
+        const oscillator = this.audioCtx.createOscillator();
+        const gainNode = this.audioCtx.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(this.audioCtx.destination);
+        
+        oscillator.type = type;
+        oscillator.frequency.setValueAtTime(freq, this.audioCtx.currentTime);
+        gainNode.gain.setValueAtTime(vol, this.audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + duration);
+
+        oscillator.start(this.audioCtx.currentTime);
+        oscillator.stop(this.audioCtx.currentTime + duration);
+    }
+    
+    playShoot() { this._playSound(220, 'triangle', 0.1, 0.2); }
+    playBounce() { this._playSound(100, 'square', 0.05, 0.1); }
+    playStick() { this._playSound(150, 'sawtooth', 0.1, 0.2); }
+    playShift() { this._playSound(120, 'square', 0.2, 0.1); }
+    
+    playPop(count) {
+        const baseFreq = 440;
+        for (let i = 0; i < Math.min(count, 10); i++) {
+            setTimeout(() => {
+                this._playSound(baseFreq + i * 50, 'sine', 0.1, 0.3);
+            }, i * 30);
+        }
+    }
+    
+    playStart() {
+        this._playSound(261, 'sine', 0.1, 0.3);
+        setTimeout(() => this._playSound(329, 'sine', 0.1, 0.3), 100);
+        setTimeout(() => this._playSound(392, 'sine', 0.2, 0.3), 200);
+    }
+
+    playGameOver() {
+        this._playSound(392, 'sawtooth', 0.2, 0.3);
+        setTimeout(() => this._playSound(329, 'sawtooth', 0.2, 0.3), 200);
+        setTimeout(() => this._playSound(261, 'sawtooth', 0.4, 0.3), 400);
+    }
+}
+
+window.addEventListener('load', () => {
+    const canvas = document.getElementById('gameCanvas');
+    new GlimmerPopGame(canvas);
+});
+
+</script>
+</body>
+</html>
