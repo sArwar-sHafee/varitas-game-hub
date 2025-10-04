@@ -1,0 +1,8 @@
+{
+  "name": "Bounce Draft",
+  "type": "doodle jump clone",
+  "folder": "bounce_draft",
+  "description": "Ride powerful updrafts and bounce off precarious platforms in an exhilarating, endless race to the sky. Master the drafts to launch past devious obstacles and set an unbeatable high score",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
