@@ -1,0 +1,8 @@
+{
+  "name": "Rhythm Hues",
+  "type": "color matching game",
+  "folder": "rhythm_hues",
+  "description": "Tap into the beat and match cascading colors in a vibrant symphony of light and sound. Every perfect match unleashes dazzling effects, challenging your reflexes and pulling you into a state of pure rhythmic flow.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
