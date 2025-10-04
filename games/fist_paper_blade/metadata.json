@@ -1,0 +1,8 @@
+{
+  "name": "Fist Paper Blade",
+  "type": "rock paper scissors",
+  "folder": "fist_paper_blade",
+  "description": "Unleash brute force, cunning strategy, or swift precision in a lightning-fast battle of wits. Read your opponent's mind and counter their move to claim ultimate victory in this intense tactical duel.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
