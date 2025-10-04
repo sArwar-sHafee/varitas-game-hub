@@ -1,0 +1,8 @@
+{
+  "name": "Chroma Chain",
+  "type": "simon says memory game",
+  "folder": "chroma_chain",
+  "description": "Ignite your memory as you race to repeat an ever-growing chain of radiant light. Test your focus and reflexes as the hypnotic sequence surges with dazzling speed and complexity",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

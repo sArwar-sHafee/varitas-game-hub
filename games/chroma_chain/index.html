@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chroma Chain</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --main-font: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+            --glow-color: rgba(255, 255, 255, 0.1);
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            font-family: var(--main-font);
+            color: white;
+        }
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+        }
+
+        #game-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        canvas {
+            background: radial-gradient(circle, #333 0%, #1a1a1a 100%);
+            border-radius: 20px;
+            box-shadow: 0 0 30px var(--glow-color), 0 0 60px var(--glow-color);
+            max-width: 95vmin;
+            max-height: 95vmin;
+            aspect-ratio: 1 / 1;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        // ES6+ JavaScript Game Code
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // --- GAME STATE & CONSTANTS ---
+        const GameState = {
+            START: 'start',
+            COMPUTER_TURN: 'computer_turn',
+            PLAYER_TURN: 'player_turn',
+            GAME_OVER: 'game_over'
+        };
+
+        const BUTTON_CONFIG = [
+            { key: 'q', color: '#16a085', lightColor: '#1abc9c', soundFreq: 261.63 }, // C4
+            { key: 'w', color: '#c0392b', lightColor: '#e74c3c', soundFreq: 329.63 }, // E4
+            { key: 'a', color: '#2980b9', lightColor: '#3498db', soundFreq: 392.00 }, // G4
+            { key: 's', color: '#f39c12', lightColor: '#f1c40f', soundFreq: 440.00 }  // A4
+        ];
+
+        let currentState = GameState.START;
+        let sequence = [];
+        let playerSequence = [];
+        let score = 0;
+        let highScore = localStorage.getItem('chromaChainHighScore') || 0;
+        
+        let audioContext;
+        let buttons = [];
+        let particles = [];
+        let message = { text: '', alpha: 1 };
+
+        let lastTime = 0;
+        
+        // --- AUDIO SETUP (Web Audio API) ---
+        function setupAudio() {
+            if (!audioContext) {
+                try {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) {
+                    console.error("Web Audio API is not supported in this browser");
+                }
+            }
+        }
+
+        function playSound(frequency, duration = 0.2) {
+            if (!audioContext) return;
+
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+
+            oscillator.type = 'triangle';
+            oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+            
+            gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + duration);
+            
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + duration);
+        }
+        
+        const WRONG_SOUND_FREQ = 150;
+
+        // --- CLASSES ---
+        class Button {
+            constructor(config, x, y, radius) {
+                this.key = config.key;
+                this.color = config.color;
+                this.lightColor = config.lightColor;
+                this.soundFreq = config.soundFreq;
+                this.x = x;
+                this.y = y;
+                this.radius = radius;
+                this.illumination = 0; // 0 to 1
+            }
+
+            draw() {
+                ctx.save();
+                
+                // Base button
+                const gradient = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius);
+                gradient.addColorStop(0, this.lightColor);
+                gradient.addColorStop(1, this.color);
+                ctx.fillStyle = gradient;
+                
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Illumination effect
+                if (this.illumination > 0) {
+                    ctx.globalAlpha = this.illumination;
+                    ctx.fillStyle = 'white';
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                    ctx.fill();
+                    this.illumination -= 0.05; // Fade out
+                }
+                
+                ctx.restore();
+            }
+
+            illuminate() {
+                this.illumination = 1;
+                playSound(this.soundFreq);
+                createParticles(this.x, this.y, this.lightColor);
+            }
+
+            isPointInside(px, py) {
+                const dx = px - this.x;
+                const dy = py - this.y;
+                return dx * dx + dy * dy <= this.radius * this.radius;
+            }
+        }
+
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.size = Math.random() * 5 + 2;
+                this.speedX = Math.random() * 3 - 1.5;
+                this.speedY = Math.random() * 3 - 1.5;
+                this.life = 1; // 1 to 0
+            }
+
+            update() {
+                this.x += this.speedX;
+                this.y += this.speedY;
+                this.life -= 0.02;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // --- GAME LOGIC ---
+        function resetGame() {
+            sequence = [];
+            playerSequence = [];
+            score = 0;
+            currentState = GameState.COMPUTER_TURN;
+            setTimeout(computerTurn, 1000);
+        }
+
+        function computerTurn() {
+            playerSequence = [];
+            currentState = GameState.COMPUTER_TURN;
+            
+            // Add a new step to the sequence
+            const randomIndex = Math.floor(Math.random() * buttons.length);
+            sequence.push(randomIndex);
+            
+            playSequence();
+        }
+
+        function playSequence() {
+            let i = 0;
+            const intervalTime = Math.max(150, 600 - (score * 5)); // Speed up as score increases, with a minimum delay
+            const interval = setInterval(() => {
+                if (i < sequence.length) {
+                    buttons[sequence[i]].illuminate();
+                    i++;
+                } else {
+                    clearInterval(interval);
+                    currentState = GameState.PLAYER_TURN;
+                    setMessage("Your Turn", 1);
+                }
+            }, intervalTime); 
+            setMessage("Watch carefully...");
+        }
+        
+        function playerPress(buttonIndex) {
+            if (currentState !== GameState.PLAYER_TURN) return;
+            
+            buttons[buttonIndex].illuminate();
+            playerSequence.push(buttonIndex);
+            
+            const currentStep = playerSequence.length - 1;
+            
+            // Check if the press was correct
+            if (playerSequence[currentStep] !== sequence[currentStep]) {
+                gameOver();
+                return;
+            }
+            
+            // Check if the round is complete
+            if (playerSequence.length === sequence.length) {
+                score++;
+                currentState = GameState.COMPUTER_TURN; // Prevent further input
+                setTimeout(computerTurn, 1000);
+            }
+        }
+
+        function gameOver() {
+            playSound(WRONG_SOUND_FREQ, 0.5);
+            currentState = GameState.GAME_OVER;
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('chromaChainHighScore', highScore);
+            }
+        }
+
+        function setMessage(text, duration) {
+            message.text = text;
+            message.alpha = 1;
+            if(duration) {
+                setTimeout(() => {
+                    // Only clear if the message hasn't been replaced
+                    if(message.text === text) {
+                       message.alpha = 0;
+                    }
+                }, duration * 1000);
+            }
+        }
+
+        // --- DRAWING & ANIMATION ---
+        function resizeCanvas() {
+            const size = Math.min(window.innerWidth, window.innerHeight) * 0.95;
+            canvas.width = size;
+            canvas.height = size;
+            
+            const w = canvas.width;
+            const h = canvas.height;
+            const center = { x: w / 2, y: h / 2 };
+            const mainRadius = w * 0.35;
+            const buttonRadius = w * 0.15;
+            
+            buttons = [
+                new Button(BUTTON_CONFIG[0], center.x - mainRadius, center.y - mainRadius, buttonRadius),
+                new Button(BUTTON_CONFIG[1], center.x + mainRadius, center.y - mainRadius, buttonRadius),
+                new Button(BUTTON_CONFIG[2], center.x - mainRadius, center.y + mainRadius, buttonRadius),
+                new Button(BUTTON_CONFIG[3], center.x + mainRadius, center.y + mainRadius, buttonRadius)
+            ];
+            
+            draw(); // Redraw immediately on resize
+        }
+        
+        function createParticles(x, y, color) {
+            for (let i = 0; i < 20; i++) {
+                particles.push(new Particle(x, y, color));
+            }
+        }
+
+        function updateAndDrawParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                particles[i].update();
+                particles[i].draw();
+                if (particles[i].life <= 0) {
+                    particles.splice(i, 1);
+                }
+            }
+        }
+
+        function drawText(text, x, y, size, color = 'white', shadow = true) {
+            ctx.fillStyle = color;
+            ctx.font = `bold ${size}px ${getComputedStyle(document.body).fontFamily}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            if (shadow) {
+                ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                ctx.shadowBlur = 10;
+                ctx.shadowOffsetX = 2;
+                ctx.shadowOffsetY = 2;
+            }
+            ctx.fillText(text, x, y);
+            ctx.shadowColor = 'transparent'; // Reset shadow
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            const w = canvas.width;
+            const h = canvas.height;
+            const center = { x: w / 2, y: h / 2 };
+
+            // Draw game elements
+            buttons.forEach(button => button.draw());
+            updateAndDrawParticles();
+
+            // Draw central UI
+            ctx.fillStyle = '#2c3e50';
+            ctx.beginPath();
+            ctx.arc(center.x, center.y, w * 0.2, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Draw game state specific UI
+            switch (currentState) {
+                case GameState.START:
+                    drawText("Chroma", center.x, center.y - h * 0.08, w * 0.08);
+                    drawText("Chain", center.x, center.y - h * 0.01, w * 0.08);
+                    drawText("🧠", center.x, center.y + h * 0.06, w * 0.05);
+                    drawText("Click or Press Any Key To Start", center.x, h - h * 0.1, w * 0.035);
+                    drawText("Controls: Q, W, A, S", center.x, h - h * 0.05, w * 0.025);
+                    break;
+                case GameState.GAME_OVER:
+                    drawText("Game Over", center.x, center.y - h * 0.05, w * 0.07);
+                    drawText(`Score: ${score}`, center.x, center.y + h * 0.02, w * 0.04);
+                    drawText("Click to Restart", center.x, center.y + h * 0.08, w * 0.035);
+                    drawText(`High Score: ${highScore}`, center.x, h * 0.05, w * 0.04);
+                    break;
+                default: // Computer or Player Turn
+                    drawText("Score", center.x, center.y - h * 0.04, w * 0.04);
+                    drawText(score, center.x, center.y + h * 0.02, w * 0.08);
+                    drawText(`High Score: ${highScore}`, center.x, h * 0.05, w * 0.04);
+                    
+                    if (message.text && message.alpha > 0) {
+                        ctx.globalAlpha = message.alpha;
+                        drawText(message.text, center.x, h - h * 0.1, w * 0.04);
+                        ctx.globalAlpha = 1;
+                        if (currentState === GameState.PLAYER_TURN && message.text === "Your Turn") {
+                             message.alpha -= 0.01; // fade out message
+                        }
+                    }
+                    break;
+            }
+        }
+        
+        function gameLoop(timestamp) {
+            const deltaTime = timestamp - lastTime;
+            lastTime = timestamp;
+            
+            draw();
+            
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- EVENT LISTENERS ---
+        function handleInteractionStart(x, y) {
+            setupAudio(); // Required by browsers to start audio context on user gesture
+            
+            if (currentState === GameState.START || currentState === GameState.GAME_OVER) {
+                resetGame();
+                return;
+            }
+
+            if (currentState === GameState.PLAYER_TURN) {
+                buttons.forEach((button, index) => {
+                    if (button.isPointInside(x, y)) {
+                        playerPress(index);
+                    }
+                });
+            }
+        }
+
+        canvas.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const x = (e.clientX - rect.left) * scaleX;
+            const y = (e.clientY - rect.top) * scaleY;
+            handleInteractionStart(x, y);
+        });
+
+        window.addEventListener('keydown', (e) => {
+            setupAudio();
+            const key = e.key.toLowerCase();
+
+            if (currentState === GameState.START || currentState === GameState.GAME_OVER) {
+                // Allow any key to start/restart
+                resetGame();
+                return;
+            }
+            
+            if (currentState === GameState.PLAYER_TURN) {
+                const buttonIndex = BUTTON_CONFIG.findIndex(b => b.key === key);
+                if (buttonIndex !== -1) {
+                    playerPress(buttonIndex);
+                }
+            }
+        });
+
+        window.addEventListener('resize', resizeCanvas);
+
+        // --- INITIALIZATION ---
+        resizeCanvas();
+        requestAnimationFrame(gameLoop);
+
+    </script>
+</body>
+</html>
