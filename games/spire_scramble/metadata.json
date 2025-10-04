@@ -1,0 +1,8 @@
+{
+  "name": "Spire Scramble",
+  "type": "roguelike dungeon crawler",
+  "folder": "spire_scramble",
+  "description": "Ascend a relentlessly shifting tower in a frantic race against time, snatching powerful artifacts to create game-breaking combos. The Spire collapses beneath your feet, forcing you to fight fast and climb faster in a desperate, high-octane scramble to the summit.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
