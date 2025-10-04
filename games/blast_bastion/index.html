@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blast Bastion</title>
+    <style>
+        :root {
+            --primary-color: #0d0d2b;
+            --secondary-color: #2c2c54;
+            --accent-color-1: #ff3f80;
+            --accent-color-2: #00f2ff;
+            --text-color: #f0f0f0;
+            --font-family: 'Consolas', 'Courier New', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-family);
+            background: linear-gradient(135deg, var(--primary-color) 0%, #1a1a3a 100%);
+            color: var(--text-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        h1 {
+            font-size: 3.5rem;
+            color: var(--text-color);
+            text-shadow: 0 0 10px var(--accent-color-2), 0 0 20px var(--accent-color-1);
+            margin-bottom: 20px;
+        }
+
+        #game-container {
+            position: relative;
+            width: 95vw;
+            max-width: 1000px;
+            aspect-ratio: 16 / 9;
+            box-shadow: 0 0 30px rgba(0, 242, 255, 0.5);
+            border: 3px solid var(--accent-color-2);
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        #game-canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+            background: linear-gradient(to top, #3a1c71, #d76d77, #ffaf7b);
+        }
+
+        .ui-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: rgba(13, 13, 43, 0.85);
+            backdrop-filter: blur(5px);
+            color: var(--text-color);
+            text-align: center;
+            transition: opacity 0.5s ease-in-out;
+            z-index: 10;
+        }
+
+        .ui-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .ui-overlay h2 {
+            font-size: 4rem;
+            margin-bottom: 20px;
+            text-shadow: 0 0 15px var(--accent-color-1);
+        }
+
+        .ui-overlay p {
+            font-size: 1.2rem;
+            max-width: 600px;
+            line-height: 1.6;
+            margin-bottom: 30px;
+        }
+
+        .controls-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            margin-bottom: 40px;
+        }
+
+        .control-group {
+            border: 2px solid var(--accent-color-2);
+            padding: 20px;
+            border-radius: 8px;
+            background: var(--secondary-color);
+        }
+        
+        .control-group h3 {
+            font-size: 1.5rem;
+            margin-bottom: 15px;
+            color: var(--accent-color-2);
+        }
+
+        .control-group ul {
+            list-style: none;
+            text-align: left;
+        }
+        .control-group li {
+            margin-bottom: 5px;
+        }
+        .control-group strong {
+            color: var(--accent-color-1);
+            display: inline-block;
+            width: 70px;
+        }
+
+        button {
+            font-family: var(--font-family);
+            font-size: 1.5rem;
+            padding: 15px 30px;
+            border: 2px solid var(--accent-color-1);
+            background: transparent;
+            color: var(--accent-color-1);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-shadow: 0 0 5px var(--accent-color-1);
+            border-radius: 5px;
+        }
+
+        button:hover {
+            background: var(--accent-color-1);
+            color: var(--primary-color);
+            box-shadow: 0 0 20px var(--accent-color-1);
+        }
+        
+        #game-hud {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            font-size: 2.5rem;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            padding: 30px;
+        }
+
+        .player-hud {
+            display: flex;
+            flex-direction: column;
+            text-shadow: 2px 2px 5px rgba(0,0,0,0.7);
+        }
+        .player-hud.p1 {
+            align-items: flex-start;
+        }
+        .player-hud.p2 {
+            align-items: flex-end;
+        }
+
+        .player-hud .score {
+            font-size: 4rem;
+        }
+        .player-hud.p1 .score { color: var(--accent-color-1); }
+        .player-hud.p2 .score { color: var(--accent-color-2); }
+        
+        .player-hud .damage {
+            font-size: 2rem;
+            margin-top: -10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Blast Bastion</h1>
+    <div id="game-container">
+        <canvas id="game-canvas"></canvas>
+
+        <div id="game-hud">
+            <div class="player-hud p1">
+                <span id="p1-score" class="score">0</span>
+                <span id="p1-damage" class="damage">0%</span>
+            </div>
+            <div class="player-hud p2">
+                <span id="p2-score" class="score">0</span>
+                <span id="p2-damage" class="damage">0%</span>
+            </div>
+        </div>
+        
+        <div id="start-screen" class="ui-overlay">
+            <h2>Welcome to Blast Bastion</h2>
+            <p>The goal is to knock your opponent off the stage. The more damage you deal, the further they fly! First to 5 points wins.</p>
+            <div class="controls-grid">
+                <div class="control-group">
+                    <h3>Player 1 🤖</h3>
+                    <ul>
+                        <li><strong>A / D</strong> - Move Left / Right</li>
+                        <li><strong>W</strong> - Jump</li>
+                        <li><strong>S</strong> - Shoot</li>
+                    </ul>
+                </div>
+                <div class="control-group">
+                    <h3>Player 2 👽</h3>
+                    <ul>
+                        <li><strong>◀ / ▶</strong> - Move Left / Right</li>
+                        <li><strong>▲</strong> - Jump</li>
+                        <li><strong>▼</strong> - Shoot</li>
+                    </ul>
+                </div>
+            </div>
+            <button id="start-button">Start Game</button>
+        </div>
+
+        <div id="game-over-screen" class="ui-overlay hidden">
+            <h2 id="winner-text">Player 1 Wins!</h2>
+            <p>A glorious victory! Ready for another round?</p>
+            <button id="restart-button">Play Again</button>
+        </div>
+    </div>
+
+<script>
+class Game {
+    constructor(canvas) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.baseWidth = 1600;
+        this.baseHeight = 900;
+        this.scale = 1;
+
+        this.gameState = 'START'; // START, PLAYING, GAME_OVER
+        this.input = new InputHandler();
+        this.audio = new AudioHandler();
+
+        this.players = [];
+        this.platforms = [];
+        this.projectiles = [];
+        this.particles = [];
+        
+        this.screenShake = { intensity: 0, duration: 0 };
+        this.winScore = 5;
+
+        this.lastTime = 0;
+        this.resize();
+        window.addEventListener('resize', () => this.resize());
+    }
+
+    resize() {
+        const { width, height } = this.canvas.parentElement.getBoundingClientRect();
+        this.canvas.width = width;
+        this.canvas.height = height;
+        this.scale = this.canvas.width / this.baseWidth;
+    }
+
+    init() {
+        this.gameState = 'PLAYING';
+        this.players = [
+            new Player(this, this.baseWidth * 0.25, 100, '🤖', 'p1', '#ff3f80'),
+            new Player(this, this.baseWidth * 0.75, 100, '👽', 'p2', '#00f2ff')
+        ];
+        
+        this.platforms = [
+            // Main stage
+            new Platform(this, this.baseWidth / 2 - 300, 700, 600, 50),
+            // Side platforms
+            new Platform(this, 150, 500, 250, 30),
+            new Platform(this, this.baseWidth - 400, 500, 250, 30),
+            // Top platform
+            new Platform(this, this.baseWidth / 2 - 150, 300, 300, 30)
+        ];
+
+        this.projectiles = [];
+        this.particles = [];
+        this.updateUI();
+    }
+
+    update(deltaTime) {
+        if (this.gameState !== 'PLAYING') return;
+
+        this.players.forEach(player => player.update(deltaTime));
+        this.projectiles.forEach(p => p.update(deltaTime));
+        this.particles.forEach(p => p.update(deltaTime));
+
+        this.projectiles = this.projectiles.filter(p => p.active);
+        this.particles = this.particles.filter(p => p.active);
+
+        this.handleCollisions();
+        this.checkBoundaries();
+        this.updateScreenShake(deltaTime);
+        this.updateUI();
+    }
+    
+    draw() {
+        this.ctx.save();
+        
+        // Apply screen shake
+        if (this.screenShake.duration > 0) {
+            const dx = (Math.random() - 0.5) * this.screenShake.intensity * 2;
+            const dy = (Math.random() - 0.5) * this.screenShake.intensity * 2;
+            this.ctx.translate(dx, dy);
+        }
+
+        // Background
+        const gradient = this.ctx.createLinearGradient(0, 0, 0, this.canvas.height);
+        gradient.addColorStop(0, '#1e2c5d');
+        gradient.addColorStop(0.5, '#4a4e8a');
+        gradient.addColorStop(1, '#8a6e9c');
+        this.ctx.fillStyle = gradient;
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // Scale everything to fit
+        this.ctx.scale(this.scale, this.scale);
+
+        this.platforms.forEach(platform => platform.draw());
+        this.players.forEach(player => player.draw());
+        this.projectiles.forEach(p => p.draw());
+        this.particles.forEach(p => p.draw());
+        
+        this.ctx.restore();
+    }
+    
+    handleCollisions() {
+        // Projectile vs Player
+        this.projectiles.forEach(projectile => {
+            this.players.forEach(player => {
+                if (projectile.owner !== player && this.checkAABB(projectile, player)) {
+                    projectile.active = false;
+                    player.takeHit(projectile);
+                    this.createExplosion(projectile.x, projectile.y, projectile.color, 30);
+                    this.triggerScreenShake(8, 15);
+                    this.audio.playHitSound();
+                }
+            });
+        });
+        
+        // Projectile vs Platform
+        this.projectiles.forEach(projectile => {
+            this.platforms.forEach(platform => {
+                 if (this.checkAABB(projectile, platform)) {
+                    projectile.active = false;
+                    this.createExplosion(projectile.x, projectile.y, '#ffffff', 15);
+                 }
+            });
+        });
+    }
+
+    checkBoundaries() {
+        const killZoneY = this.baseHeight + 200;
+        const killZoneX = 200;
+
+        this.players.forEach(player => {
+            if (!player.isDead && (player.y > killZoneY || player.x < -killZoneX || player.x > this.baseWidth + killZoneX)) {
+                player.die();
+                const opponent = this.players.find(p => p !== player);
+                if (opponent) {
+                    opponent.score++;
+                    this.createExplosion(this.baseWidth / 2, 100, opponent.color, 100);
+                    this.triggerScreenShake(20, 30);
+                    this.audio.playExplosionSound();
+                    
+                    if(opponent.score >= this.winScore) {
+                        this.endGame(opponent);
+                    }
+                }
+            }
+        });
+    }
+
+    endGame(winner) {
+        this.gameState = 'GAME_OVER';
+        document.getElementById('winner-text').textContent = `${winner.char} Player ${winner.id === 'p1' ? 1 : 2} Wins!`;
+        document.getElementById('game-over-screen').classList.remove('hidden');
+    }
+
+    updateUI() {
+        this.players.forEach(player => {
+            document.getElementById(`${player.id}-score`).textContent = player.score;
+            const damageElem = document.getElementById(`${player.id}-damage`);
+            damageElem.textContent = `${Math.floor(player.damage)}%`;
+            const red = Math.min(255, player.damage * 1.5);
+            damageElem.style.color = `rgb(255, ${255 - red}, ${255 - red})`;
+        });
+    }
+
+    createExplosion(x, y, color, count) {
+        for (let i = 0; i < count; i++) {
+            this.particles.push(new Particle(this, x, y, color));
+        }
+    }
+    
+    triggerScreenShake(intensity, duration) {
+        this.screenShake.intensity = intensity;
+        this.screenShake.duration = duration;
+    }
+    
+    updateScreenShake(deltaTime) {
+        if (this.screenShake.duration > 0) {
+            this.screenShake.duration -= deltaTime / 16.67; // duration in frames approx
+        } else {
+            this.screenShake.intensity = 0;
+        }
+    }
+
+    checkAABB(rect1, rect2) {
+        return (
+            rect1.x < rect2.x + rect2.width &&
+            rect1.x + rect1.width > rect2.x &&
+            rect1.y < rect2.y + rect2.height &&
+            rect1.y + rect1.height > rect2.y
+        );
+    }
+}
+
+class Player {
+    constructor(game, x, y, char, id, color) {
+        this.game = game;
+        this.x = x;
+        this.y = y;
+        this.width = 60;
+        this.height = 80;
+        this.char = char;
+        this.id = id;
+        this.color = color;
+
+        this.vx = 0;
+        this.vy = 0;
+        this.speed = 0.8;
+        this.friction = 0.85;
+        this.gravity = 1.2;
+        this.jumpStrength = -28;
+        this.jumps = 2;
+        this.maxJumps = 2;
+        this.onGround = false;
+
+        this.shootCooldown = 0;
+        this.maxShootCooldown = 400; // in ms
+        
+        this.damage = 0;
+        this.score = 0;
+        this.isDead = false;
+        this.respawnTimer = 0;
+        this.invincibleTimer = 0;
+        
+        this.facing = (id === 'p1') ? 1 : -1; // 1 for right, -1 for left
+    }
+
+    update(deltaTime) {
+        if (this.isDead) {
+            this.respawnTimer -= deltaTime;
+            if(this.respawnTimer <= 0) this.respawn();
+            return;
+        }
+        
+        if (this.invincibleTimer > 0) this.invincibleTimer -= deltaTime;
+
+        const delta = deltaTime / 16.67;
+
+        // Handle input
+        const keys = this.game.input.keys;
+        const left = (this.id === 'p1') ? keys['a'] : keys['ArrowLeft'];
+        const right = (this.id === 'p1') ? keys['d'] : keys['ArrowRight'];
+        const jumpKey = (this.id === 'p1') ? 'w' : 'ArrowUp';
+        const shoot = (this.id === 'p1') ? keys['s'] : keys['ArrowDown'];
+
+        if (left) {
+            this.vx -= this.speed;
+            this.facing = -1;
+        }
+        if (right) {
+            this.vx += this.speed;
+            this.facing = 1;
+        }
+        if (keys[jumpKey] && this.jumps > 0) {
+            this.vy = this.jumpStrength;
+            this.jumps--;
+            this.onGround = false;
+            this.game.input.keys[jumpKey] = false; // consume jump input
+            this.game.audio.playJumpSound();
+        }
+        
+        if (shoot && this.shootCooldown <= 0) {
+            this.shoot();
+            this.shootCooldown = this.maxShootCooldown;
+            this.game.audio.playShootSound();
+        }
+        if (this.shootCooldown > 0) this.shootCooldown -= deltaTime;
+
+        // Apply physics
+        this.vy += this.gravity * delta;
+        this.vx *= this.friction;
+
+        const xChange = this.vx * delta;
+        const yChange = this.vy * delta;
+        this.x += xChange;
+        this.y += yChange;
+
+        // Platform collision
+        this.onGround = false;
+        this.game.platforms.forEach(platform => {
+            if (this.game.checkAABB(this, platform)) {
+                // Check for vertical collision (landing on top)
+                if (this.vy > 0 && (this.y + this.height - yChange) <= platform.y) {
+                    this.y = platform.y - this.height;
+                    this.vy = 0;
+                    this.onGround = true;
+                    this.jumps = this.maxJumps;
+                }
+                // Horizontal collision (crude)
+                else {
+                    if (this.vx > 0 && (this.x + this.width - xChange) <= platform.x) {
+                        this.x = platform.x - this.width;
+                        this.vx = 0;
+                    } else if (this.vx < 0 && (this.x - xChange) >= platform.x + platform.width) {
+                        this.x = platform.x + platform.width;
+                        this.vx = 0;
+                    }
+                }
+            }
+        });
+    }
+
+    draw() {
+        if (this.isDead) return;
+
+        const ctx = this.game.ctx;
+        ctx.save();
+        
+        // Invincibility flash
+        if (this.invincibleTimer > 0) {
+            ctx.globalAlpha = (Math.floor(this.invincibleTimer / 100) % 2 === 0) ? 0.5 : 1;
+        }
+        
+        // Player "body"
+        ctx.fillStyle = this.color;
+        ctx.shadowColor = this.color;
+        ctx.shadowBlur = 15;
+        ctx.beginPath();
+        ctx.arc(this.x + this.width/2, this.y + this.height/2, this.width/2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        
+        // Player emoji
+        ctx.font = `${this.width * 1.2}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(this.char, this.x + this.width / 2, this.y + this.height / 2 + 5);
+
+        ctx.restore();
+    }
+    
+    shoot() {
+        const projectileX = this.x + this.width / 2;
+        const projectileY = this.y + this.height / 2;
+        const projectileSpeed = 25;
+        const vx = this.facing * projectileSpeed;
+        this.game.projectiles.push(new Projectile(this.game, projectileX, projectileY, vx, 0, this.color, this));
+        
+        // Recoil
+        this.vx -= this.facing * 5;
+    }
+    
+    takeHit(projectile) {
+        if (this.invincibleTimer > 0) return;
+        
+        const baseKnockback = 5;
+        const knockbackScale = 0.1;
+        
+        const knockback = baseKnockback + (this.damage * knockbackScale);
+        
+        this.vx = (projectile.vx > 0 ? 1 : -1) * knockback;
+        this.vy = -knockback * 0.8;
+        
+        this.damage += 10 + Math.random() * 5;
+    }
+    
+    die() {
+        this.isDead = true;
+        this.damage = 0;
+        this.vx = 0;
+        this.vy = 0;
+        this.respawnTimer = 2000; // 2 seconds
+    }
+    
+    respawn() {
+        this.isDead = false;
+        this.x = (this.id === 'p1' ? this.game.baseWidth * 0.25 : this.game.baseWidth * 0.75);
+        this.y = 100;
+        this.invincibleTimer = 3000; // 3 seconds of invincibility
+    }
+}
+
+class Platform {
+    constructor(game, x, y, width, height) {
+        this.game = game;
+        this.x = x;
+        this.y = y;
+        this.width = width;
+        this.height = height;
+    }
+
+    draw() {
+        const ctx = this.game.ctx;
+        ctx.fillStyle = '#2c2c54';
+        ctx.strokeStyle = '#00f2ff';
+        ctx.lineWidth = 4;
+        ctx.shadowColor = '#00f2ff';
+        ctx.shadowBlur = 10;
+        
+        ctx.fillRect(this.x, this.y, this.width, this.height);
+        ctx.strokeRect(this.x, this.y, this.width, this.height);
+        ctx.shadowBlur = 0;
+    }
+}
+
+class Projectile {
+    constructor(game, x, y, vx, vy, color, owner) {
+        this.game = game;
+        this.x = x;
+        this.y = y;
+        this.vx = vx;
+        this.vy = vy;
+        this.width = 20;
+        this.height = 20;
+        this.color = color;
+        this.owner = owner;
+        this.active = true;
+        this.trail = [];
+        this.life = 1600; // in ms
+    }
+
+    update(deltaTime) {
+        const delta = deltaTime / 16.67;
+
+        this.trail.push({x: this.x, y: this.y});
+        if (this.trail.length > 10) this.trail.shift();
+        
+        this.x += this.vx * delta;
+        this.y += this.vy * delta;
+
+        this.life -= deltaTime;
+        if (this.life <= 0) this.active = false;
+    }
+
+    draw() {
+        const ctx = this.game.ctx;
+        // Draw trail
+        this.trail.forEach((p, i) => {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, (this.width/2) * (i / this.trail.length), 0, Math.PI * 2);
+            ctx.fillStyle = this.color;
+            ctx.globalAlpha = i / this.trail.length * 0.5;
+            ctx.fill();
+        });
+        ctx.globalAlpha = 1;
+
+        // Draw projectile
+        ctx.fillStyle = '#fff';
+        ctx.shadowColor = this.color;
+        ctx.shadowBlur = 20;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.width / 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+    }
+}
+
+class Particle {
+    constructor(game, x, y, color) {
+        this.game = game;
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        this.size = Math.random() * 10 + 5;
+        this.vx = (Math.random() - 0.5) * 15;
+        this.vy = (Math.random() - 0.5) * 15;
+        this.life = Math.random() * 800 + 300; // in ms
+        this.active = true;
+        this.gravity = 0.3;
+    }
+
+    update(deltaTime) {
+        const delta = deltaTime / 16.67;
+        
+        this.life -= deltaTime;
+        if (this.life <= 0) this.active = false;
+
+        this.vy += this.gravity * delta;
+        this.x += this.vx * delta;
+        this.y += this.vy * delta;
+    }
+
+    draw() {
+        const ctx = this.game.ctx;
+        ctx.globalAlpha = this.life / 1100; // Base life duration
+        ctx.fillStyle = this.color;
+        ctx.shadowColor = this.color;
+        ctx.shadowBlur = 10;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.shadowBlur = 0;
+    }
+}
+
+class InputHandler {
+    constructor() {
+        this.keys = {};
+        window.addEventListener('keydown', e => {
+            if (['w', 'a', 's', 'd', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                e.preventDefault();
+                this.keys[e.key] = true;
+            }
+        });
+        window.addEventListener('keyup', e => {
+            if (this.keys.hasOwnProperty(e.key)) {
+                this.keys[e.key] = false;
+            }
+        });
+    }
+}
+
+class AudioHandler {
+    constructor() {
+        this.audioContext = null;
+    }
+    
+    _initContext() {
+        if (!this.audioContext) {
+            try {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            } catch (e) {
+                console.error("Web Audio API is not supported in this browser");
+            }
+        }
+    }
+
+    playJumpSound() {
+        this._initContext();
+        if (!this.audioContext) return;
+        const oscillator = this.audioContext.createOscillator();
+        const gainNode = this.audioContext.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(this.audioContext.destination);
+
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(440, this.audioContext.currentTime);
+        oscillator.frequency.exponentialRampToValueAtTime(880, this.audioContext.currentTime + 0.1);
+        gainNode.gain.setValueAtTime(0.2, this.audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioContext.currentTime + 0.1);
+
+        oscillator.start();
+        oscillator.stop(this.audioContext.currentTime + 0.1);
+    }
+    
+    playShootSound() {
+        this._initContext();
+        if (!this.audioContext) return;
+        const oscillator = this.audioContext.createOscillator();
+        const gainNode = this.audioContext.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(this.audioContext.destination);
+
+        oscillator.type = 'triangle';
+        oscillator.frequency.setValueAtTime(800, this.audioContext.currentTime);
+        oscillator.frequency.exponentialRampToValueAtTime(200, this.audioContext.currentTime + 0.1);
+        gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioContext.currentTime + 0.1);
+
+        oscillator.start();
+        oscillator.stop(this.audioContext.currentTime + 0.1);
+    }
+    
+    playHitSound() {
+        this._initContext();
+        if (!this.audioContext) return;
+        const oscillator = this.audioContext.createOscillator();
+        const gainNode = this.audioContext.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(this.audioContext.destination);
+
+        oscillator.type = 'square';
+        oscillator.frequency.setValueAtTime(200, this.audioContext.currentTime);
+        oscillator.frequency.exponentialRampToValueAtTime(100, this.audioContext.currentTime + 0.15);
+        gainNode.gain.setValueAtTime(0.4, this.audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioContext.currentTime + 0.15);
+
+        oscillator.start();
+        oscillator.stop(this.audioContext.currentTime + 0.15);
+    }
+    
+    playExplosionSound() {
+        this._initContext();
+        if (!this.audioContext) return;
+        const bufferSize = this.audioContext.sampleRate * 0.5;
+        const buffer = this.audioContext.createBuffer(1, bufferSize, this.audioContext.sampleRate);
+        const output = buffer.getChannelData(0);
+
+        for (let i = 0; i < bufferSize; i++) {
+            output[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+        }
+
+        const source = this.audioContext.createBufferSource();
+        source.buffer = buffer;
+        
+        const filter = this.audioContext.createBiquadFilter();
+        filter.type = "lowpass";
+        filter.frequency.setValueAtTime(2000, this.audioContext.currentTime);
+        filter.frequency.exponentialRampToValueAtTime(100, this.audioContext.currentTime + 0.4);
+        
+        const gainNode = this.audioContext.createGain();
+        gainNode.gain.setValueAtTime(0.5, this.audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + 0.5);
+
+        source.connect(filter);
+        filter.connect(gainNode);
+        gainNode.connect(this.audioContext.destination);
+        source.start();
+    }
+}
+
+
+window.addEventListener('load', function() {
+    const canvas = document.getElementById('game-canvas');
+    const startButton = document.getElementById('start-button');
+    const restartButton = document.getElementById('restart-button');
+    const startScreen = document.getElementById('start-screen');
+    const gameOverScreen = document.getElementById('game-over-screen');
+
+    const game = new Game(canvas);
+    let lastTime = 0;
+
+    function gameLoop(timestamp) {
+        const deltaTime = timestamp - lastTime;
+        lastTime = timestamp;
+
+        if (game.gameState === 'PLAYING') {
+            game.update(deltaTime);
+        }
+        game.draw();
+        
+        requestAnimationFrame(gameLoop);
+    }
+    
+    startButton.addEventListener('click', () => {
+        startScreen.classList.add('hidden');
+        game.audio._initContext();
+        if(game.audio.audioContext && game.audio.audioContext.state === 'suspended') {
+            game.audio.audioContext.resume();
+        }
+        game.init();
+    });
+
+    restartButton.addEventListener('click', () => {
+        gameOverScreen.classList.add('hidden');
+        game.init();
+    });
+
+    // Start the loop, but the game logic won't run until state is 'PLAYING'
+    requestAnimationFrame(gameLoop);
+});
+</script>
+</body>
+</html>

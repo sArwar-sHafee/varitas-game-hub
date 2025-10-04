@@ -1,0 +1,8 @@
+{
+  "name": "Blast Bastion",
+  "type": "platform fighting game",
+  "folder": "blast_bastion",
+  "description": "Unleash devastating combos that shatter the very ground beneath your feet in this fortress of mayhem. Use the explosive, crumbling environment as your ultimate weapon to blast your rivals into oblivion",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
