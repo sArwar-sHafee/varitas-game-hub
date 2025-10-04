@@ -1,0 +1,8 @@
+{
+  "name": "Color Chord",
+  "type": "color matching game",
+  "folder": "color_chord",
+  "description": "Compose brilliant color chords by tapping intricate patterns at a frantic pace. Each perfect match unleashes a satisfying symphony of light and sound",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

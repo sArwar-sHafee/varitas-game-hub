@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Color Chord</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100%;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        body {
+            background: #111;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #fff;
+        }
+        canvas {
+            display: block;
+            background: radial-gradient(circle, #333 0%, #111 80%);
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+    class SoundManager {
+        constructor() {
+            this.audioCtx = null;
+        }
+
+        init() {
+            if (!this.audioCtx) {
+                try {
+                    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) {
+                    console.error("Web Audio API is not supported in this browser");
+                }
+            }
+        }
+
+        playSound(type, value = 0) {
+            if (!this.audioCtx) return;
+
+            const oscillator = this.audioCtx.createOscillator();
+            const gainNode = this.audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(this.audioCtx.destination);
+
+            gainNode.gain.setValueAtTime(0.3, this.audioCtx.currentTime);
+
+            switch (type) {
+                case 'match':
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(440 + value * 50, this.audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + 0.5);
+                    break;
+                case 'miss':
+                    oscillator.type = 'square';
+                    oscillator.frequency.setValueAtTime(110, this.audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + 0.8);
+                    break;
+                case 'change':
+                    oscillator.type = 'triangle';
+                    oscillator.frequency.setValueAtTime(300, this.audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + 0.2);
+                    break;
+                case 'gameOver':
+                     oscillator.type = 'sawtooth';
+                    oscillator.frequency.setValueAtTime(200, this.audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(100, this.audioCtx.currentTime + 1.2);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + 1.2);
+                    break;
+            }
+
+            oscillator.start(this.audioCtx.currentTime);
+            oscillator.stop(this.audioCtx.currentTime + 1.2);
+        }
+    }
+
+    const soundManager = new SoundManager();
+
+    class Player {
+        constructor(x, y, radius, colors) {
+            this.x = x;
+            this.y = y;
+            this.baseRadius = radius;
+            this.radius = radius;
+            this.colors = colors;
+            this.colorIndex = 0;
+            this.pulse = 0;
+        }
+
+        draw(ctx) {
+            this.pulse = (this.pulse + 0.05) % (Math.PI * 2);
+            this.radius = this.baseRadius + Math.sin(this.pulse) * 5;
+
+            // Outer glow
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius + 15, 0, Math.PI * 2);
+            const gradient = ctx.createRadialGradient(this.x, this.y, this.radius, this.x, this.y, this.radius + 15);
+            gradient.addColorStop(0, this.colors[this.colorIndex] + '80');
+            gradient.addColorStop(1, this.colors[this.colorIndex] + '00');
+            ctx.fillStyle = gradient;
+            ctx.fill();
+
+            // Main circle
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fillStyle = this.colors[this.colorIndex];
+            ctx.fill();
+            
+            // Inner highlight
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius * 0.8, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.fill();
+        }
+
+        changeColor(direction) {
+            this.colorIndex = (this.colorIndex + direction + this.colors.length) % this.colors.length;
+            soundManager.playSound('change');
+        }
+    }
+
+    class Note {
+        constructor(x, y, targetX, targetY, radius, color, colorIndex, speed) {
+            this.x = x;
+            this.y = y;
+            this.startX = x;
+            this.startY = y;
+            this.targetX = targetX;
+            this.targetY = targetY;
+            this.radius = radius;
+            this.color = color;
+            this.colorIndex = colorIndex;
+            this.speed = speed;
+            this.distance = Math.hypot(targetX - x, targetY - y);
+            this.traveled = 0;
+        }
+
+        update() {
+            this.traveled += this.speed;
+            const progress = this.traveled / this.distance;
+            this.x = this.startX + (this.targetX - this.startX) * progress;
+            this.y = this.startY + (this.targetY - this.startY) * progress;
+        }
+
+        draw(ctx) {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fillStyle = this.color;
+            ctx.shadowColor = this.color;
+            ctx.shadowBlur = 10;
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+    }
+
+    class Particle {
+        constructor(x, y, radius, color, velocity) {
+            this.x = x;
+            this.y = y;
+            this.radius = radius;
+            this.color = color;
+            this.velocity = velocity;
+            this.alpha = 1;
+            this.friction = 0.98;
+        }
+
+        update() {
+            this.x += this.velocity.x;
+            this.y += this.velocity.y;
+            this.velocity.x *= this.friction;
+            this.velocity.y *= this.friction;
+            this.alpha -= 0.02;
+        }
+
+        draw(ctx) {
+            ctx.save();
+            ctx.globalAlpha = this.alpha;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fillStyle = this.color;
+            ctx.fill();
+            ctx.restore();
+        }
+    }
+
+    class Game {
+        constructor(canvas) {
+            this.canvas = canvas;
+            this.ctx = canvas.getContext('2d');
+            this.gameState = 'START'; // START, PLAYING, GAMEOVER
+            this.colors = ['#ff3860', '#ffdd57', '#3273dc', '#48c774', '#9b59b6']; // Red, Yellow, Blue, Green, Purple
+            this.notes = [];
+            this.particles = [];
+            this.lastSpawnTime = 0;
+            this.screenShake = 0;
+            this.player = null;
+            
+            this.resizeCanvas();
+            window.addEventListener('resize', () => this.resizeCanvas());
+
+            this.setupControls();
+            this.reset();
+        }
+
+        resizeCanvas() {
+            this.canvas.width = window.innerWidth;
+            this.canvas.height = window.innerHeight;
+            this.centerX = this.canvas.width / 2;
+            this.centerY = this.canvas.height / 2;
+            this.minDim = Math.min(this.canvas.width, this.canvas.height);
+            
+            if (this.player) {
+                this.player.x = this.centerX;
+                this.player.y = this.centerY;
+                this.player.baseRadius = this.minDim * 0.1;
+            } else {
+                this.reset();
+            }
+        }
+        
+        reset() {
+            this.score = 0;
+            this.highScore = localStorage.getItem('colorChordHighScore') || 0;
+            this.lives = 3;
+            this.combo = 1;
+            this.noteSpeed = this.minDim * 0.002;
+            this.spawnInterval = 2000;
+            this.player = new Player(this.centerX, this.centerY, this.minDim * 0.1, this.colors);
+            this.notes = [];
+            this.particles = [];
+        }
+
+        setupControls() {
+            const handleInteraction = (e) => {
+                soundManager.init(); // Initialize sound on first user interaction
+                
+                if (this.gameState === 'PLAYING') {
+                    if (e.type === 'keydown') {
+                        if (e.key === 'ArrowLeft') this.player.changeColor(-1);
+                        if (e.key === 'ArrowRight') this.player.changeColor(1);
+                    } else if (e.type === 'click') {
+                         if (e.clientX < this.canvas.width / 2) {
+                            this.player.changeColor(-1);
+                        } else {
+                            this.player.changeColor(1);
+                        }
+                    }
+                } else { // START or GAMEOVER state
+                    if (e.type === 'keydown' && (e.key === 'Enter' || e.key === ' ')) {
+                        this.startGame();
+                    } else if (e.type === 'click') {
+                        this.startGame();
+                    }
+                }
+            };
+            
+            window.addEventListener('keydown', handleInteraction);
+            this.canvas.addEventListener('click', handleInteraction);
+        }
+        
+        startGame() {
+            if (this.gameState !== 'PLAYING') {
+                this.reset();
+                this.gameState = 'PLAYING';
+                this.lastSpawnTime = performance.now();
+            }
+        }
+
+        spawnNote() {
+            const angle = Math.random() * Math.PI * 2;
+            const radius = this.minDim * 0.03;
+            const spawnDist = Math.max(this.canvas.width, this.canvas.height) * 0.6;
+            const x = this.centerX + Math.cos(angle) * spawnDist;
+            const y = this.centerY + Math.sin(angle) * spawnDist;
+            const colorIndex = Math.floor(Math.random() * this.colors.length);
+            const color = this.colors[colorIndex];
+            
+            this.notes.push(new Note(x, y, this.centerX, this.centerY, radius, color, colorIndex, this.noteSpeed));
+        }
+
+        createParticles(x, y, color) {
+            for (let i = 0; i < 30; i++) {
+                const radius = Math.random() * 3 + 1;
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 5 + 2;
+                const velocity = {
+                    x: Math.cos(angle) * speed,
+                    y: Math.sin(angle) * speed
+                };
+                this.particles.push(new Particle(x, y, radius, color, velocity));
+            }
+        }
+
+        update(timestamp) {
+            if (this.gameState !== 'PLAYING') return;
+
+            // Spawn notes
+            if (timestamp - this.lastSpawnTime > this.spawnInterval) {
+                this.spawnNote();
+                this.lastSpawnTime = timestamp;
+                // Increase difficulty
+                this.spawnInterval = Math.max(500, this.spawnInterval * 0.98);
+                this.noteSpeed += this.minDim * 0.00002;
+            }
+
+            // Update notes and check for collisions
+            for (let i = this.notes.length - 1; i >= 0; i--) {
+                const note = this.notes[i];
+                note.update();
+
+                const dist = Math.hypot(note.x - this.player.x, note.y - this.player.y);
+                if (dist < this.player.radius + note.radius) {
+                    if (note.colorIndex === this.player.colorIndex) {
+                        // Match
+                        this.score += 10 * this.combo;
+                        this.combo++;
+                        this.createParticles(this.player.x, this.player.y, note.color);
+                        soundManager.playSound('match', this.player.colorIndex);
+                    } else {
+                        // Miss
+                        this.lives--;
+                        this.combo = 1;
+                        this.screenShake = 15;
+                        soundManager.playSound('miss');
+                        if (this.lives <= 0) {
+                            this.gameOver();
+                        }
+                    }
+                    this.notes.splice(i, 1);
+                }
+            }
+
+            // Update particles
+            for (let i = this.particles.length - 1; i >= 0; i--) {
+                const p = this.particles[i];
+                p.update();
+                if (p.alpha <= 0) {
+                    this.particles.splice(i, 1);
+                }
+            }
+            
+            if (this.screenShake > 0) {
+                this.screenShake -= 1;
+            }
+        }
+
+        gameOver() {
+            this.gameState = 'GAMEOVER';
+            if (this.score > this.highScore) {
+                this.highScore = this.score;
+                localStorage.setItem('colorChordHighScore', this.highScore);
+            }
+            soundManager.playSound('gameOver');
+        }
+
+        draw() {
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            
+            // Apply screen shake
+            if (this.screenShake > 0) {
+                const shakeX = (Math.random() - 0.5) * this.screenShake;
+                const shakeY = (Math.random() - 0.5) * this.screenShake;
+                this.ctx.save();
+                this.ctx.translate(shakeX, shakeY);
+            }
+
+            if (this.gameState === 'PLAYING') {
+                this.player.draw(this.ctx);
+                this.notes.forEach(note => note.draw(this.ctx));
+                this.particles.forEach(p => p.draw(this.ctx));
+                this.drawHUD();
+            } else if (this.gameState === 'START') {
+                this.drawStartScreen();
+            } else if (this.gameState === 'GAMEOVER') {
+                this.drawGameOverScreen();
+            }
+            
+            if (this.screenShake > 0) {
+                this.ctx.restore();
+            }
+        }
+        
+        drawHUD() {
+            this.ctx.fillStyle = 'white';
+            
+            // Score
+            this.ctx.font = `bold ${this.minDim * 0.05}px sans-serif`;
+            this.ctx.textAlign = 'left';
+            this.ctx.fillText(`Score: ${this.score}`, 20, 50);
+
+            // Combo
+            if (this.combo > 1) {
+                this.ctx.font = `bold ${this.minDim * 0.03}px sans-serif`;
+                this.ctx.textAlign = 'center';
+                this.ctx.fillStyle = this.colors[this.player.colorIndex];
+                this.ctx.fillText(`x${this.combo} COMBO!`, this.centerX, this.centerY - this.player.baseRadius - 30);
+            }
+
+            // Lives
+            this.ctx.textAlign = 'right';
+            const lifeEmoji = '❤️';
+            let livesText = '';
+            for (let i = 0; i < this.lives; i++) {
+                livesText += lifeEmoji;
+            }
+            this.ctx.font = `${this.minDim * 0.05}px sans-serif`;
+            this.ctx.fillText(livesText, this.canvas.width - 20, 50);
+
+            // On-screen controls hints
+            this.ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+            this.ctx.font = `bold ${this.minDim * 0.02}px sans-serif`;
+            this.ctx.textAlign = 'center';
+            this.ctx.fillText('◀️ Click/Tap Left', this.canvas.width * 0.25, this.canvas.height - 30);
+            this.ctx.fillText('Click/Tap Right ▶️', this.canvas.width * 0.75, this.canvas.height - 30);
+        }
+
+        drawStartScreen() {
+            this.ctx.textAlign = 'center';
+            
+            // Title
+            this.ctx.font = `bold ${this.minDim * 0.15}px sans-serif`;
+            const gradient = this.ctx.createLinearGradient(0, 0, this.canvas.width, 0);
+            this.colors.forEach((color, i) => {
+                gradient.addColorStop(i / (this.colors.length - 1), color);
+            });
+            this.ctx.fillStyle = gradient;
+            this.ctx.fillText('Color Chord', this.centerX, this.centerY - 50);
+
+            // Instructions
+            this.ctx.fillStyle = 'white';
+            this.ctx.font = `${this.minDim * 0.03}px sans-serif`;
+            this.ctx.fillText('Match the color of the incoming notes!', this.centerX, this.centerY + 50);
+            this.ctx.fillText('Use ◀️ Arrow Keys ▶️ or Click/Tap sides to change color.', this.centerX, this.centerY + 100);
+
+            // Prompt
+            this.ctx.font = `bold ${this.minDim * 0.04}px sans-serif`;
+            this.ctx.fillStyle = `rgba(255, 255, 255, ${Math.abs(Math.sin(Date.now() / 500))})`;
+            this.ctx.fillText('Click or Press Enter to Start', this.centerX, this.centerY + 180);
+        }
+
+        drawGameOverScreen() {
+             this.ctx.textAlign = 'center';
+             
+             // Game Over Text
+             this.ctx.fillStyle = '#ff3860';
+             this.ctx.font = `bold ${this.minDim * 0.15}px sans-serif`;
+             this.ctx.fillText('Game Over', this.centerX, this.centerY - 100);
+             
+             // Final Score
+             this.ctx.fillStyle = 'white';
+             this.ctx.font = `bold ${this.minDim * 0.07}px sans-serif`;
+             this.ctx.fillText(`Score: ${this.score}`, this.centerX, this.centerY);
+             
+             // High Score
+             this.ctx.fillStyle = '#ffdd57';
+             this.ctx.font = `${this.minDim * 0.04}px sans-serif`;
+             this.ctx.fillText(`High Score: ${this.highScore}`, this.centerX, this.centerY + 60);
+
+             // Prompt to restart
+             this.ctx.fillStyle = `rgba(255, 255, 255, ${Math.abs(Math.sin(Date.now() / 500))})`;
+             this.ctx.font = `bold ${this.minDim * 0.035}px sans-serif`;
+             this.ctx.fillText('Click or Press Enter to Play Again', this.centerX, this.centerY + 150);
+        }
+
+        loop(timestamp) {
+            this.update(timestamp);
+            this.draw();
+            requestAnimationFrame((ts) => this.loop(ts));
+        }
+
+        run() {
+            this.loop(0);
+        }
+    }
+
+    const canvas = document.getElementById('gameCanvas');
+    const game = new Game(canvas);
+    game.run();
+
+    </script>
+</body>
+</html>
