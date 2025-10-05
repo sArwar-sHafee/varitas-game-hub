@@ -1,0 +1,8 @@
+{
+  "name": "Grid Gambit",
+  "type": "chess",
+  "folder": "grid_gambit",
+  "description": "In Grid Gambit, the board is your ultimate weapon. Sacrifice pieces to reshape the battlefield on the fly, trapping your opponent in a brilliant and ever-changing web of strategy.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
