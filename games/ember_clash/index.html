@@ -1,0 +1,905 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ember Clash</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        canvas {
+            background-image: radial-gradient(circle at 50% 100%, #3a2a68, #1a1a2e 70%);
+            display: block;
+            box-shadow: 0 0 30px rgba(255, 107, 107, 0.3);
+            border-radius: 10px;
+        }
+        .ui-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            background-color: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(5px);
+            z-index: 10;
+        }
+        .hidden {
+            display: none !important;
+        }
+        h1 {
+            font-size: 5rem;
+            margin-bottom: 20px;
+            color: #ff6b6b;
+            text-shadow: 0 0 10px #ff6b6b, 0 0 20px #ff6b6b, 0 0 30px #ffa500;
+        }
+        p {
+            font-size: 1.2rem;
+            max-width: 600px;
+            margin: 10px;
+            line-height: 1.6;
+        }
+        button {
+            padding: 15px 30px;
+            font-size: 1.5rem;
+            background-color: #ff6b6b;
+            color: #1a1a2e;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 10px #ff6b6b, 0 0 20px #ff6b6b;
+        }
+        button:hover {
+            transform: scale(1.1);
+            background-color: #ffa500;
+            box-shadow: 0 0 15px #ffa500, 0 0 30px #ffa500;
+        }
+        #instructions {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            padding: 10px;
+            background: rgba(0,0,0,0.5);
+            border-radius: 5px;
+            font-size: 0.9em;
+            text-align: left;
+            max-width: 300px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="startScreen" class="ui-overlay">
+            <h1>🔥 Ember Clash 🔥</h1>
+            <p>A simple card battle game. Use your mana to play creatures. Attack your opponent's creatures or their hero directly. The first to reach 0 HP loses!</p>
+            <button id="startButton">Start Game</button>
+        </div>
+        <div id="gameOverScreen" class="ui-overlay hidden">
+            <h1 id="gameOverMessage"></h1>
+            <p>Thanks for playing!</p>
+            <button id="restartButton">Play Again</button>
+        </div>
+        <div id="instructions" class="hidden">
+            <strong>Controls:</strong>
+            <ul>
+                <li><strong>Drag & Drop Card:</strong> Play a card from your hand.</li>
+                <li><strong>Drag from your Minion:</strong> Attack an enemy minion or hero.</li>
+                <li><strong>End Turn Button:</strong> Finish your turn.</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+    class Sound {
+        constructor() {
+            this.audioCtx = null;
+            // Defer context creation until first user interaction for browser policy compatibility
+        }
+
+        _createContext() {
+            if (this.audioCtx) return;
+            try {
+                this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            } catch (e) {
+                console.warn("Web Audio API is not supported in this browser.");
+            }
+        }
+
+        _playSound(type, frequency, duration, volume = 0.5) {
+            if (!this.audioCtx) return;
+            const oscillator = this.audioCtx.createOscillator();
+            const gainNode = this.audioCtx.createGain();
+
+            oscillator.type = type;
+            oscillator.frequency.setValueAtTime(frequency, this.audioCtx.currentTime);
+            gainNode.gain.setValueAtTime(volume, this.audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + duration);
+
+            oscillator.connect(gainNode);
+            gainNode.connect(this.audioCtx.destination);
+
+            oscillator.start(this.audioCtx.currentTime);
+            oscillator.stop(this.audioCtx.currentTime + duration);
+        }
+
+        playDrawCard() { this._createContext(); this._playSound('sine', 600, 0.2, 0.3); }
+        playPlaceCard() { this._createContext(); this._playSound('square', 300, 0.3, 0.5); }
+        playAttack() { this._createContext(); this._playSound('sawtooth', 200, 0.2, 0.4); }
+        playDamage() { this._createContext(); this._playSound('triangle', 150, 0.4, 0.6); }
+        playEndTurn() { this._createContext(); this._playSound('sine', 440, 0.15, 0.2); }
+        playWin() { this._createContext(); this._playSound('sine', 880, 0.5, 0.5); }
+        playLose() { this._createContext(); this._playSound('sawtooth', 110, 0.8, 0.5); }
+    }
+    const sound = new Sound();
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    let width, height, scaleFactor;
+
+    // Game state
+    let gameState = 'start'; // 'start', 'playing', 'gameOver'
+    let turn = 'player';
+    let turnNumber = 1;
+
+    // Game Objects
+    let player, enemy;
+    let particles = [];
+    let floatingTexts = [];
+    
+    // UI Elements
+    let endTurnButton;
+    let draggedCard = null;
+    let attackingMinion = null;
+    let arrow = { startX: 0, startY: 0, endX: 0, endY: 0, active: false };
+    
+    // Mouse state
+    const mouse = { x: 0, y: 0, down: false, px: 0, py: 0 };
+    
+    const CARD_DEFINITIONS = [
+        { name: "Fire Sprite", emoji: "🔥", cost: 1, attack: 2, health: 1 },
+        { name: "Stone Golem", emoji: "🗿", cost: 2, attack: 1, health: 4 },
+        { name: "Wind Serpent", emoji: "🐍", cost: 2, attack: 3, health: 2 },
+        { name: "Water Elemental", emoji: "💧", cost: 3, attack: 2, health: 4 },
+        { name: "Shadow Stalker", emoji: "👻", cost: 3, attack: 4, health: 1 },
+        { name: "Mountain Giant", emoji: "🏔️", cost: 4, attack: 4, health: 5 },
+        { name: "Thunder Drake", emoji: "🐉", cost: 5, attack: 6, health: 4 },
+        { name: "Celestial Being", emoji: "✨", cost: 6, attack: 5, health: 7 },
+        { name: "Molten Fiend", emoji: "😈", cost: 7, attack: 8, health: 6 },
+    ];
+
+    class Card {
+        constructor(def, owner) {
+            this.id = Math.random();
+            this.name = def.name;
+            this.emoji = def.emoji;
+            this.cost = def.cost;
+            this.attack = def.attack;
+            this.health = def.health;
+            this.maxHealth = def.health;
+            this.owner = owner;
+
+            // Positional and animation properties
+            this.x = 0; this.y = 0;
+            this.targetX = 0; this.targetY = 0;
+            this.width = 0; this.height = 0;
+            this.scale = 1;
+            
+            // Game state properties
+            this.canAttack = false;
+            this.isHovered = false;
+        }
+
+        get isDamaged() {
+            return this.health < this.maxHealth;
+        }
+
+        isMouseOver(mx, my) {
+            return mx > this.x && mx < this.x + this.width && my > this.y && my < this.y + this.height;
+        }
+
+        draw(isPlayerCard) {
+            ctx.save();
+            ctx.translate(this.x + this.width / 2, this.y + this.height / 2);
+            ctx.scale(this.scale, this.scale);
+            ctx.translate(-(this.x + this.width / 2), -(this.y + this.height / 2));
+
+            // Card body
+            const gradient = ctx.createLinearGradient(this.x, this.y, this.x + this.width, this.y + this.height);
+            gradient.addColorStop(0, isPlayerCard ? '#4a69bd' : '#c0392b');
+            gradient.addColorStop(1, isPlayerCard ? '#1e3799' : '#8f2d22');
+            ctx.fillStyle = gradient;
+            ctx.strokeStyle = this.isHovered ? '#ffd700' : (this.canAttack && isPlayerCard) ? '#32ff7e' : '#111';
+            ctx.lineWidth = this.width * 0.04;
+            ctx.beginPath();
+            // Use roundRect if available, otherwise draw a standard rect.
+            if (ctx.roundRect) {
+                 ctx.roundRect(this.x, this.y, this.width, this.height, this.width * 0.1);
+            } else {
+                 ctx.rect(this.x, this.y, this.width, this.height);
+            }
+            ctx.fill();
+            ctx.stroke();
+
+            // Mana cost
+            ctx.fillStyle = '#1e90ff';
+            ctx.beginPath();
+            ctx.arc(this.x + this.width * 0.15, this.y + this.width * 0.15, this.width * 0.1, 0, 2 * Math.PI);
+            ctx.fill();
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${this.width * 0.15}px 'Segoe UI Emoji'`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(this.cost, this.x + this.width * 0.15, this.y + this.width * 0.16);
+
+            // Emoji Art
+            ctx.font = `${this.width * 0.5}px 'Segoe UI Emoji'`;
+            ctx.fillText(this.emoji, this.x + this.width / 2, this.y + this.height * 0.4);
+
+            // Name
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${this.width * 0.1}px Arial`;
+            ctx.fillText(this.name, this.x + this.width / 2, this.y + this.height * 0.75);
+
+            // Attack
+            ctx.fillStyle = '#f1c40f';
+            ctx.beginPath();
+            ctx.arc(this.x + this.width * 0.15, this.y + this.height - this.width * 0.15, this.width * 0.12, 0, 2 * Math.PI);
+            ctx.fill();
+            ctx.fillStyle = 'black';
+            ctx.font = `bold ${this.width * 0.15}px Arial`;
+            ctx.fillText(this.attack, this.x + this.width * 0.15, this.y + this.height - this.width * 0.14);
+
+            // Health
+            ctx.fillStyle = this.isDamaged ? '#e74c3c' : '#2ecc71';
+            ctx.beginPath();
+            ctx.arc(this.x + this.width * 0.85, this.y + this.height - this.width * 0.15, this.width * 0.12, 0, 2 * Math.PI);
+            ctx.fill();
+            ctx.fillStyle = 'black';
+            ctx.fillText(this.health, this.x + this.width * 0.85, this.y + this.height - this.width * 0.14);
+
+            ctx.restore();
+        }
+
+        update() {
+            // Smooth movement
+            this.x += (this.targetX - this.x) * 0.1;
+            this.y += (this.targetY - this.y) * 0.1;
+
+            const targetScale = this.isHovered ? 1.15 : 1;
+            this.scale += (targetScale - this.scale) * 0.2;
+        }
+    }
+    
+    class Player {
+        constructor(isEnemy = false) {
+            this.isEnemy = isEnemy;
+            this.hp = 30;
+            this.maxHp = 30;
+            this.mana = 0;
+            this.maxMana = 0;
+            this.deck = [];
+            this.hand = [];
+            this.board = [];
+            
+            // Positional properties to act as a target
+            this.x = 0; this.y = 0;
+            this.width = 0; this.height = 0;
+        }
+        
+        createDeck() {
+            for (let i = 0; i < 30; i++) {
+                const def = CARD_DEFINITIONS[Math.floor(Math.random() * CARD_DEFINITIONS.length)];
+                this.deck.push(new Card(def, this));
+            }
+            this.shuffleDeck();
+        }
+
+        shuffleDeck() {
+            for (let i = this.deck.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [this.deck[i], this.deck[j]] = [this.deck[j], this.deck[i]];
+            }
+        }
+        
+        drawCard() {
+            if (this.deck.length > 0 && this.hand.length < 10) {
+                this.hand.push(this.deck.pop());
+                sound.playDrawCard();
+            }
+        }
+
+        isMouseOver(mx, my) {
+            return mx > this.x && mx < this.x + this.width && my > this.y && my < this.y + this.height;
+        }
+    }
+    
+    class Particle {
+        constructor(x, y, color) {
+            this.x = x;
+            this.y = y;
+            this.color = color;
+            this.size = Math.random() * 5 + 2;
+            this.life = 1;
+            this.vx = (Math.random() - 0.5) * 8;
+            this.vy = (Math.random() - 0.5) * 8;
+        }
+
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            this.vy += 0.1; // gravity
+            this.life -= 0.02;
+        }
+
+        draw() {
+            ctx.globalAlpha = this.life;
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+    }
+
+    class FloatingText {
+        constructor(text, x, y, color) {
+            this.text = text;
+            this.x = x;
+            this.y = y;
+            this.color = color;
+            this.life = 1;
+        }
+
+        update() {
+            this.y -= 1;
+            this.life -= 0.015;
+        }
+
+        draw() {
+            ctx.globalAlpha = this.life;
+            ctx.fillStyle = this.color;
+            ctx.font = `bold ${30 * scaleFactor}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.fillText(this.text, this.x, this.y);
+            ctx.globalAlpha = 1;
+        }
+    }
+
+    function createParticles(x, y, count, color) {
+        for (let i = 0; i < count; i++) {
+            particles.push(new Particle(x, y, color));
+        }
+    }
+
+    function handleResize() {
+        const aspectRatio = 16 / 9;
+        const container = document.getElementById('game-container');
+        const containerWidth = container.clientWidth;
+        const containerHeight = container.clientHeight;
+
+        if (containerWidth / containerHeight > aspectRatio) {
+            height = containerHeight;
+            width = height * aspectRatio;
+        } else {
+            width = containerWidth;
+            height = width / aspectRatio;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        
+        scaleFactor = height / 1080; // Base resolution of 1920x1080
+
+        repositionUI();
+    }
+    
+    function repositionUI() {
+        if (!player || !enemy) return;
+
+        endTurnButton = {
+            x: width * 0.85,
+            y: height * 0.5 - (50 * scaleFactor) / 2,
+            width: 150 * scaleFactor,
+            height: 50 * scaleFactor,
+            isHovered: false
+        };
+        
+        player.width = 100 * scaleFactor;
+        player.height = 100 * scaleFactor;
+        player.x = width / 2 - player.width / 2;
+        player.y = height - player.height - 20 * scaleFactor;
+
+        enemy.width = 100 * scaleFactor;
+        enemy.height = 100 * scaleFactor;
+        enemy.x = width / 2 - enemy.width / 2;
+        enemy.y = 20 * scaleFactor;
+        
+        // Update positions of all cards
+        updateCardPositions(player);
+        updateCardPositions(enemy);
+    }
+
+    function init() {
+        document.getElementById('startButton').addEventListener('click', startGame);
+        document.getElementById('restartButton').addEventListener('click', startGame);
+        window.addEventListener('resize', handleResize);
+        
+        canvas.addEventListener('mousemove', e => {
+            const rect = canvas.getBoundingClientRect();
+            mouse.px = mouse.x;
+            mouse.py = mouse.y;
+            mouse.x = (e.clientX - rect.left) * (canvas.width / rect.width);
+            mouse.y = (e.clientY - rect.top) * (canvas.height / rect.height);
+        });
+        
+        canvas.addEventListener('mousedown', e => {
+            mouse.down = true;
+            handleMouseDown();
+        });
+
+        canvas.addEventListener('mouseup', e => {
+            mouse.down = false;
+            handleMouseUp();
+        });
+
+        handleResize(); // Initial setup
+        gameLoop();
+    }
+
+    function startGame() {
+        document.getElementById('startScreen').classList.add('hidden');
+        document.getElementById('gameOverScreen').classList.add('hidden');
+        document.getElementById('instructions').classList.remove('hidden');
+
+        player = new Player();
+        enemy = new Player(true);
+        player.createDeck();
+        enemy.createDeck();
+        
+        handleResize(); // Reposition UI with new players
+
+        for (let i = 0; i < 3; i++) {
+            player.drawCard();
+            enemy.drawCard();
+        }
+        
+        updateCardPositions(player);
+        updateCardPositions(enemy);
+
+        turn = 'player';
+        turnNumber = 0;
+        newTurn();
+
+        gameState = 'playing';
+    }
+
+    function newTurn() {
+        turnNumber++;
+        const current = (turn === 'player') ? player : enemy;
+        
+        current.maxMana = Math.min(10, turnNumber);
+        current.mana = current.maxMana;
+        
+        current.board.forEach(c => c.canAttack = true);
+        current.drawCard();
+        updateCardPositions(current);
+
+        if(turn === 'enemy') {
+            setTimeout(aiTurn, 1000);
+        }
+    }
+
+    function endTurn() {
+        if (turn !== 'player') return;
+        sound.playEndTurn();
+        turn = 'enemy';
+        draggedCard = null;
+        attackingMinion = null;
+        arrow.active = false;
+        newTurn();
+    }
+    
+    function aiTurn() {
+        if (gameState !== 'playing') return;
+
+        // 1. Play cards
+        let playedCard = true;
+        while(playedCard) {
+            playedCard = false;
+            const playableCards = enemy.hand.filter(c => c.cost <= enemy.mana);
+            if (playableCards.length > 0 && enemy.board.length < 7) {
+                playableCards.sort((a,b) => b.cost - a.cost);
+                const cardToPlay = playableCards[0];
+                
+                enemy.mana -= cardToPlay.cost;
+                enemy.board.push(cardToPlay);
+                enemy.hand = enemy.hand.filter(c => c.id !== cardToPlay.id);
+                cardToPlay.canAttack = false; // Summoning sickness
+                sound.playPlaceCard();
+                updateCardPositions(enemy);
+                playedCard = true;
+            } else {
+                 playedCard = false;
+            }
+        }
+        
+        // 2. Attack with minions
+        setTimeout(() => {
+            const attackers = enemy.board.filter(c => c.canAttack);
+            for(const attacker of attackers) {
+                // Ensure minion is still alive and on board before attacking
+                if (enemy.board.includes(attacker) && attacker.canAttack) {
+                    const playerMinions = player.board;
+                    if (playerMinions.length > 0) {
+                        const target = playerMinions[Math.floor(Math.random() * playerMinions.length)];
+                        performAttack(attacker, target);
+                    } else {
+                        performAttack(attacker, player);
+                    }
+                }
+            }
+
+            // 3. End turn
+            setTimeout(() => {
+                if (gameState === 'playing') {
+                    turn = 'player';
+                    newTurn();
+                }
+            }, 1000);
+        }, 1500);
+    }
+    
+    function performAttack(attacker, target) {
+        if (!attacker.canAttack) return;
+        
+        sound.playAttack();
+        createParticles(target.x + target.width / 2, target.y + target.height / 2, 30, '#ff6b6b');
+        floatingTexts.push(new FloatingText(`-${attacker.attack}`, target.x + target.width / 2, target.y, '#ff6b6b'));
+        
+        target.health -= attacker.attack;
+
+        if (target instanceof Card) { // Minion vs Minion or Minion vs Hero
+            sound.playDamage();
+            createParticles(attacker.x + attacker.width / 2, attacker.y + attacker.height / 2, 30, '#ff6b6b');
+            floatingTexts.push(new FloatingText(`-${target.attack}`, attacker.x + attacker.width / 2, attacker.y, '#ff6b6b'));
+            attacker.health -= target.attack;
+        }
+
+        attacker.canAttack = false;
+        checkDeaths();
+        checkGameOver();
+    }
+    
+    function checkDeaths() {
+        player.board = player.board.filter(c => {
+            if (c.health <= 0) {
+                createParticles(c.x + c.width / 2, c.y + c.height / 2, 50, '#ffffff');
+                return false;
+            }
+            return true;
+        });
+        enemy.board = enemy.board.filter(c => {
+            if (c.health <= 0) {
+                createParticles(c.x + c.width / 2, c.y + c.height / 2, 50, '#ffffff');
+                return false;
+            }
+            return true;
+        });
+        updateCardPositions(player);
+        updateCardPositions(enemy);
+    }
+
+    function checkGameOver() {
+        if (gameState !== 'playing') return;
+        if (player.hp <= 0) {
+            gameOver(false);
+        } else if (enemy.hp <= 0) {
+            gameOver(true);
+        }
+    }
+
+    function gameOver(playerWon) {
+        gameState = 'gameOver';
+        const message = playerWon ? "🎉 You Win! 🎉" : "💀 You Lose 💀";
+        document.getElementById('gameOverMessage').innerText = message;
+        document.getElementById('gameOverScreen').classList.remove('hidden');
+        document.getElementById('instructions').classList.add('hidden');
+        if (playerWon) sound.playWin();
+        else sound.playLose();
+    }
+
+    function handleMouseDown() {
+        if (turn !== 'player' || gameState !== 'playing') return;
+
+        // Check for clicking end turn button
+        if (isMouseOver(mouse, endTurnButton)) {
+            endTurn();
+            return;
+        }
+
+        // Check for clicking card in hand to drag
+        for (let i = player.hand.length - 1; i >= 0; i--) {
+            const card = player.hand[i];
+            if (card.isMouseOver(mouse.x, mouse.y)) {
+                draggedCard = { card, index: i, offsetX: mouse.x - card.x, offsetY: mouse.y - card.y };
+                return;
+            }
+        }
+        
+        // Check for clicking minion on board to attack
+        for (const minion of player.board) {
+            if (minion.isMouseOver(mouse.x, mouse.y) && minion.canAttack) {
+                attackingMinion = minion;
+                arrow.startX = minion.x + minion.width / 2;
+                arrow.startY = minion.y + minion.height / 2;
+                arrow.active = true;
+                return;
+            }
+        }
+    }
+    
+    function handleMouseUp() {
+        if (draggedCard) {
+            // Check if played on board
+            if (draggedCard.card.y < height * 0.7 && player.mana >= draggedCard.card.cost && player.board.length < 7) {
+                player.mana -= draggedCard.card.cost;
+                const playedCard = player.hand.splice(draggedCard.index, 1)[0];
+                playedCard.canAttack = false; // Summoning sickness
+                player.board.push(playedCard);
+                sound.playPlaceCard();
+            }
+            draggedCard = null;
+            updateCardPositions(player);
+        }
+        
+        if (attackingMinion) {
+            let target = null;
+            // Check enemy minions
+            for (const minion of enemy.board) {
+                if (minion.isMouseOver(mouse.x, mouse.y)) {
+                    target = minion;
+                    break;
+                }
+            }
+            // Check enemy hero
+            if (!target) {
+                 if (enemy.isMouseOver(mouse.x, mouse.y)) {
+                    target = enemy;
+                }
+            }
+            
+            if (target) {
+                performAttack(attackingMinion, target);
+            }
+
+            attackingMinion = null;
+        }
+
+        arrow.active = false;
+    }
+    
+    function isMouseOver(mouse, rect) {
+        return mouse.x > rect.x && mouse.x < rect.x + rect.width && mouse.y > rect.y && mouse.y < rect.y + rect.height;
+    }
+
+    function update() {
+        if (gameState !== 'playing') return;
+
+        // Update hover states
+        if (endTurnButton) endTurnButton.isHovered = isMouseOver(mouse, endTurnButton);
+        
+        [...player.hand, ...player.board, ...enemy.board, ...enemy.hand].forEach(c => c.isHovered = false);
+
+        if (!draggedCard && !attackingMinion) {
+            let topCard = null;
+             [...player.hand, ...player.board, ...enemy.board].forEach(c => {
+                if(c.isMouseOver(mouse.x, mouse.y)) topCard = c;
+             });
+             if(topCard) topCard.isHovered = true;
+        }
+
+        // Update positions
+        if (draggedCard) {
+            draggedCard.card.targetX = mouse.x - draggedCard.offsetX;
+            draggedCard.card.targetY = mouse.y - draggedCard.offsetY;
+        }
+        
+        if (attackingMinion) {
+            arrow.endX = mouse.x;
+            arrow.endY = mouse.y;
+        }
+        
+        [...player.hand, ...player.board, ...enemy.board, ...enemy.hand].forEach(c => c.update());
+
+        particles.forEach((p, i) => {
+            p.update();
+            if (p.life <= 0) particles.splice(i, 1);
+        });
+        floatingTexts.forEach((ft, i) => {
+            ft.update();
+            if (ft.life <= 0) floatingTexts.splice(i, 1);
+        });
+    }
+
+    function draw() {
+        // Clear canvas
+        ctx.clearRect(0, 0, width, height);
+        
+        // Draw board elements
+        ctx.fillStyle = 'rgba(0,0,0,0.2)';
+        ctx.fillRect(0, height * 0.5 - 2, width, 4); // Center line
+
+        drawPlayer(player);
+        drawPlayer(enemy);
+
+        drawDeck(player, width - 80 * scaleFactor, height - 100 * scaleFactor);
+        drawDeck(enemy, 80 * scaleFactor, 100 * scaleFactor);
+
+        drawMana(player, 50 * scaleFactor, height - 50 * scaleFactor);
+        drawMana(enemy, width - 250 * scaleFactor, 50 * scaleFactor);
+
+        // Draw cards
+        enemy.hand.forEach(card => card.draw(false));
+        enemy.board.forEach(card => card.draw(false));
+        player.board.forEach(card => card.draw(true));
+        // Draw player hand last so dragged cards are on top
+        player.hand.forEach(card => card.draw(true));
+        
+        // Draw end turn button
+        ctx.fillStyle = endTurnButton.isHovered ? '#ffa502' : '#ff6b6b';
+        if (turn !== 'player') ctx.fillStyle = '#7f8c8d';
+        ctx.fillRect(endTurnButton.x, endTurnButton.y, endTurnButton.width, endTurnButton.height);
+        ctx.fillStyle = 'white';
+        ctx.font = `bold ${24 * scaleFactor}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText("End Turn", endTurnButton.x + endTurnButton.width/2, endTurnButton.y + endTurnButton.height/2);
+
+        // Draw arrow
+        if (arrow.active) {
+            ctx.beginPath();
+            ctx.moveTo(arrow.startX, arrow.startY);
+            ctx.lineTo(arrow.endX, arrow.endY);
+            ctx.strokeStyle = '#ff4757';
+            ctx.lineWidth = 10 * scaleFactor;
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.arc(arrow.endX, arrow.endY, 20 * scaleFactor, 0, 2*Math.PI);
+            ctx.fillStyle = 'rgba(255, 71, 87, 0.5)';
+            ctx.fill();
+        }
+
+        // Draw particles & texts
+        particles.forEach(p => p.draw());
+        floatingTexts.forEach(ft => ft.draw());
+    }
+
+    function drawPlayer(p) {
+        ctx.save();
+        ctx.translate(p.x + p.width / 2, p.y + p.height / 2);
+
+        // Health orb
+        ctx.fillStyle = '#e74c3c';
+        ctx.beginPath();
+        ctx.arc(0, 0, p.width / 2, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.strokeStyle = '#c0392b';
+        ctx.lineWidth = 5 * scaleFactor;
+        ctx.stroke();
+
+        // HP text
+        ctx.fillStyle = 'white';
+        ctx.font = `bold ${p.width * 0.4}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(p.hp, 0, 0);
+
+        ctx.restore();
+    }
+    
+    function drawDeck(p, x, y) {
+        const w = 100 * scaleFactor;
+        const h = 140 * scaleFactor;
+        ctx.fillStyle = '#4b3b2f';
+        ctx.fillRect(x - w / 2, y - h / 2, w, h);
+        ctx.strokeStyle = '#2d241c';
+        ctx.lineWidth = 4 * scaleFactor;
+        ctx.strokeRect(x - w / 2, y - h / 2, w, h);
+        
+        ctx.fillStyle = 'white';
+        ctx.font = `bold ${30 * scaleFactor}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(p.deck.length, x, y);
+    }
+    
+    function drawMana(p, x, y) {
+        for(let i=0; i<p.maxMana; i++) {
+            if (i < p.mana) {
+                ctx.fillStyle = '#3498db';
+            } else {
+                ctx.fillStyle = '#34495e';
+            }
+            ctx.beginPath();
+            ctx.arc(x + i * 30 * scaleFactor, y, 12 * scaleFactor, 0, 2 * Math.PI);
+            ctx.fill();
+        }
+        ctx.fillStyle = 'white';
+        ctx.font = `bold ${20 * scaleFactor}px Arial`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(`${p.mana} / ${p.maxMana}`, x, y - 20 * scaleFactor);
+    }
+    
+    function updateCardPositions(p) {
+        const isPlayer = !p.isEnemy;
+        const cardWidth = 120 * scaleFactor;
+        const cardHeight = 180 * scaleFactor;
+
+        // Hand positions
+        const handY = isPlayer ? height - cardHeight - 10 * scaleFactor : 10 * scaleFactor;
+        const handWidth = p.hand.length * (cardWidth * 0.7);
+        const handStartX = width / 2 - handWidth / 2;
+        
+        p.hand.forEach((card, i) => {
+            if (card !== draggedCard?.card) {
+                card.targetX = handStartX + i * (cardWidth * 0.7);
+                card.targetY = handY;
+            }
+            card.width = cardWidth;
+            card.height = cardHeight;
+        });
+
+        // Board positions
+        const boardY = isPlayer ? height / 2 + 20 * scaleFactor : height / 2 - cardHeight - 20 * scaleFactor;
+        const boardWidth = p.board.length * (cardWidth * 1.1);
+        const boardStartX = width / 2 - boardWidth / 2;
+
+        p.board.forEach((card, i) => {
+            card.targetX = boardStartX + i * (cardWidth * 1.1);
+            card.targetY = boardY;
+            card.width = cardWidth;
+            card.height = cardHeight;
+        });
+    }
+
+    function gameLoop() {
+        update();
+        if (gameState === 'playing') {
+            draw();
+        }
+        requestAnimationFrame(gameLoop);
+    }
+
+    init();
+    </script>
+
+</body>
+</html>

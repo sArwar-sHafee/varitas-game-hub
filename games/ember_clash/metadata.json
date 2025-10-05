@@ -1,0 +1,8 @@
+{
+  "name": "Ember Clash",
+  "type": "card battle game (like Hearthstone-lite)",
+  "folder": "ember_clash",
+  "description": "Unleash devastating combos and outsmart your opponent in lightning-fast tactical duels. Every card is a spark that could ignite the battlefield and seal your glorious victory",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
