@@ -1,0 +1,8 @@
+{
+  "name": "The Last Line",
+  "type": "hangman",
+  "folder": "the_last_line",
+  "description": "Uncover famous final quotes from history and fiction as the hangman's noose draws tight. Every guess is a thrilling, high-stakes race between your wits and making this puzzle your own last line.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

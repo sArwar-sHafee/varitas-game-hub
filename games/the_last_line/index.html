@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Last Line</title>
+    <style>
+        :root {
+            --bg-gradient-start: #1a202c;
+            --bg-gradient-end: #2d3748;
+            --canvas-bg: rgba(255, 255, 255, 0.05);
+            --text-color: #e2e8f0;
+            --primary-color: #4299e1;
+            --accent-color: #63b3ed;
+            --correct-color: #48bb78;
+            --wrong-color: #f56565;
+            --shadow-color: rgba(0, 0, 0, 0.5);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+        }
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: radial-gradient(circle, var(--bg-gradient-end), var(--bg-gradient-start));
+            color: var(--text-color);
+        }
+
+        #game-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 1vmin;
+        }
+
+        canvas {
+            display: block;
+            background: var(--canvas-bg);
+            border-radius: 15px;
+            box-shadow: 0 10px 25px var(--shadow-color);
+            max-width: 100%;
+            max-height: 100%;
+            aspect-ratio: 16 / 10;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+
+            // --- COLOR RESOLUTION ---
+            const colors = {};
+            function resolveCssVariables() {
+                const computedStyle = getComputedStyle(document.documentElement);
+                colors.bgGradientStart = computedStyle.getPropertyValue('--bg-gradient-start').trim();
+                colors.bgGradientEnd = computedStyle.getPropertyValue('--bg-gradient-end').trim();
+                colors.textColor = computedStyle.getPropertyValue('--text-color').trim();
+                colors.primaryColor = computedStyle.getPropertyValue('--primary-color').trim();
+                colors.accentColor = computedStyle.getPropertyValue('--accent-color').trim();
+                colors.correctColor = computedStyle.getPropertyValue('--correct-color').trim();
+                colors.wrongColor = computedStyle.getPropertyValue('--wrong-color').trim();
+            }
+            resolveCssVariables();
+
+            // --- GAME CONFIGURATION & STATE ---
+            let gameState = 'start'; // 'start', 'playing', 'win', 'lose'
+            let score = 0;
+            let currentWord = '';
+            let guessedLetters = new Set();
+            let incorrectGuesses = 0;
+            const MAX_INCORRECT_GUESSES = 6;
+
+            const WORD_LIST = [
+                "JAVASCRIPT", "CANVAS", "CALLBACK", "PROMISE", "ASYNC", "AWAIT",
+                "COMPONENT", "FRAMEWORK", "LIBRARY", "VARIABLE", "FUNCTION",
+                "ALGORITHM", "DEBUGGING", "RESPONSIVE", "ANIMATION", "CLOSURE",
+                "MODULE", "WEBPACK", "NODEJS", "DATABASE", "AUTHENTICATION"
+            ];
+
+            const KEYBOARD_LAYOUT = [
+                'QWERTYUIOP',
+                'ASDFGHJKL',
+                'ZXCVBNM'
+            ];
+            
+            let keys = [];
+            let lastTime = 0;
+            let titleBlinkerVisible = true;
+            let blinkerTimer = 0;
+
+            let particles = [];
+            let gameOverButton = {};
+            let mouse = { x: 0, y: 0, down: false };
+
+            // --- AUDIO SETUP ---
+            let audioCtx;
+            const sounds = {};
+
+            function initAudio() {
+                if (audioCtx) return;
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                
+                sounds.correct = createSound(440.0, 'sine', 0.1);
+                sounds.wrong = createSound(220.0, 'square', 0.15);
+                sounds.win = createSoundSequence([[660, 0.1], [880, 0.15]]);
+                sounds.lose = createSoundSequence([[330, 0.15], [220, 0.2]]);
+                sounds.click = createSound(880.0, 'triangle', 0.05);
+            }
+            
+            function createSound(freq, type, duration) {
+                return () => {
+                    if (!audioCtx) return;
+                    const oscillator = audioCtx.createOscillator();
+                    const gainNode = audioCtx.createGain();
+                    
+                    oscillator.connect(gainNode);
+                    gainNode.connect(audioCtx.destination);
+                    
+                    oscillator.type = type;
+                    oscillator.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                    gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+                    
+                    oscillator.start(audioCtx.currentTime);
+                    oscillator.stop(audioCtx.currentTime + duration);
+                };
+            }
+
+            function createSoundSequence(sequence) {
+                return () => {
+                    if (!audioCtx) return;
+                    let time = audioCtx.currentTime;
+                    sequence.forEach(([freq, duration]) => {
+                        const oscillator = audioCtx.createOscillator();
+                        const gainNode = audioCtx.createGain();
+                        oscillator.connect(gainNode);
+                        gainNode.connect(audioCtx.destination);
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(freq, time);
+                        gainNode.gain.setValueAtTime(0.2, time);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, time + duration);
+                        oscillator.start(time);
+                        oscillator.stop(time + duration);
+                        time += duration;
+                    });
+                };
+            }
+
+            // --- UTILITY FUNCTIONS ---
+            function getRandomWord() {
+                return WORD_LIST[Math.floor(Math.random() * WORD_LIST.length)];
+            }
+
+            function drawRoundedRect(x, y, width, height, radius, fill, stroke) {
+                ctx.beginPath();
+                ctx.moveTo(x + radius, y);
+                ctx.lineTo(x + width - radius, y);
+                ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+                ctx.lineTo(x + width, y + height - radius);
+                ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+                ctx.lineTo(x + radius, y + height);
+                ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+                ctx.lineTo(x, y + radius);
+                ctx.quadraticCurveTo(x, y, x + radius, y);
+                ctx.closePath();
+                if (fill) {
+                    ctx.fillStyle = fill;
+                    ctx.fill();
+                }
+                if (stroke) {
+                    ctx.strokeStyle = stroke;
+                    ctx.stroke();
+                }
+            }
+
+            function createParticles(x, y, color, count) {
+                for (let i = 0; i < count; i++) {
+                    particles.push({
+                        x, y,
+                        vx: (Math.random() - 0.5) * 5,
+                        vy: (Math.random() - 0.5) * 5 - 2,
+                        life: 1,
+                        color
+                    });
+                }
+            }
+            
+            function updateAndDrawParticles() {
+                for (let i = particles.length - 1; i >= 0; i--) {
+                    const p = particles[i];
+                    p.x += p.vx;
+                    p.y += p.vy;
+                    p.vy += 0.1; // gravity
+                    p.life -= 0.02;
+                    
+                    if (p.life <= 0) {
+                        particles.splice(i, 1);
+                    } else {
+                        ctx.fillStyle = p.color;
+                        ctx.globalAlpha = p.life;
+                        ctx.beginPath();
+                        ctx.arc(p.x, p.y, Math.max(0, p.life * 5), 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+                ctx.globalAlpha = 1;
+            }
+
+
+            // --- GAME LOGIC ---
+            function startGame() {
+                gameState = 'playing';
+                currentWord = getRandomWord();
+                guessedLetters.clear();
+                incorrectGuesses = 0;
+                buildKeyboard();
+                sounds.click && sounds.click();
+            }
+
+            function makeGuess(letter) {
+                if (gameState !== 'playing' || guessedLetters.has(letter)) return;
+
+                guessedLetters.add(letter);
+
+                if (currentWord.includes(letter)) {
+                    sounds.correct();
+                    // Check for win condition
+                    const allLettersGuessed = [...currentWord].every(l => guessedLetters.has(l));
+                    if (allLettersGuessed) {
+                        gameState = 'win';
+                        score += (currentWord.length * 10) + (MAX_INCORRECT_GUESSES - incorrectGuesses) * 5;
+                        sounds.win();
+                        createParticles(canvas.width / 2, canvas.height / 2, colors.correctColor, 100);
+                    }
+                } else {
+                    incorrectGuesses++;
+                    sounds.wrong();
+                    // Check for lose condition
+                    if (incorrectGuesses >= MAX_INCORRECT_GUESSES) {
+                        gameState = 'lose';
+                        score = Math.max(0, score - 50);
+                        sounds.lose();
+                        createParticles(canvas.width * 0.3, canvas.height * 0.5, colors.wrongColor, 100);
+                    }
+                }
+            }
+            
+            // --- DRAWING FUNCTIONS ---
+
+            function drawStartScreen() {
+                // Title
+                const titleFontSize = Math.min(canvas.width / 8, canvas.height / 8);
+                ctx.font = `bold ${titleFontSize}px 'Courier New', monospace`;
+                ctx.fillStyle = colors.textColor;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                
+                const titleText = "The Last Line";
+                const textWidth = ctx.measureText(titleText).width;
+                ctx.fillText(titleText, canvas.width / 2, canvas.height * 0.35);
+
+                // Blinking cursor
+                if (titleBlinkerVisible) {
+                    ctx.fillStyle = colors.primaryColor;
+                    ctx.fillRect(canvas.width / 2 + textWidth / 2 + 5, canvas.height * 0.35 - titleFontSize / 2, titleFontSize / 4, titleFontSize);
+                }
+                
+                // Instructions
+                const instructionFontSize = Math.min(canvas.width / 30, canvas.height / 30);
+                ctx.font = `${instructionFontSize}px sans-serif`;
+                ctx.fillStyle = colors.accentColor;
+                ctx.fillText('Click or Press Enter to Begin', canvas.width / 2, canvas.height * 0.6);
+                ctx.font = `${instructionFontSize * 0.8}px sans-serif`;
+                ctx.fillStyle = colors.textColor;
+                ctx.fillText('Guess the word before the programmer gives up!', canvas.width / 2, canvas.height * 0.6 + instructionFontSize * 1.5);
+            }
+
+            function drawGameScreen() {
+                drawGallowsAndPerson();
+                drawWordDisplay();
+                drawKeyboard();
+                drawUI();
+            }
+
+            function drawGallowsAndPerson() {
+                ctx.strokeStyle = colors.textColor;
+                ctx.lineWidth = Math.max(4, canvas.width * 0.005);
+                const gallowsX = canvas.width * 0.3;
+                const gallowsY = canvas.height * 0.8;
+                
+                // Base
+                ctx.beginPath();
+                ctx.moveTo(gallowsX * 0.5, gallowsY);
+                ctx.lineTo(gallowsX, gallowsY);
+                
+                // Pole
+                ctx.moveTo(gallowsX * 0.75, gallowsY);
+                ctx.lineTo(gallowsX * 0.75, gallowsY * 0.2);
+                
+                // Beam
+                ctx.lineTo(gallowsX * 1.5, gallowsY * 0.2);
+                
+                // Rope
+                ctx.lineTo(gallowsX * 1.5, gallowsY * 0.3);
+                ctx.stroke();
+
+                // Person
+                const personX = gallowsX * 1.5;
+                const personY = gallowsY * 0.4;
+                const headSize = Math.min(canvas.width, canvas.height) * 0.04;
+                
+                ctx.font = `${headSize * 2}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+
+                if (incorrectGuesses > 0) { // Head
+                    const faces = ['😀', '🤔', '😟', '😨', '😱', '😵'];
+                    ctx.fillText(faces[incorrectGuesses - 1], personX, personY);
+                }
+                if (incorrectGuesses > 1) { // Body
+                    ctx.beginPath();
+                    ctx.moveTo(personX, personY + headSize);
+                    ctx.lineTo(personX, personY + headSize * 3);
+                    ctx.stroke();
+                }
+                if (incorrectGuesses > 2) { // Left Arm
+                    ctx.beginPath();
+                    ctx.moveTo(personX, personY + headSize * 1.5);
+                    ctx.lineTo(personX - headSize, personY + headSize * 2.5);
+                    ctx.stroke();
+                }
+                if (incorrectGuesses > 3) { // Right Arm
+                    ctx.beginPath();
+                    ctx.moveTo(personX, personY + headSize * 1.5);
+                    ctx.lineTo(personX + headSize, personY + headSize * 2.5);
+                    ctx.stroke();
+                }
+                if (incorrectGuesses > 4) { // Left Leg
+                    ctx.beginPath();
+                    ctx.moveTo(personX, personY + headSize * 3);
+                    ctx.lineTo(personX - headSize, personY + headSize * 4);
+                    ctx.stroke();
+                }
+                if (incorrectGuesses > 5) { // Right Leg
+                    ctx.beginPath();
+                    ctx.moveTo(personX, personY + headSize * 3);
+                    ctx.lineTo(personX + headSize, personY + headSize * 4);
+                    ctx.stroke();
+                }
+            }
+
+            function drawWordDisplay() {
+                const displayY = canvas.height * 0.2;
+                const wordContainerWidth = canvas.width * 0.9;
+                const letterSpacing = wordContainerWidth / (currentWord.length * 1.5);
+                const letterSize = Math.min(letterSpacing * 0.8, canvas.height * 0.08);
+                
+                ctx.font = `bold ${letterSize}px 'Courier New', monospace`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                
+                const totalWidth = currentWord.length * letterSpacing - (letterSpacing / 1.5);
+                const startX = (canvas.width - totalWidth) / 2;
+
+                for (let i = 0; i < currentWord.length; i++) {
+                    const letter = currentWord[i];
+                    const x = startX + i * letterSpacing;
+                    
+                    if (guessedLetters.has(letter)) {
+                        ctx.fillStyle = colors.textColor;
+                        ctx.fillText(letter, x, displayY);
+                    } else {
+                        ctx.fillStyle = colors.accentColor;
+                        ctx.fillRect(x - letterSize / 2, displayY + letterSize / 2, letterSize, Math.max(3, letterSize * 0.05));
+                    }
+                }
+            }
+
+            function buildKeyboard() {
+                keys = [];
+                const keyboardWidth = canvas.width * 0.9;
+                const keyboardHeight = canvas.height * 0.3;
+                const keyboardY = canvas.height * 0.95 - keyboardHeight;
+
+                const rowCount = KEYBOARD_LAYOUT.length;
+                const keyHeight = keyboardHeight / (rowCount + 1);
+                const gap = keyHeight * 0.15;
+                
+                KEYBOARD_LAYOUT.forEach((row, rowIndex) => {
+                    const keyWidth = (keyboardWidth - (row.length - 1) * gap) / row.length;
+                    const rowY = keyboardY + rowIndex * (keyHeight + gap);
+                    const totalRowWidth = row.length * keyWidth + (row.length - 1) * gap;
+                    const rowStartX = (canvas.width - totalRowWidth) / 2;
+                    
+                    for (let i = 0; i < row.length; i++) {
+                        const letter = row[i];
+                        keys.push({
+                            letter: letter,
+                            x: rowStartX + i * (keyWidth + gap),
+                            y: rowY,
+                            width: keyWidth,
+                            height: keyHeight
+                        });
+                    }
+                });
+            }
+
+            function drawKeyboard() {
+                const fontSize = keys[0]?.height * 0.5 || 20;
+                ctx.font = `${fontSize}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                
+                keys.forEach(key => {
+                    const isHovered = mouse.x > key.x && mouse.x < key.x + key.width &&
+                                    mouse.y > key.y && mouse.y < key.y + key.height;
+                    
+                    let fillColor = 'rgba(255, 255, 255, 0.2)';
+                    let textColor = colors.textColor;
+
+                    if (guessedLetters.has(key.letter)) {
+                        if (currentWord.includes(key.letter)) {
+                            fillColor = colors.correctColor;
+                        } else {
+                            fillColor = colors.wrongColor;
+                        }
+                        textColor = '#1a202c';
+                    } else if (isHovered) {
+                         fillColor = 'rgba(255, 255, 255, 0.4)';
+                    }
+                    
+                    drawRoundedRect(key.x, key.y, key.width, key.height, 5, fillColor);
+                    
+                    ctx.fillStyle = textColor;
+                    ctx.fillText(key.letter, key.x + key.width / 2, key.y + key.height / 2);
+                });
+            }
+            
+            function drawUI() {
+                const fontSize = Math.min(canvas.width / 35, canvas.height / 35);
+                ctx.font = `${fontSize}px sans-serif`;
+                ctx.fillStyle = colors.textColor;
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'top';
+                ctx.fillText(`Score: ${score}`, 20, 20);
+
+                ctx.textAlign = 'right';
+                const guessesText = `Guesses Left: ${MAX_INCORRECT_GUESSES - incorrectGuesses}`;
+                ctx.fillText(guessesText, canvas.width - 20, 20);
+            }
+
+            function drawGameOverScreen() {
+                const isWin = gameState === 'win';
+                
+                // Faded background
+                ctx.fillStyle = 'rgba(26, 32, 44, 0.8)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                // Message
+                const titleFontSize = Math.min(canvas.width / 10, canvas.height / 10);
+                ctx.font = `bold ${titleFontSize}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                
+                if (isWin) {
+                    ctx.fillStyle = colors.correctColor;
+                    ctx.fillText('YOU WIN! 🎉', canvas.width / 2, canvas.height * 0.3);
+                } else {
+                    ctx.fillStyle = colors.wrongColor;
+                    ctx.fillText('GAME OVER 💀', canvas.width / 2, canvas.height * 0.3);
+                }
+                
+                // Show the word
+                const wordFontSize = titleFontSize * 0.4;
+                ctx.font = `${wordFontSize}px 'Courier New', monospace`;
+                ctx.fillStyle = colors.textColor;
+                ctx.fillText(`The word was: ${currentWord}`, canvas.width / 2, canvas.height * 0.45);
+
+                // Final Score
+                const scoreFontSize = titleFontSize * 0.5;
+                ctx.font = `${scoreFontSize}px sans-serif`;
+                ctx.fillText(`Final Score: ${score}`, canvas.width / 2, canvas.height * 0.55);
+
+                // Play Again Button
+                const btnWidth = Math.min(canvas.width * 0.5, 300);
+                const btnHeight = Math.min(canvas.height * 0.1, 70);
+                gameOverButton = {
+                    x: (canvas.width - btnWidth) / 2,
+                    y: canvas.height * 0.7,
+                    width: btnWidth,
+                    height: btnHeight
+                };
+
+                const isHovered = mouse.x > gameOverButton.x && mouse.x < gameOverButton.x + gameOverButton.width &&
+                                  mouse.y > gameOverButton.y && mouse.y < gameOverButton.y + gameOverButton.height;
+
+                const btnColor = isHovered ? colors.accentColor : colors.primaryColor;
+                drawRoundedRect(gameOverButton.x, gameOverButton.y, gameOverButton.width, gameOverButton.height, 10, btnColor);
+
+                ctx.fillStyle = '#fff';
+                const btnFontSize = btnHeight * 0.5;
+                ctx.font = `bold ${btnFontSize}px sans-serif`;
+                ctx.fillText('Play Again', canvas.width / 2, gameOverButton.y + btnHeight / 2);
+            }
+
+
+            // --- MAIN GAME LOOP ---
+            function gameLoop(timestamp) {
+                const deltaTime = (timestamp - lastTime) || 0;
+                lastTime = timestamp;
+
+                // Clear canvas
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                const gradient = ctx.createRadialGradient(canvas.width / 2, 0, 0, canvas.width / 2, 0, canvas.width);
+                gradient.addColorStop(0, colors.bgGradientEnd);
+                gradient.addColorStop(1, colors.bgGradientStart);
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+
+                // Update and draw based on state
+                if (gameState === 'start') {
+                    blinkerTimer += deltaTime;
+                    if (blinkerTimer > 500) {
+                        titleBlinkerVisible = !titleBlinkerVisible;
+                        blinkerTimer = 0;
+                    }
+                    drawStartScreen();
+                } else if (gameState === 'playing') {
+                    drawGameScreen();
+                } else if (gameState === 'win' || gameState === 'lose') {
+                    drawGameScreen(); // Draw final state behind overlay
+                    drawGameOverScreen();
+                }
+                
+                updateAndDrawParticles();
+                
+                requestAnimationFrame(gameLoop);
+            }
+
+            // --- EVENT LISTENERS ---
+            function resizeCanvas() {
+                const container = document.getElementById('game-container');
+                const aspectRatio = 16 / 10;
+                
+                let newWidth = container.clientWidth;
+                let newHeight = container.clientHeight;
+
+                if (newWidth / newHeight > aspectRatio) {
+                    newWidth = newHeight * aspectRatio;
+                } else {
+                    newHeight = newWidth / aspectRatio;
+                }
+
+                canvas.width = newWidth;
+                canvas.height = newHeight;
+                
+                // Re-calculate responsive elements
+                resolveCssVariables(); // Re-resolve in case theme changes
+                if (gameState === 'playing' || gameState === 'win' || gameState === 'lose') {
+                    buildKeyboard();
+                }
+            }
+
+            function handleKeyDown(e) {
+                if (gameState === 'start' && e.key === 'Enter') {
+                    initAudio();
+                    startGame();
+                } else if ((gameState === 'win' || gameState === 'lose') && e.key === 'Enter') {
+                    startGame();
+                } else if (gameState === 'playing') {
+                    const letter = e.key.toUpperCase();
+                    if (letter.length === 1 && letter >= 'A' && letter <= 'Z') {
+                        makeGuess(letter);
+                    }
+                }
+            }
+
+            function getMousePos(e) {
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                let clientX, clientY;
+                if (e.touches && e.touches.length > 0) {
+                    clientX = e.touches[0].clientX;
+                    clientY = e.touches[0].clientY;
+                } else {
+                    clientX = e.clientX;
+                    clientY = e.clientY;
+                }
+                return {
+                    x: (clientX - rect.left) * scaleX,
+                    y: (clientY - rect.top) * scaleY
+                };
+            }
+
+            function handlePointerDown(e) {
+                e.preventDefault();
+                initAudio();
+                mouse.down = true;
+                const pos = getMousePos(e);
+                mouse.x = pos.x;
+                mouse.y = pos.y;
+                handleClick();
+            }
+            
+            function handlePointerMove(e) {
+                e.preventDefault();
+                const pos = getMousePos(e);
+                mouse.x = pos.x;
+                mouse.y = pos.y;
+            }
+
+            function handleClick() {
+                if (gameState === 'start') {
+                    startGame();
+                } else if (gameState === 'playing') {
+                    for (const key of keys) {
+                        if (mouse.x > key.x && mouse.x < key.x + key.width &&
+                            mouse.y > key.y && mouse.y < key.y + key.height) {
+                            makeGuess(key.letter);
+                            break;
+                        }
+                    }
+                } else if (gameState === 'win' || gameState === 'lose') {
+                    if (mouse.x > gameOverButton.x && mouse.x < gameOverButton.x + gameOverButton.width &&
+                        mouse.y > gameOverButton.y && mouse.y < gameOverButton.y + gameOverButton.height) {
+                        startGame();
+                    }
+                }
+            }
+
+
+            // --- INITIALIZATION ---
+            window.addEventListener('resize', resizeCanvas);
+            window.addEventListener('keydown', handleKeyDown);
+
+            canvas.addEventListener('mousedown', handlePointerDown);
+            canvas.addEventListener('mousemove', handlePointerMove);
+            canvas.addEventListener('touchstart', handlePointerDown, { passive: false });
+            canvas.addEventListener('touchmove', handlePointerMove, { passive: false });
+
+
+            resizeCanvas();
+            requestAnimationFrame(gameLoop);
+        });
+    </script>
+</body>
+</html>
