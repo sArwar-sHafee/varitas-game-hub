@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Glyph Glide</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        html, body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100%;
+            font-family: 'Consolas', 'Courier New', monospace;
+        }
+        body {
+            background-image: linear-gradient(to bottom, #1a0a38, #3b165a, #63227e);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #fff;
+        }
+        #game-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        canvas {
+            display: block;
+            background-color: rgba(10, 5, 20, 0.8);
+            box-shadow: 0 0 30px rgba(255, 105, 180, 0.5);
+            border-radius: 15px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+<script>
+class GlyphGlideGame {
+    constructor(canvasId) {
+        this.canvas = document.getElementById(canvasId);
+        this.ctx = this.canvas.getContext('2d');
+        
+        this.gameState = 'START'; // START, PLAYING, GAME_OVER
+        this.score = 0;
+        this.lives = 5;
+        this.level = 1;
+        
+        this.glyphs = [];
+        this.particles = [];
+        this.stars = [];
+        
+        this.currentTyping = '';
+        this.activeGlyph = null;
+        
+        this.lastTime = 0;
+        this.spawnTimer = 0;
+        this.spawnInterval = 2000; // ms
+
+        this.wordList = [
+            'flow', 'sun', 'moon', 'star', 'code', 'type', 'swift', 'glide', 'dream', 'focus',
+            'laser', 'pixel', 'query', 'vapor', 'matrix', 'umbra', 'pulse', 'axiom', 'zenith',
+            'glyph', 'flux', 'echo', 'breeze', 'quasar', 'cosmic', 'orbit', 'gravity', 'nebula',
+            'photon', 'plasma', 'solar', 'lunar', 'void', 'sphere', 'helix', 'vector', 'binary',
+            'cypher', 'script', 'logic', 'system', 'network', 'server', 'client', 'agile', 'debug',
+            'deploy', 'cache', 'cloud', 'domain', 'ether', 'frame', 'kernel', 'module', 'plugin',
+            'runtime', 'syntax', 'token', 'virtual', 'quantum', 'harmony', 'silicon', 'cascade',
+            'radiant', 'phantom'
+        ];
+        
+        this.colors = ['#ff6347', '#ffd700', '#00fa9a', '#1e90ff', '#ff00ff', '#00ffff'];
+        
+        this.setupAudio();
+        this.resizeCanvas();
+        window.addEventListener('resize', () => this.resizeCanvas());
+        this.initEventListeners();
+        
+        this.gameLoop = this.gameLoop.bind(this);
+        requestAnimationFrame(this.gameLoop);
+    }
+
+    setupAudio() {
+        this.audioCtx = null;
+        this.sounds = {
+            type: { freq: 440, dur: 0.05, type: 'triangle', vol: 0.3 },
+            success: { freq: 880, dur: 0.1, type: 'sine', vol: 0.5 },
+            fail: { freq: 220, dur: 0.5, type: 'sawtooth', vol: 0.4 },
+            start: { freq: 523.25, dur: 0.1, type: 'sine', vol: 0.5 }
+        };
+    }
+    
+    // Web Audio needs to be initialized after a user interaction
+    initAudio() {
+        if (!this.audioCtx) {
+            this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+    }
+
+    playSound({ freq, dur, type, vol }) {
+        if (!this.audioCtx) return;
+        const oscillator = this.audioCtx.createOscillator();
+        const gainNode = this.audioCtx.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(this.audioCtx.destination);
+
+        oscillator.type = type;
+        oscillator.frequency.setValueAtTime(freq, this.audioCtx.currentTime);
+        gainNode.gain.setValueAtTime(vol, this.audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + dur);
+        
+        oscillator.start(this.audioCtx.currentTime);
+        oscillator.stop(this.audioCtx.currentTime + dur);
+    }
+    
+    resizeCanvas() {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = this.canvas.parentElement.getBoundingClientRect();
+        
+        // Use a 16:9 aspect ratio, fitting within the parent container
+        let width = rect.width;
+        let height = rect.height;
+        if (width / height > 16 / 9) {
+            width = height * (16 / 9);
+        } else {
+            height = width * (9 / 16);
+        }
+
+        this.canvas.style.width = `${width}px`;
+        this.canvas.style.height = `${height}px`;
+
+        this.canvas.width = Math.round(width * dpr);
+        this.canvas.height = Math.round(height * dpr);
+        this.ctx.scale(dpr, dpr);
+        
+        // Base size for scaling fonts and elements
+        this.scaleFactor = width / 800;
+        
+        // Re-initialize stars for new size
+        this.stars = [];
+        for (let i = 0; i < 100; i++) {
+            this.stars.push({
+                x: Math.random() * this.canvas.clientWidth,
+                y: Math.random() * this.canvas.clientHeight,
+                size: Math.random() * 2 + 1,
+                speed: Math.random() * 0.5 + 0.2
+            });
+        }
+    }
+
+    initEventListeners() {
+        window.addEventListener('keydown', e => this.handleKeyDown(e));
+        this.canvas.addEventListener('click', e => this.handleClick(e));
+    }
+    
+    startGame() {
+        this.initAudio();
+        this.playSound(this.sounds.start);
+        this.gameState = 'PLAYING';
+        this.resetGame();
+    }
+    
+    resetGame() {
+        this.score = 0;
+        this.lives = 5;
+        this.level = 1;
+        this.glyphs = [];
+        this.particles = [];
+        this.currentTyping = '';
+        this.activeGlyph = null;
+        this.spawnTimer = 0;
+        this.spawnInterval = 2500;
+    }
+
+    handleKeyDown(e) {
+        if (this.gameState === 'START' || this.gameState === 'GAME_OVER') {
+            if (e.key === 'Enter') {
+                this.startGame();
+            }
+            return;
+        }
+
+        if (this.gameState !== 'PLAYING') return;
+
+        const key = e.key;
+
+        if (key.length === 1 && key.match(/[a-z]/i)) {
+            this.playSound(this.sounds.type);
+            this.currentTyping += key.toLowerCase();
+            this.updateActiveGlyph();
+        } else if (key === 'Backspace') {
+            this.currentTyping = this.currentTyping.slice(0, -1);
+            this.updateActiveGlyph();
+        } else if (key === 'Escape') {
+            this.currentTyping = '';
+            this.activeGlyph = null;
+        }
+    }
+    
+    handleClick(e) {
+        if (this.gameState === 'START' || this.gameState === 'GAME_OVER') {
+            this.startGame();
+        }
+    }
+    
+    updateActiveGlyph() {
+        if (this.activeGlyph && this.activeGlyph.text.startsWith(this.currentTyping)) {
+            // still typing the same word
+        } else {
+            this.activeGlyph = null;
+            if (this.currentTyping.length > 0) {
+                // Find a new glyph that matches
+                for (const glyph of this.glyphs) {
+                    if (glyph.text.startsWith(this.currentTyping)) {
+                        this.activeGlyph = glyph;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (this.activeGlyph && this.currentTyping === this.activeGlyph.text) {
+            this.onGlyphSuccess();
+        }
+    }
+    
+    onGlyphSuccess() {
+        this.playSound(this.sounds.success);
+        this.score += this.activeGlyph.text.length * 10;
+        this.createParticles(this.activeGlyph.x, this.activeGlyph.y, this.activeGlyph.color);
+        
+        // Remove the successful glyph
+        this.glyphs = this.glyphs.filter(g => g !== this.activeGlyph);
+        
+        this.currentTyping = '';
+        this.activeGlyph = null;
+        
+        // Check for level up
+        if (this.score > this.level * 500) {
+            this.level++;
+            this.spawnInterval = Math.max(500, this.spawnInterval * 0.9);
+        }
+    }
+    
+    spawnGlyph() {
+        const text = this.wordList[Math.floor(Math.random() * this.wordList.length)];
+        const size = 20 * this.scaleFactor;
+        this.ctx.font = `bold ${size}px 'Consolas', 'Courier New', monospace`; // Set font before measuring
+        const x = Math.random() * (this.canvas.clientWidth - this.ctx.measureText(text).width);
+        const y = -size;
+        const speed = (Math.random() * 0.5 + 0.5 + this.level * 0.2) * this.scaleFactor;
+        const color = this.colors[Math.floor(Math.random() * this.colors.length)];
+        
+        this.glyphs.push({ text, x, y, speed, color, size });
+    }
+    
+    createParticles(x, y, color) {
+        const emoji = ['✨', '💥', '💫', '🌟'];
+        const chosenEmoji = emoji[Math.floor(Math.random() * emoji.length)];
+        for (let i = 0; i < 20; i++) {
+            this.particles.push({
+                x,
+                y,
+                vx: (Math.random() - 0.5) * 8,
+                vy: (Math.random() - 0.5) * 8,
+                alpha: 1,
+                size: (Math.random() * 10 + 10) * this.scaleFactor,
+                color,
+                emoji: chosenEmoji,
+                life: Math.random() * 0.5 + 0.5 // 0.5 to 1 second life
+            });
+        }
+    }
+
+    gameLoop(timestamp) {
+        const deltaTime = (timestamp - this.lastTime) || 0;
+        this.lastTime = timestamp;
+
+        this.update(deltaTime);
+        this.draw();
+
+        requestAnimationFrame(this.gameLoop);
+    }
+    
+    update(deltaTime) {
+        this.updateStars(deltaTime);
+
+        if (this.gameState !== 'PLAYING') return;
+
+        // Update glyphs
+        this.spawnTimer += deltaTime;
+        if (this.spawnTimer > this.spawnInterval) {
+            this.spawnTimer = 0;
+            this.spawnGlyph();
+        }
+
+        for (let i = this.glyphs.length - 1; i >= 0; i--) {
+            const glyph = this.glyphs[i];
+            glyph.y += glyph.speed * (deltaTime / 16.67); // Normalize speed
+
+            if (glyph.y > this.canvas.clientHeight) {
+                this.glyphs.splice(i, 1);
+                this.lives--;
+                this.playSound(this.sounds.fail);
+                if (this.activeGlyph === glyph) {
+                    this.activeGlyph = null;
+                    this.currentTyping = '';
+                }
+                if (this.lives <= 0) {
+                    this.gameState = 'GAME_OVER';
+                }
+            }
+        }
+        
+        // Update particles
+        for (let i = this.particles.length - 1; i >= 0; i--) {
+            const p = this.particles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.vy += 0.1; // gravity
+            p.life -= deltaTime / 1000;
+            p.alpha = p.life > 0 ? p.life : 0;
+            
+            if (p.life <= 0) {
+                this.particles.splice(i, 1);
+            }
+        }
+    }
+    
+    updateStars(deltaTime) {
+        for (const star of this.stars) {
+            star.y += star.speed;
+            if (star.y > this.canvas.clientHeight) {
+                star.y = 0;
+                star.x = Math.random() * this.canvas.clientWidth;
+            }
+        }
+    }
+
+    draw() {
+        const { clientWidth: w, clientHeight: h } = this.canvas;
+        this.ctx.clearRect(0, 0, w, h);
+        
+        this.drawStars();
+        
+        switch (this.gameState) {
+            case 'START':
+                this.drawStartScreen();
+                break;
+            case 'PLAYING':
+                this.drawGame();
+                break;
+            case 'GAME_OVER':
+                this.drawGameOverScreen();
+                break;
+        }
+    }
+    
+    drawStars() {
+        this.ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+        for (const star of this.stars) {
+            this.ctx.beginPath();
+            this.ctx.arc(star.x, star.y, star.size * 0.5, 0, Math.PI * 2);
+            this.ctx.fill();
+        }
+    }
+
+    drawStartScreen() {
+        const { clientWidth: w, clientHeight: h } = this.canvas;
+        this.ctx.save();
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+
+        // Title
+        const titleSize = 70 * this.scaleFactor;
+        this.ctx.font = `bold ${titleSize}px 'Consolas', 'Courier New', monospace`;
+        const gradient = this.ctx.createLinearGradient(0, h/2 - titleSize, 0, h/2 + titleSize);
+        gradient.addColorStop(0, '#ff00ff');
+        gradient.addColorStop(0.5, '#00ffff');
+        gradient.addColorStop(1, '#ffd700');
+        this.ctx.fillStyle = gradient;
+        this.ctx.shadowColor = 'rgba(255, 255, 255, 0.5)';
+        this.ctx.shadowBlur = 15;
+        this.ctx.fillText('Glyph Glide', w / 2, h / 2 - 50 * this.scaleFactor);
+        this.ctx.shadowBlur = 0;
+
+        // Instructions
+        this.ctx.fillStyle = '#eee';
+        this.ctx.font = `${20 * this.scaleFactor}px 'Consolas', 'Courier New', monospace`;
+        this.ctx.fillText('Type the falling words before they hit the bottom.', w / 2, h / 2 + 20 * this.scaleFactor);
+        
+        // Call to action
+        this.ctx.font = `bold ${24 * this.scaleFactor}px 'Consolas', 'Courier New', monospace`;
+        this.ctx.fillStyle = '#ffd700';
+        this.ctx.fillText('Click or Press Enter to Start', w / 2, h / 2 + 80 * this.scaleFactor);
+        this.ctx.restore();
+    }
+    
+    drawGame() {
+        // Draw Glyphs
+        this.glyphs.forEach(glyph => {
+            this.ctx.save();
+            const fontSize = glyph.size;
+            this.ctx.font = `bold ${fontSize}px 'Consolas', 'Courier New', monospace`;
+            
+            // Highlight active glyph
+            if (glyph === this.activeGlyph) {
+                this.ctx.shadowColor = glyph.color;
+                this.ctx.shadowBlur = 20;
+                
+                // Draw typed part in a different color
+                const typedPart = this.currentTyping;
+                const remainingPart = glyph.text.substring(typedPart.length);
+                const typedWidth = this.ctx.measureText(typedPart).width;
+                
+                this.ctx.fillStyle = '#ffd700'; // Gold for typed part
+                this.ctx.fillText(typedPart, glyph.x, glyph.y);
+                
+                this.ctx.fillStyle = '#ffffff'; // White for remaining
+                this.ctx.fillText(remainingPart, glyph.x + typedWidth, glyph.y);
+            } else {
+                this.ctx.fillStyle = glyph.color;
+                this.ctx.fillText(glyph.text, glyph.x, glyph.y);
+            }
+            this.ctx.restore();
+        });
+        
+        // Draw Particles
+        this.particles.forEach(p => {
+            this.ctx.save();
+            this.ctx.globalAlpha = p.alpha;
+            this.ctx.font = `${p.size}px sans-serif`;
+            this.ctx.fillText(p.emoji, p.x, p.y);
+            this.ctx.restore();
+        });
+        
+        this.drawUI();
+    }
+
+    drawUI() {
+        const { clientWidth: w, clientHeight: h } = this.canvas;
+        const uiFontSize = 20 * this.scaleFactor;
+        this.ctx.font = `bold ${uiFontSize}px 'Consolas', 'Courier New', monospace`;
+        
+        // Score
+        this.ctx.fillStyle = '#fff';
+        this.ctx.textAlign = 'left';
+        this.ctx.fillText(`Score: ${this.score}`, 20, 30 * this.scaleFactor);
+        
+        // Level
+        this.ctx.textAlign = 'center';
+        this.ctx.fillText(`Level: ${this.level}`, w / 2, 30 * this.scaleFactor);
+
+        // Lives
+        this.ctx.textAlign = 'right';
+        let lifeDisplay = '';
+        for (let i = 0; i < 5; i++) {
+            lifeDisplay += (i < this.lives) ? '❤️' : '💔';
+        }
+        this.ctx.fillText(lifeDisplay, w - 20, 30 * this.scaleFactor);
+
+        // Current typing
+        this.ctx.textAlign = 'center';
+        this.ctx.fillStyle = '#00ffff';
+        this.ctx.font = `${24 * this.scaleFactor}px 'Consolas', 'Courier New', monospace`;
+        this.ctx.shadowColor = '#00ffff';
+        this.ctx.shadowBlur = 10;
+        this.ctx.fillText(this.currentTyping, w / 2, h - 30 * this.scaleFactor);
+        this.ctx.shadowBlur = 0;
+        
+        // Input caret
+        const textWidth = this.ctx.measureText(this.currentTyping).width;
+        this.ctx.fillStyle = '#00ffff';
+        if (Math.floor(this.lastTime / 500) % 2 === 0) {
+            this.ctx.fillRect(w / 2 + textWidth / 2 + 2, h - 45 * this.scaleFactor, 10 * this.scaleFactor, 2 * this.scaleFactor);
+        }
+    }
+    
+    drawGameOverScreen() {
+        const { clientWidth: w, clientHeight: h } = this.canvas;
+        this.ctx.save();
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+
+        // Game Over text
+        this.ctx.font = `bold ${70 * this.scaleFactor}px 'Consolas', 'Courier New', monospace`;
+        this.ctx.fillStyle = '#ff6347';
+        this.ctx.shadowColor = '#ff6347';
+        this.ctx.shadowBlur = 15;
+        this.ctx.fillText('Game Over', w / 2, h / 2 - 80 * this.scaleFactor);
+        this.ctx.shadowBlur = 0;
+
+        // Final Score
+        this.ctx.font = `${30 * this.scaleFactor}px 'Consolas', 'Courier New', monospace`;
+        this.ctx.fillStyle = '#fff';
+        this.ctx.fillText(`Final Score: ${this.score}`, w / 2, h / 2);
+
+        // Restart instructions
+        this.ctx.font = `bold ${24 * this.scaleFactor}px 'Consolas', 'Courier New', monospace`;
+        this.ctx.fillStyle = '#ffd700';
+        this.ctx.fillText('Click or Press Enter to Restart', w / 2, h / 2 + 80 * this.scaleFactor);
+        
+        this.ctx.restore();
+    }
+}
+
+// Wait for the DOM to be fully loaded before starting the game
+window.addEventListener('DOMContentLoaded', () => {
+    const game = new GlyphGlideGame('gameCanvas');
+});
+
+</script>
+</body>
+</html>

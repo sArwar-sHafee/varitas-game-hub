@@ -1,0 +1,8 @@
+{
+  "name": "Glyph Glide",
+  "type": "typing speed game",
+  "folder": "glyph_glide",
+  "description": "Race against a cascade of falling symbols, typing with precision to keep your glider soaring. Master the rhythm of the keyboard to unleash incredible speed and flow effortlessly through each challenging wave.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
