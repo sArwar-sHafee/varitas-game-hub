@@ -1,0 +1,8 @@
+{
+  "name": "Prism Pulse",
+  "type": "simon says memory game",
+  "folder": "prism_pulse",
+  "description": "Follow the hypnotic pulse of light and sound, but don't get lost in the dazzling, ever-changing display. This electrifying test of memory and reflexes accelerates with every sequence you conquer, pushing your focus to its absolute limit.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

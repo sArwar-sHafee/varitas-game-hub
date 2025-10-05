@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Prism Pulse</title>
+    <style>
+        :root {
+            --bg-color: #0d0d1a;
+            --glow-color: rgba(180, 210, 255, 0.2);
+        }
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: radial-gradient(circle, #1a1a3d 0%, var(--bg-color) 70%);
+        }
+        canvas {
+            display: block;
+            background-color: transparent;
+            border-radius: 50%;
+            box-shadow: 0 0 15px 5px var(--glow-color),
+                        inset 0 0 15px 5px var(--glow-color);
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+    class PrismPulseGame {
+        constructor(canvasId) {
+            this.canvas = document.getElementById(canvasId);
+            this.ctx = this.canvas.getContext('2d');
+            
+            this.audioCtx = null;
+            this.sounds = {};
+            this.lastTime = 0;
+
+            this.GAME_STATES = {
+                START: 'start',
+                COMPUTER_TURN: 'computer_turn',
+                PLAYER_TURN: 'player_turn',
+                GAME_OVER: 'game_over'
+            };
+
+            this.prisms = [
+                { id: 0, color: 'hsl(50, 100%, 60%)', litColor: 'hsl(50, 100%, 85%)', angle: [1.05, 1.95], key: 'ArrowUp', keySymbol: '↑' },    // Yellow
+                { id: 1, color: 'hsl(200, 100%, 60%)', litColor: 'hsl(200, 100%, 85%)', angle: [0.05, 0.95], key: 'ArrowRight', keySymbol: '→' }, // Blue
+                { id: 2, color: 'hsl(340, 100%, 60%)', litColor: 'hsl(340, 100%, 85%)', angle: [-0.95, -0.05], key: 'ArrowDown', keySymbol: '↓' }, // Red
+                { id: 3, color: 'hsl(130, 100%, 60%)', litColor: 'hsl(130, 100%, 85%)', angle: [-1.95, -1.05], key: 'ArrowLeft', keySymbol: '←' },  // Green
+            ];
+
+            this.particles = [];
+            this.hoveredPrism = -1;
+
+            this.resetGame();
+            this.init();
+        }
+
+        init() {
+            this.setupCanvas();
+            this.createPrismPaths();
+            this.addEventListeners();
+            requestAnimationFrame(this.gameLoop.bind(this));
+        }
+
+        resetGame() {
+            this.gameState = this.GAME_STATES.START;
+            this.sequence = [];
+            this.playerSequence = [];
+            this.currentSequenceIndex = 0;
+            this.score = 0;
+            this.highScore = localStorage.getItem('prismPulseHighScore') || 0;
+            this.turnSpeed = 600;
+            this.prisms.forEach(p => {
+                p.alpha = 0;
+                p.pulse = 0;
+            });
+        }
+
+        setupCanvas() {
+            const size = Math.min(window.innerWidth, window.innerHeight) * 0.85;
+            this.canvas.width = size;
+            this.canvas.height = size;
+            this.center = { x: this.canvas.width / 2, y: this.canvas.height / 2 };
+            this.outerRadius = this.canvas.width / 2 * 0.95;
+            this.innerRadius = this.outerRadius * 0.55;
+            this.gap = 0.04;
+        }
+
+        createPrismPaths() {
+            this.prisms.forEach(prism => {
+                const path = new Path2D();
+                path.arc(this.center.x, this.center.y, this.outerRadius, prism.angle[0] * Math.PI + this.gap, prism.angle[1] * Math.PI - this.gap);
+                path.arc(this.center.x, this.center.y, this.innerRadius, prism.angle[1] * Math.PI - this.gap, prism.angle[0] * Math.PI + this.gap, true);
+                path.closePath();
+                prism.path = path;
+            });
+        }
+        
+        initAudio() {
+            if (this.audioCtx) return;
+            this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const frequencies = [329.63, 440.00, 523.25, 392.00]; // E4, A4, C5, G4
+            this.prisms.forEach((prism, i) => {
+                this.sounds[prism.id] = this.createSound(frequencies[i]);
+            });
+            this.sounds.error = this.createSound(160, 'square', 0.4);
+        }
+
+        createSound(frequency, type = 'sine', duration = 0.2) {
+            return () => {
+                if (!this.audioCtx) return;
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+                oscillator.type = type;
+                oscillator.frequency.setValueAtTime(frequency, this.audioCtx.currentTime);
+                gainNode.gain.setValueAtTime(0.5, this.audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + duration);
+                oscillator.start(this.audioCtx.currentTime);
+                oscillator.stop(this.audioCtx.currentTime + duration);
+            };
+        }
+
+        addEventListeners() {
+            window.addEventListener('resize', () => {
+                this.setupCanvas();
+                this.createPrismPaths();
+            });
+
+            this.canvas.addEventListener('click', (e) => {
+                this.initAudio();
+                const rect = this.canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                this.handleInteraction(x, y);
+            });
+            
+            this.canvas.addEventListener('mousemove', (e) => {
+                if (this.gameState !== this.GAME_STATES.PLAYER_TURN) {
+                    this.hoveredPrism = -1;
+                    return;
+                }
+                const rect = this.canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+
+                this.hoveredPrism = -1;
+                for (const prism of this.prisms) {
+                    if (this.ctx.isPointInPath(prism.path, x, y)) {
+                        this.hoveredPrism = prism.id;
+                        break;
+                    }
+                }
+            });
+
+            window.addEventListener('keydown', (e) => {
+                this.initAudio();
+                if (this.gameState === this.GAME_STATES.START || this.gameState === this.GAME_STATES.GAME_OVER) {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        this.startGame();
+                    }
+                    return;
+                }
+                
+                if (this.gameState === this.GAME_STATES.PLAYER_TURN) {
+                    const prism = this.prisms.find(p => p.key === e.code || p.key === e.key);
+                    if (prism) {
+                        e.preventDefault();
+                        this.handlePlayerInput(prism.id);
+                    }
+                }
+            });
+        }
+
+        handleInteraction(x, y) {
+            if (this.gameState === this.GAME_STATES.START || this.gameState === this.GAME_STATES.GAME_OVER) {
+                this.startGame();
+            } else if (this.gameState === this.GAME_STATES.PLAYER_TURN) {
+                for (const prism of this.prisms) {
+                    if (this.ctx.isPointInPath(prism.path, x, y)) {
+                        this.handlePlayerInput(prism.id);
+                        break;
+                    }
+                }
+            }
+        }
+
+        startGame() {
+            this.resetGame();
+            this.gameState = this.GAME_STATES.COMPUTER_TURN;
+            this.addNextInSequence();
+        }
+
+        addNextInSequence() {
+            setTimeout(() => {
+                this.sequence.push(Math.floor(Math.random() * 4));
+                this.playSequence();
+            }, this.turnSpeed);
+        }
+
+        playSequence() {
+            this.gameState = this.GAME_STATES.COMPUTER_TURN;
+            this.playerSequence = [];
+            this.currentSequenceIndex = 0;
+            
+            const playNext = () => {
+                if (this.currentSequenceIndex < this.sequence.length) {
+                    const prismId = this.sequence[this.currentSequenceIndex];
+                    this.lightUpPrism(prismId);
+                    this.currentSequenceIndex++;
+                    setTimeout(playNext, this.turnSpeed);
+                } else {
+                    this.gameState = this.GAME_STATES.PLAYER_TURN;
+                    this.currentSequenceIndex = 0;
+                }
+            };
+            playNext();
+        }
+
+        handlePlayerInput(prismId) {
+            if (this.gameState !== this.GAME_STATES.PLAYER_TURN) return;
+
+            this.lightUpPrism(prismId);
+            this.playerSequence.push(prismId);
+
+            const currentStep = this.playerSequence.length - 1;
+            if (this.playerSequence[currentStep] !== this.sequence[currentStep]) {
+                this.gameOver();
+                return;
+            }
+
+            if (this.playerSequence.length === this.sequence.length) {
+                this.score++;
+                if (this.score > 0 && this.score % 4 === 0) {
+                    this.turnSpeed = Math.max(200, this.turnSpeed - 50);
+                }
+                this.addNextInSequence();
+            }
+        }
+
+        gameOver() {
+            this.sounds.error();
+            this.gameState = this.GAME_STATES.GAME_OVER;
+            if (this.score > this.highScore) {
+                this.highScore = this.score;
+                localStorage.setItem('prismPulseHighScore', this.highScore);
+            }
+        }
+
+        lightUpPrism(prismId) {
+            this.prisms[prismId].alpha = 1.0;
+            this.sounds[prismId]();
+            this.createParticles(prismId);
+        }
+
+        createParticles(prismId) {
+            const prism = this.prisms[prismId];
+            const angle = (prism.angle[0] + prism.angle[1]) / 2 * Math.PI;
+            const radius = (this.innerRadius + this.outerRadius) / 2;
+            const startX = this.center.x + Math.cos(angle) * radius;
+            const startY = this.center.y + Math.sin(angle) * radius;
+
+            for (let i = 0; i < 20; i++) {
+                this.particles.push({
+                    x: startX,
+                    y: startY,
+                    vx: (Math.random() - 0.5) * 4,
+                    vy: (Math.random() - 0.5) * 4,
+                    life: 1,
+                    size: Math.random() * 3 + 1,
+                    color: prism.litColor,
+                });
+            }
+        }
+        
+        update(deltaTime) {
+            // Update prism pulse animations and fade out
+            this.prisms.forEach(p => {
+                p.pulse = (Math.sin(Date.now() * 0.002 + p.id * Math.PI / 2) + 1) / 2;
+                if (p.alpha > 0) {
+                    // Fade out over 300ms
+                    p.alpha = Math.max(0, p.alpha - (deltaTime / 300)); 
+                }
+            });
+
+            // Update particles
+            for (let i = this.particles.length - 1; i >= 0; i--) {
+                const p = this.particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 0.02;
+                if (p.life <= 0) {
+                    this.particles.splice(i, 1);
+                }
+            }
+        }
+
+        draw() {
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            this.drawPrisms();
+            this.drawCenterCircle();
+            this.drawParticles();
+            
+            switch (this.gameState) {
+                case this.GAME_STATES.START:
+                    this.drawStartScreen();
+                    break;
+                case this.GAME_STATES.GAME_OVER:
+                    this.drawGameOverScreen();
+                    break;
+                case this.GAME_STATES.COMPUTER_TURN:
+                case this.GAME_STATES.PLAYER_TURN:
+                    this.drawGameUI();
+                    break;
+            }
+        }
+        
+        drawPrisms() {
+            this.prisms.forEach(prism => {
+                this.ctx.save();
+
+                // Base color with pulse
+                const pulseBrightness = 50 + prism.pulse * 10;
+                const baseColor = `hsl(${prism.color.match(/\d+/g)[0]}, 100%, ${pulseBrightness}%)`;
+                
+                // Active color (lit)
+                const litColor = prism.litColor;
+
+                // Hover effect for player's turn
+                const hoverAlpha = (this.hoveredPrism === prism.id && this.gameState === this.GAME_STATES.PLAYER_TURN) ? 0.3 : 0;
+                
+                // Final alpha combines lit state and hover state
+                const finalAlpha = Math.max(prism.alpha, hoverAlpha);
+
+                const gradient = this.ctx.createRadialGradient(
+                    this.center.x, this.center.y, this.innerRadius * 0.8,
+                    this.center.x, this.center.y, this.outerRadius
+                );
+                
+                const finalColor = this.lerpColor(baseColor, litColor, finalAlpha);
+                gradient.addColorStop(0, finalColor);
+                gradient.addColorStop(1, finalColor);
+
+                this.ctx.fillStyle = gradient;
+                this.ctx.fill(prism.path);
+                
+                // Draw key symbol
+                const angle = (prism.angle[0] + prism.angle[1]) / 2 * Math.PI;
+                const radius = this.innerRadius - this.canvas.width * 0.04;
+                const x = this.center.x + Math.cos(angle) * radius;
+                const y = this.center.y + Math.sin(angle) * radius;
+                this.ctx.fillStyle = `rgba(255, 255, 255, ${0.4 + prism.pulse * 0.4})`;
+                this.ctx.font = `${this.canvas.width * 0.05}px Arial`;
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                this.ctx.fillText(prism.keySymbol, x, y);
+
+                this.ctx.restore();
+            });
+        }
+
+        drawCenterCircle() {
+            this.ctx.beginPath();
+            this.ctx.arc(this.center.x, this.center.y, this.innerRadius * 0.98, 0, 2 * Math.PI);
+            const gradient = this.ctx.createRadialGradient(
+                this.center.x, this.center.y, 0,
+                this.center.x, this.center.y, this.innerRadius
+            );
+            gradient.addColorStop(0, '#333');
+            gradient.addColorStop(1, '#111');
+            this.ctx.fillStyle = gradient;
+            this.ctx.fill();
+            this.ctx.strokeStyle = 'rgba(180, 210, 255, 0.5)';
+            this.ctx.lineWidth = 2;
+            this.ctx.stroke();
+        }
+
+        drawParticles() {
+            this.particles.forEach(p => {
+                this.ctx.beginPath();
+                this.ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                this.ctx.fillStyle = p.color;
+                this.ctx.globalAlpha = p.life;
+                this.ctx.fill();
+            });
+            this.ctx.globalAlpha = 1.0;
+        }
+        
+        drawText(text, y, size, color = '#fff', subtext = null, subYOffset = 0.1) {
+            this.ctx.fillStyle = color;
+            this.ctx.textAlign = 'center';
+            this.ctx.textBaseline = 'middle';
+            
+            // Main text
+            this.ctx.font = `bold ${this.canvas.width * size}px 'Segoe UI', sans-serif`;
+            this.ctx.fillText(text, this.center.x, this.center.y + this.canvas.height * y);
+            
+            // Subtext
+            if(subtext) {
+                this.ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+                this.ctx.font = `normal ${this.canvas.width * (size * 0.5)}px 'Segoe UI', sans-serif`;
+                this.ctx.fillText(subtext, this.center.x, this.center.y + this.canvas.height * (y + subYOffset));
+            }
+        }
+        
+        drawStartScreen() {
+            this.ctx.globalAlpha = 0.8;
+            this.drawText('PRISM', -0.1, 0.12);
+            this.drawText('PULSE', 0.02, 0.12);
+            this.ctx.globalAlpha = 1;
+            this.drawText('Click or Press Enter to Start', 0.15, 0.04);
+            this.drawInstructions();
+        }
+
+        drawGameOverScreen() {
+            this.ctx.globalAlpha = 0.8;
+            this.drawText('GAME OVER', -0.12, 0.1, 'hsl(340, 100%, 70%)');
+            this.ctx.globalAlpha = 1;
+            this.drawText(`Score: ${this.score}`, 0, 0.05);
+            this.drawText(`High Score: ${this.highScore}`, 0.06, 0.035, 'rgba(255, 255, 255, 0.8)');
+            this.drawText('Click or Press Enter to Restart', 0.18, 0.04);
+        }
+        
+        drawGameUI() {
+            this.drawText(`${this.score}`, 0, 0.15, `rgba(255, 255, 255, ${0.4 + Math.sin(Date.now()*0.005)*0.1})`);
+            
+            if (this.gameState === this.GAME_STATES.COMPUTER_TURN) {
+                 this.drawText('WATCH 👁️', -0.12, 0.04, 'rgba(255,255,255,0.7)');
+            } else if (this.gameState === this.GAME_STATES.PLAYER_TURN) {
+                 this.drawText('REPEAT 🧠', -0.12, 0.04, 'rgba(255,255,255,0.7)');
+            }
+        }
+
+        drawInstructions() {
+             this.drawText('Use Arrow Keys or Mouse', 0.28, 0.03, 'rgba(255,255,255,0.6)');
+        }
+
+        lerpColor(hslColorA, hslColorB, amount) {
+            // Interpolates the lightness component between two HSL color strings.
+            const hslA = hslColorA.match(/\d+/g).map(Number);
+            const hslB = hslColorB.match(/\d+/g).map(Number);
+            
+            // Assumes hue and saturation are the same for both colors.
+            const hue = hslA[0];
+            const saturation = hslA[1];
+            const lightness = hslA[2] + amount * (hslB[2] - hslA[2]);
+            
+            return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+        }
+
+        gameLoop(timestamp) {
+            const deltaTime = timestamp - this.lastTime;
+            this.lastTime = timestamp;
+            
+            this.update(deltaTime);
+            this.draw();
+            
+            requestAnimationFrame(this.gameLoop.bind(this));
+        }
+    }
+
+    // Initialize the game when the DOM is ready
+    document.addEventListener('DOMContentLoaded', () => {
+        const game = new PrismPulseGame('gameCanvas');
+    });
+
+</script>
+</body>
+</html>
