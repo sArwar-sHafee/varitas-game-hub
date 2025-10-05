@@ -1,0 +1,8 @@
+{
+  "name": "Glide Rush",
+  "type": "air hockey",
+  "folder": "glide_rush",
+  "description": "Experience a high-octane duel where every strike sends the puck gliding at breathtaking speed. Master unpredictable ricochets and unleash a relentless rush of shots to dominate the table.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

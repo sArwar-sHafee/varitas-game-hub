@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Glide Rush</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100%;
+            background: #1a1a2e;
+            font-family: 'Arial', sans-serif;
+        }
+        canvas {
+            display: block;
+            background: #16213e;
+            touch-action: none; /* Prevents scrolling on mobile */
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // ES6+ JavaScript Code
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // --- GAME STATE & CONSTANTS ---
+        const GameState = {
+            START: 'START',
+            PLAYING: 'PLAYING',
+            SCORE_PAUSE: 'SCORE_PAUSE',
+            GAME_OVER: 'GAME_OVER'
+        };
+        let currentGameState = GameState.START;
+
+        const WINNING_SCORE = 7;
+        const PADDLE_SPEED = 0.6;
+        const AI_SPEED = 0.28;
+        const PUCK_FRICTION = 0.995;
+        const PUCK_MAX_SPEED = 25;
+
+        // --- GAME OBJECTS & VARIABLES ---
+        let gameArea = { x: 0, y: 0, width: 0, height: 0, scale: 1 };
+        let player, ai, puck;
+        let playerScore = 0;
+        let aiScore = 0;
+        let lastTime = 0;
+        let scorePauseTimer = 0;
+        let particles = [];
+        let keys = {};
+        let mouse = { x: 0, y: 0 };
+
+        // --- AUDIO SETUP ---
+        let audioCtx;
+        function setupAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        function playSound(type) {
+            if (!audioCtx) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            gainNode.gain.value = 0.1;
+
+            const now = audioCtx.currentTime;
+
+            switch (type) {
+                case 'hit':
+                    oscillator.type = 'triangle';
+                    oscillator.frequency.setValueAtTime(440, now);
+                    gainNode.gain.exponentialRampToValueAtTime(0.00001, now + 0.2);
+                    break;
+                case 'wall':
+                    oscillator.type = 'square';
+                    oscillator.frequency.setValueAtTime(220, now);
+                    gainNode.gain.exponentialRampToValueAtTime(0.00001, now + 0.15);
+                    break;
+                case 'goal':
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(523, now); // C5
+                    oscillator.frequency.setValueAtTime(659, now + 0.1); // E5
+                    oscillator.frequency.setValueAtTime(784, now + 0.2); // G5
+                    gainNode.gain.exponentialRampToValueAtTime(0.00001, now + 0.5);
+                    break;
+            }
+
+            oscillator.start(now);
+            oscillator.stop(now + 0.5);
+        }
+
+        // --- CLASSES ---
+        class Vector2 {
+            constructor(x = 0, y = 0) {
+                this.x = x;
+                this.y = y;
+            }
+            add(vec) {
+                return new Vector2(this.x + vec.x, this.y + vec.y);
+            }
+            subtract(vec) {
+                return new Vector2(this.x - vec.x, this.y - vec.y);
+            }
+            multiply(scalar) {
+                return new Vector2(this.x * scalar, this.y * scalar);
+            }
+            magnitude() {
+                return Math.sqrt(this.x * this.x + this.y * this.y);
+            }
+            normalize() {
+                const mag = this.magnitude();
+                return mag > 0 ? new Vector2(this.x / mag, this.y / mag) : new Vector2();
+            }
+        }
+        
+        class Circle {
+            constructor(x, y, radius, color) {
+                this.pos = new Vector2(x, y);
+                this.vel = new Vector2();
+                this.radius = radius;
+                this.color = color;
+            }
+
+            draw(context) {
+                const grad = context.createRadialGradient(
+                    this.pos.x - this.radius * 0.2, this.pos.y - this.radius * 0.2, this.radius * 0.1,
+                    this.pos.x, this.pos.y, this.radius
+                );
+                grad.addColorStop(0, 'rgba(255,255,255,0.6)');
+                grad.addColorStop(1, this.color);
+
+                context.beginPath();
+                context.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+                context.fillStyle = grad;
+                context.fill();
+                context.strokeStyle = 'rgba(0,0,0,0.2)';
+                context.lineWidth = 2 * gameArea.scale;
+                context.stroke();
+            }
+        }
+
+        class Paddle extends Circle {
+            constructor(x, y, radius, color, isPlayer = false) {
+                super(x, y, radius, color);
+                this.isPlayer = isPlayer;
+                this.targetPos = new Vector2(x, y);
+            }
+
+            update(deltaTime) {
+                if (this.isPlayer) {
+                    // Keyboard controls
+                    let moveDir = new Vector2();
+                    if (keys['w'] || keys['arrowup']) moveDir.y -= 1;
+                    if (keys['s'] || keys['arrowdown']) moveDir.y += 1;
+                    if (keys['a'] || keys['arrowleft']) moveDir.x -= 1;
+                    if (keys['d'] || keys['arrowright']) moveDir.x += 1;
+
+                    if (moveDir.magnitude() > 0) {
+                       this.targetPos = this.pos.add(moveDir.normalize().multiply(PADDLE_SPEED * deltaTime));
+                    } else {
+                       // Mouse controls take over if no keys pressed
+                       this.targetPos.x = mouse.x;
+                       this.targetPos.y = mouse.y;
+                    }
+
+                    // Move towards target position, creating a slight lag for smoother feel
+                    const moveVector = this.targetPos.subtract(this.pos);
+                    this.vel = moveVector.multiply(0.2); // Adjust multiplier for responsiveness
+                    this.pos = this.pos.add(this.vel);
+
+                } else { // AI logic
+                    const targetX = puck.pos.x;
+                    let targetY;
+
+                    // Defensive position
+                    const defensiveY = gameArea.y + gameArea.height / 4;
+
+                    if (puck.vel.y < 0 && puck.pos.y < gameArea.y + gameArea.height / 2) {
+                        // Puck moving towards AI, AI becomes aggressive
+                        targetY = puck.pos.y;
+                    } else {
+                        // Puck on player's side, AI returns to defensive position
+                        targetY = defensiveY;
+                    }
+                    
+                    const distToTarget = Math.sqrt(Math.pow(targetX - this.pos.x, 2) + Math.pow(targetY - this.pos.y, 2));
+                    const aiMoveSpeed = AI_SPEED * (1 + distToTarget / gameArea.height); // AI moves faster when far from puck
+                    const moveVector = new Vector2(targetX - this.pos.x, targetY - this.pos.y);
+                    this.pos = this.pos.add(moveVector.normalize().multiply(Math.min(aiMoveSpeed * deltaTime, distToTarget)));
+                }
+
+                // Constrain paddle to its half
+                if (this.isPlayer) {
+                    this.pos.x = Math.max(this.radius + gameArea.x, Math.min(this.pos.x, gameArea.x + gameArea.width - this.radius));
+                    this.pos.y = Math.max(gameArea.y + gameArea.height / 2 + this.radius, Math.min(this.pos.y, gameArea.y + gameArea.height - this.radius));
+                } else {
+                    this.pos.x = Math.max(this.radius + gameArea.x, Math.min(this.pos.x, gameArea.x + gameArea.width - this.radius));
+                    this.pos.y = Math.max(gameArea.y + this.radius, Math.min(this.pos.y, gameArea.y + gameArea.height / 2 - this.radius));
+                }
+            }
+        }
+
+        class Puck extends Circle {
+            constructor(x, y, radius, color) {
+                super(x, y, radius, color);
+                this.trail = [];
+            }
+            update(deltaTime) {
+                // Store previous positions for trail effect
+                this.trail.push({x: this.pos.x, y: this.pos.y});
+                if (this.trail.length > 10) {
+                    this.trail.shift();
+                }
+
+                this.pos = this.pos.add(this.vel.multiply(deltaTime));
+                this.vel = this.vel.multiply(PUCK_FRICTION);
+
+                // Speed cap
+                if (this.vel.magnitude() > PUCK_MAX_SPEED) {
+                    this.vel = this.vel.normalize().multiply(PUCK_MAX_SPEED);
+                }
+            }
+            draw(context) {
+                // Draw trail
+                for (let i = 0; i < this.trail.length; i++) {
+                    const ratio = i / this.trail.length;
+                    context.beginPath();
+                    context.arc(this.trail[i].x, this.trail[i].y, this.radius * ratio, 0, Math.PI * 2);
+                    context.fillStyle = `rgba(255, 255, 80, ${ratio * 0.3})`;
+                    context.fill();
+                }
+                super.draw(context); // Draw the main puck
+            }
+            reset(direction) {
+                this.pos.x = gameArea.x + gameArea.width / 2;
+                this.pos.y = gameArea.y + gameArea.height / 2;
+                this.trail = [];
+                // Give a slight push towards the scorer
+                this.vel = new Vector2(0, (direction * 5));
+            }
+        }
+
+        class Particle {
+            constructor(x, y, color) {
+                this.pos = new Vector2(x, y);
+                this.vel = new Vector2(Math.random() * 6 - 3, Math.random() * 6 - 3);
+                this.radius = (Math.random() * 3 + 1) * gameArea.scale;
+                this.lifespan = 100;
+                this.color = color;
+            }
+            update() {
+                this.pos = this.pos.add(this.vel);
+                this.lifespan--;
+            }
+            draw(context) {
+                context.beginPath();
+                context.arc(this.pos.x, this.pos.y, this.radius * (this.lifespan / 100), 0, Math.PI * 2);
+                context.fillStyle = `rgba(${this.color}, ${this.lifespan / 100})`;
+                context.fill();
+            }
+        }
+
+        // --- GAME LOGIC ---
+
+        function init() {
+            resizeCanvas();
+            // resetGame() is called inside resizeCanvas via re-initialization of objects
+            window.addEventListener('resize', resizeCanvas);
+            window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; });
+            window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+            canvas.addEventListener('mousemove', e => {
+                const rect = canvas.getBoundingClientRect();
+                mouse.x = e.clientX - rect.left;
+                mouse.y = e.clientY - rect.top;
+            });
+            canvas.addEventListener('touchmove', e => {
+                e.preventDefault();
+                const rect = canvas.getBoundingClientRect();
+                mouse.x = e.touches[0].clientX - rect.left;
+                mouse.y = e.touches[0].clientY - rect.top;
+            }, { passive: false });
+
+            const startHandler = () => {
+                setupAudio();
+                if (currentGameState === GameState.START || currentGameState === GameState.GAME_OVER) {
+                    resetGame();
+                    currentGameState = GameState.PLAYING;
+                }
+            };
+            canvas.addEventListener('mousedown', startHandler);
+            canvas.addEventListener('touchstart', startHandler);
+            
+            lastTime = performance.now();
+            gameLoop(lastTime);
+        }
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+
+            // Maintain a 1:2 aspect ratio for the game table
+            const aspectRatio = 1 / 2;
+            let gameW, gameH;
+            if (canvas.width / canvas.height > aspectRatio) {
+                gameH = canvas.height * 0.9;
+                gameW = gameH * aspectRatio;
+            } else {
+                gameW = canvas.width * 0.9;
+                gameH = gameW / aspectRatio;
+            }
+            
+            gameArea = {
+                width: gameW,
+                height: gameH,
+                x: (canvas.width - gameW) / 2,
+                y: (canvas.height - gameH) / 2,
+                scale: gameW / 500 // Base width of 500 for scaling
+            };
+            
+            // Re-initialize objects with new sizes
+            const paddleRadius = gameArea.width * 0.08;
+            const puckRadius = gameArea.width * 0.05;
+
+            player = new Paddle(
+                gameArea.x + gameArea.width / 2,
+                gameArea.y + gameArea.height * 0.8,
+                paddleRadius, '#e74c3c', true
+            );
+            ai = new Paddle(
+                gameArea.x + gameArea.width / 2,
+                gameArea.y + gameArea.height * 0.2,
+                paddleRadius, '#3498db', false
+            );
+            puck = new Puck(
+                gameArea.x + gameArea.width / 2,
+                gameArea.y + gameArea.height / 2,
+                puckRadius, '#f1c40f'
+            );
+            
+            // If the game hasn't started, keep score at 0. Otherwise, preserve it.
+            if (currentGameState !== GameState.PLAYING && currentGameState !== GameState.SCORE_PAUSE) {
+                playerScore = 0;
+                aiScore = 0;
+            }
+        }
+
+        function resetGame() {
+            playerScore = 0;
+            aiScore = 0;
+            resetRound(1);
+        }
+        
+        function resetRound(direction) {
+            puck.reset(direction);
+            player.pos.x = gameArea.x + gameArea.width / 2;
+            player.pos.y = gameArea.y + gameArea.height * 0.8;
+            player.vel = new Vector2();
+            ai.pos.x = gameArea.x + gameArea.width / 2;
+            ai.pos.y = gameArea.y + gameArea.height * 0.2;
+            ai.vel = new Vector2();
+        }
+
+        function handleCollisions() {
+            // Puck vs Walls
+            if (puck.pos.x - puck.radius < gameArea.x) {
+                puck.pos.x = gameArea.x + puck.radius;
+                puck.vel.x *= -1;
+                playSound('wall');
+            }
+            if (puck.pos.x + puck.radius > gameArea.x + gameArea.width) {
+                puck.pos.x = gameArea.x + gameArea.width - puck.radius;
+                puck.vel.x *= -1;
+                playSound('wall');
+            }
+             // Top/bottom walls handled with goals
+            if (puck.pos.y - puck.radius < gameArea.y || puck.pos.y + puck.radius > gameArea.y + gameArea.height) {
+                const goalWidth = gameArea.width * 0.4;
+                const goalMinX = gameArea.x + (gameArea.width - goalWidth) / 2;
+                const goalMaxX = goalMinX + goalWidth;
+
+                if (puck.pos.x > goalMinX && puck.pos.x < goalMaxX) {
+                    // GOAL!
+                    if (puck.pos.y < gameArea.y + gameArea.height / 2) { // Player scores
+                        playerScore++;
+                        createGoalExplosion(puck.pos.x, gameArea.y, '231, 76, 60'); // Player color
+                        resetRound(1); // Puck moves towards AI
+                    } else { // AI scores
+                        aiScore++;
+                        createGoalExplosion(puck.pos.x, gameArea.y + gameArea.height, '52, 152, 219'); // AI color
+                        resetRound(-1); // Puck moves towards Player
+                    }
+                    playSound('goal');
+                    
+                    if(playerScore >= WINNING_SCORE || aiScore >= WINNING_SCORE) {
+                        currentGameState = GameState.GAME_OVER;
+                    } else {
+                        currentGameState = GameState.SCORE_PAUSE;
+                        scorePauseTimer = 1.0; // 1 second pause
+                    }
+
+                } else {
+                    // Hit wall next to goal
+                    if (puck.pos.y - puck.radius < gameArea.y) {
+                        puck.pos.y = gameArea.y + puck.radius;
+                    } else {
+                        puck.pos.y = gameArea.y + gameArea.height - puck.radius;
+                    }
+                    puck.vel.y *= -1;
+                    playSound('wall');
+                }
+            }
+            
+            // Puck vs Paddles
+            [player, ai].forEach(paddle => {
+                const distVec = puck.pos.subtract(paddle.pos);
+                const distance = distVec.magnitude();
+                const combinedRadii = puck.radius + paddle.radius;
+
+                if (distance < combinedRadii) {
+                    playSound('hit');
+                    // Separate them to prevent sticking
+                    const overlap = combinedRadii - distance;
+                    const separationVector = distVec.normalize().multiply(overlap);
+                    puck.pos = puck.pos.add(separationVector);
+
+                    // Collision response
+                    const normal = distVec.normalize();
+                    const relativeVel = puck.vel.subtract(paddle.vel);
+                    const speed = relativeVel.x * normal.x + relativeVel.y * normal.y;
+                    
+                    if (speed < 0) {
+                        const impulse = (2 * speed) / 2; // Assume mass of 1 for both
+                        puck.vel = puck.vel.subtract(normal.multiply(impulse));
+                        // Add paddle's velocity to give it some 'oomph'
+                        puck.vel = puck.vel.add(paddle.vel.multiply(0.2));
+                    }
+                }
+            });
+        }
+        
+        function createGoalExplosion(x, y, color) {
+            for (let i = 0; i < 50; i++) {
+                particles.push(new Particle(x, y, color));
+            }
+        }
+        
+        function update(deltaTime) {
+            // Update particles regardless of game state for goal explosions on game over
+            particles.forEach((p, index) => {
+                p.update();
+                if (p.lifespan <= 0) {
+                    particles.splice(index, 1);
+                }
+            });
+
+            if (currentGameState === GameState.SCORE_PAUSE) {
+                scorePauseTimer -= deltaTime / 1000;
+                if (scorePauseTimer <= 0) {
+                    currentGameState = GameState.PLAYING;
+                }
+                return; // Don't update game objects during score pause
+            }
+
+            if (currentGameState !== GameState.PLAYING) return;
+            
+            player.update(deltaTime);
+            ai.update(deltaTime);
+            puck.update(deltaTime);
+
+            handleCollisions();
+        }
+        
+        function draw() {
+            // Clear canvas
+            ctx.fillStyle = '#16213e';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            drawTable();
+            
+            // Always draw game objects, even behind overlays
+            particles.forEach(p => p.draw(ctx));
+            puck.draw(ctx);
+            player.draw(ctx);
+            ai.draw(ctx);
+            drawScores();
+            
+            if (currentGameState === GameState.START) {
+                drawStartScreen();
+            } else if (currentGameState === GameState.GAME_OVER) {
+                drawGameOverScreen();
+            }
+        }
+
+        function drawTable() {
+            const { x, y, width, height } = gameArea;
+            
+            // Table background
+            const grad = ctx.createLinearGradient(x, y, x, y + height);
+            grad.addColorStop(0, '#1a2a4c');
+            grad.addColorStop(1, '#1c305c');
+            ctx.fillStyle = grad;
+            ctx.fillRect(x, y, width, height);
+            
+            // Center line
+            ctx.beginPath();
+            ctx.moveTo(x, y + height / 2);
+            ctx.lineTo(x + width, y + height / 2);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.lineWidth = 4 * gameArea.scale;
+            ctx.stroke();
+
+            // Center circle
+            ctx.beginPath();
+            ctx.arc(x + width / 2, y + height / 2, width * 0.15, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // Goals
+            const goalWidth = width * 0.4;
+            const goalDepth = 15 * gameArea.scale;
+            ctx.lineWidth = 8 * gameArea.scale;
+            // AI Goal (top)
+            ctx.strokeStyle = '#3498db';
+            ctx.strokeRect(x + (width - goalWidth) / 2, y - goalDepth, goalWidth, goalDepth);
+            // Player Goal (bottom)
+            ctx.strokeStyle = '#e74c3c';
+            ctx.strokeRect(x + (width - goalWidth) / 2, y + height, goalWidth, goalDepth);
+
+        }
+        
+        function drawScores() {
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = `${60 * gameArea.scale}px 'Arial'`;
+            
+            // AI Score
+            ctx.fillStyle = 'rgba(52, 152, 219, 0.5)';
+            ctx.save();
+            ctx.translate(gameArea.x + gameArea.width / 2, gameArea.y + gameArea.height / 4);
+            ctx.rotate(Math.PI);
+            ctx.fillText(aiScore, 0, 0);
+            ctx.restore();
+            
+            // Player Score
+            ctx.fillStyle = 'rgba(231, 76, 60, 0.5)';
+            ctx.fillText(playerScore, gameArea.x + gameArea.width / 2, gameArea.y + gameArea.height * 0.75);
+        }
+
+        function drawTextWithBG(text, x, y, size, fg, bg) {
+             ctx.font = `${size}px 'Arial'`;
+             ctx.textAlign = 'center';
+             ctx.textBaseline = 'middle';
+             const padding = size * 0.2;
+             const textMetrics = ctx.measureText(text);
+             const textHeight = size;
+             
+             ctx.fillStyle = bg;
+             ctx.fillRect(x - textMetrics.width / 2 - padding, y - textHeight / 2 - padding, textMetrics.width + padding * 2, textHeight + padding * 2);
+             
+             ctx.fillStyle = fg;
+             ctx.fillText(text, x, y);
+        }
+
+        function drawStartScreen() {
+            drawOverlay();
+            const cx = canvas.width / 2;
+            const cy = canvas.height / 2;
+            
+            ctx.fillStyle = '#fff';
+            ctx.font = `${80 * gameArea.scale}px 'Arial Black'`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('GLIDE RUSH', cx, cy - 100 * gameArea.scale);
+
+            ctx.font = `${20 * gameArea.scale}px 'Arial'`;
+            ctx.fillText('First to 7 points wins!', cx, cy - 50 * gameArea.scale);
+
+            drawTextWithBG('Controls:', cx, cy + 20 * gameArea.scale, 24 * gameArea.scale, '#fff', 'rgba(0,0,0,0.5)');
+            ctx.fillText('🖱️ Mouse to move', cx, cy + 60 * gameArea.scale);
+            ctx.fillText('⌨️ WASD/Arrows to move', cx, cy + 90 * gameArea.scale);
+
+            ctx.fillStyle = '#f1c40f';
+            ctx.font = `bold ${30 * gameArea.scale}px 'Arial'`;
+            ctx.globalAlpha = 0.5 + Math.sin(performance.now() / 300) * 0.5;
+            ctx.fillText('Click or Tap to Start', cx, cy + 160 * gameArea.scale);
+            ctx.globalAlpha = 1.0;
+        }
+
+        function drawGameOverScreen() {
+            drawOverlay();
+            const cx = canvas.width / 2;
+            const cy = canvas.height / 2;
+
+            const winner = playerScore > aiScore ? 'You Win! 🏆' : 'You Lose 😔';
+            const winnerColor = playerScore > aiScore ? '#2ecc71' : '#e74c3c';
+            
+            ctx.fillStyle = '#fff';
+            ctx.font = `${60 * gameArea.scale}px 'Arial Black'`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('GAME OVER', cx, cy - 80 * gameArea.scale);
+
+            ctx.fillStyle = winnerColor;
+            ctx.font = `${40 * gameArea.scale}px 'Arial'`;
+            ctx.fillText(winner, cx, cy);
+
+            ctx.fillStyle = '#f1c40f';
+            ctx.font = `bold ${30 * gameArea.scale}px 'Arial'`;
+            ctx.globalAlpha = 0.5 + Math.sin(performance.now() / 300) * 0.5;
+            ctx.fillText('Click or Tap to Restart', cx, cy + 100 * gameArea.scale);
+            ctx.globalAlpha = 1.0;
+        }
+        
+        function drawOverlay() {
+            ctx.fillStyle = 'rgba(22, 33, 62, 0.8)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        function gameLoop(timestamp) {
+            const deltaTime = Math.min(timestamp - lastTime, 50); // Delta time capping to prevent physics bugs
+            lastTime = timestamp;
+
+            update(deltaTime);
+            draw();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- START GAME ---
+        init();
+    </script>
+</body>
+</html>
