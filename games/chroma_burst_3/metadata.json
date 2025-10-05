@@ -1,0 +1,8 @@
+{
+  "name": "Chroma Burst 3",
+  "type": "bubble shooter",
+  "folder": "chroma_burst_3",
+  "description": "Unleash spectacular chain reactions that detonate across the screen in a vibrant cascade of color. Master powerful new abilities and clever puzzles for the ultimate, satisfying burst",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
