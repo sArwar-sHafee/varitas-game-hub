@@ -1,0 +1,8 @@
+{
+  "name": "Leap Kings",
+  "type": "checkers",
+  "folder": "leap_kings",
+  "description": "Unleash explosive, chain-reaction leaps to decimate your opponent's forces in a fast-paced battle of wits. Crown your king to unlock powerful new moves and dominate the board with unstoppable combos",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

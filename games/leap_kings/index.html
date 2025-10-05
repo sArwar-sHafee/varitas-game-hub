@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leap Kings</title>
+    <style>
+        :root {
+            --primary-color: #4a00e0;
+            --secondary-color: #8e2de2;
+            --accent-color: #ffc837;
+            --light-square: #f2e9e4;
+            --dark-square: #8a7a70;
+            --font-family: 'Arial', sans-serif;
+            --text-color: #fff;
+            --shadow-color: rgba(0, 0, 0, 0.3);
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: var(--font-family);
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: var(--text-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #game-container {
+            position: relative;
+            width: 95vw;
+            height: 95vh;
+            max-width: 800px;
+            max-height: 800px;
+            box-shadow: 0 10px 30px var(--shadow-color);
+            border-radius: 15px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #game-canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            opacity: 1;
+            transition: opacity 0.5s ease;
+            z-index: 10;
+        }
+
+        .overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .overlay h1 {
+            font-size: 5rem;
+            margin-bottom: 0;
+            text-shadow: 0 5px 15px var(--shadow-color);
+            background: -webkit-linear-gradient(45deg, var(--accent-color), #f7971e);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .overlay p {
+            font-size: 1.5rem;
+            max-width: 80%;
+            margin: 20px 0;
+        }
+        
+        .overlay .winner-text {
+            font-size: 2.5rem;
+            font-weight: bold;
+        }
+
+        .button {
+            padding: 15px 30px;
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: var(--primary-color);
+            background: linear-gradient(45deg, var(--accent-color), #f7971e);
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 5px 15px var(--shadow-color);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px var(--shadow-color);
+        }
+
+        #ui-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+            font-size: 1.2rem;
+            text-shadow: 0 2px 5px var(--shadow-color);
+        }
+
+        .score-box {
+            display: flex;
+            align-items: center;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 10px 15px;
+            border-radius: 10px;
+        }
+
+        .player-indicator {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            margin-right: 10px;
+            border: 3px solid #fff;
+        }
+
+        #top-ui {
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        #bottom-ui {
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .instructions {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 10px 15px;
+            border-radius: 10px;
+            text-align: right;
+        }
+
+        @media (max-width: 600px) {
+            .overlay h1 { font-size: 3rem; }
+            .overlay p { font-size: 1rem; }
+            .button { font-size: 1.2rem; padding: 12px 25px;}
+            #ui-overlay { font-size: 1rem; padding: 10px; }
+            .player-indicator { width: 20px; height: 20px; }
+            .instructions { font-size: 0.8rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="game-canvas"></canvas>
+
+        <div id="ui-overlay">
+            <div id="top-ui">
+                <div class="score-box" id="player2-score-box">
+                    <div class="player-indicator" style="background-color: #D32F2F;"></div>
+                    <span>Player 2 (Red): <span id="player2-score">0</span></span>
+                </div>
+                <div class="instructions">
+                    <strong>Controls:</strong> Click to select & move.
+                    <br>
+                    <strong>[R]</strong> to Restart
+                </div>
+            </div>
+            <div id="bottom-ui">
+                 <div class="score-box" id="player1-score-box">
+                    <div class="player-indicator" style="background-color: #1a1a1a;"></div>
+                    <span>Player 1 (Black): <span id="player1-score">0</span></span>
+                </div>
+                 <div id="turn-indicator" style="align-self: flex-end;" class="score-box">
+                    Current Turn: <span id="turn-text">Black</span>
+                </div>
+            </div>
+        </div>
+
+        <div id="start-screen" class="overlay">
+            <h1>👑 Leap Kings 👑</h1>
+            <p>A classic game of Checkers with a royal touch. <br>Capture all your opponent's pieces to win!</p>
+            <button id="start-button" class="button">Start Game</button>
+        </div>
+
+        <div id="game-over-screen" class="overlay hidden">
+            <h1>Game Over</h1>
+            <p class="winner-text" id="winner-text"></p>
+            <button id="restart-button" class="button">Play Again</button>
+        </div>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+
+        // UI Elements
+        const startScreen = document.getElementById('start-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const startButton = document.getElementById('start-button');
+        const restartButton = document.getElementById('restart-button');
+        const winnerText = document.getElementById('winner-text');
+        const player1ScoreEl = document.getElementById('player1-score');
+        const player2ScoreEl = document.getElementById('player2-score');
+        const turnTextEl = document.getElementById('turn-text');
+        const player1ScoreBox = document.getElementById('player1-score-box');
+        const player2ScoreBox = document.getElementById('player2-score-box');
+        
+        // Game Constants
+        const BOARD_SIZE = 8;
+        const P1_COLOR = '#1a1a1a';
+        const P2_COLOR = '#D32F2F';
+        const KING_CROWN = '👑';
+        const LIGHT_SQUARE_COLOR = getComputedStyle(document.documentElement).getPropertyValue('--light-square').trim();
+        const DARK_SQUARE_COLOR = getComputedStyle(document.documentElement).getPropertyValue('--dark-square').trim();
+        const HIGHLIGHT_COLOR = 'rgba(255, 200, 55, 0.7)';
+        const MOVE_HINT_COLOR = 'rgba(255, 255, 255, 0.4)';
+
+        // Game State
+        let gameState = 'START_SCREEN';
+        let board = [];
+        let currentPlayer = 1;
+        let selectedPiece = null;
+        let validMoves = [];
+        let jumpAvailable = false;
+        let scores = { 1: 0, 2: 0 };
+        let squareSize, pieceRadius;
+        let animations = [];
+        
+        // Sound Engine
+        class SoundEngine {
+            constructor() {
+                this.audioCtx = null;
+            }
+
+            _init() {
+                if (!this.audioCtx) {
+                    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+            }
+            
+            _playSound(type, frequency, duration) {
+                this._init();
+                if (!this.audioCtx) return;
+
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+
+                oscillator.type = type;
+                oscillator.frequency.setValueAtTime(frequency, this.audioCtx.currentTime);
+                gainNode.gain.setValueAtTime(0.2, this.audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + duration);
+
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+                
+                oscillator.start();
+                oscillator.stop(this.audioCtx.currentTime + duration);
+            }
+
+            playSelect() { this._playSound('sine', 440, 0.1); }
+            playMove() { this._playSound('sine', 330, 0.15); }
+            playCapture() { this._playSound('triangle', 550, 0.2); }
+            playKing() { this._playSound('square', 660, 0.3); }
+            playWin() { this._playSound('sawtooth', 261, 0.5); }
+            playStart() { this._playSound('sine', 220, 0.2); }
+        }
+        const sound = new SoundEngine();
+
+        // Game Setup
+        function init() {
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+            canvas.addEventListener('mousedown', handleMouseDown);
+            window.addEventListener('keydown', handleKeyDown);
+            
+            startButton.addEventListener('click', startGame);
+            restartButton.addEventListener('click', startGame);
+            
+            gameLoop();
+        }
+
+        function resizeCanvas() {
+            const container = document.getElementById('game-container');
+            const size = Math.min(container.clientWidth, container.clientHeight);
+            canvas.width = size;
+            canvas.height = size;
+            squareSize = canvas.width / BOARD_SIZE;
+            pieceRadius = squareSize * 0.38;
+        }
+
+        function startGame() {
+            sound.playStart();
+            gameState = 'PLAYING';
+            startScreen.classList.add('hidden');
+            gameOverScreen.classList.add('hidden');
+            
+            board = [];
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                board.push([]);
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    if (r < 3 && (r + c) % 2 !== 0) {
+                        board[r].push({ player: 2, isKing: false });
+                    } else if (r > 4 && (r + c) % 2 !== 0) {
+                        board[r].push({ player: 1, isKing: false });
+                    } else {
+                        board[r].push(null);
+                    }
+                }
+            }
+            
+            currentPlayer = 1;
+            selectedPiece = null;
+            validMoves = [];
+            scores = { 1: 0, 2: 0 };
+            updateForcedJumps();
+            updateUI();
+        }
+
+        // Game Loop
+        let lastTime = 0;
+        function gameLoop(timestamp) {
+            const deltaTime = timestamp - lastTime;
+            lastTime = timestamp;
+            
+            if (gameState === 'PLAYING') {
+                update(deltaTime);
+            }
+            draw();
+            
+            requestAnimationFrame(gameLoop);
+        }
+
+        function update(deltaTime) {
+             // Update animations
+            for (let i = animations.length - 1; i >= 0; i--) {
+                const anim = animations[i];
+                anim.progress += anim.speed * (deltaTime / 1000);
+                if (anim.progress >= 1) {
+                    anim.progress = 1;
+                    anim.onEnd();
+                    animations.splice(i, 1);
+                }
+            }
+        }
+        
+        // Drawing
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawBoard();
+            drawPieces();
+            drawHighlights();
+            drawAnimations();
+        }
+
+        function drawBoard() {
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    ctx.fillStyle = (r + c) % 2 === 0 ? LIGHT_SQUARE_COLOR : DARK_SQUARE_COLOR;
+                    ctx.fillRect(c * squareSize, r * squareSize, squareSize, squareSize);
+                }
+            }
+        }
+
+        function drawPieces() {
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    const piece = board[r][c];
+                     // Don't draw pieces that are currently being animated
+                    if (piece && !animations.some(a => a.piece.row === r && a.piece.col === c)) {
+                        drawPiece(piece, c * squareSize + squareSize / 2, r * squareSize + squareSize / 2);
+                    }
+                }
+            }
+        }
+
+        function drawPiece(piece, x, y) {
+            ctx.beginPath();
+            ctx.arc(x, y, pieceRadius, 0, Math.PI * 2);
+            
+            const gradient = ctx.createRadialGradient(x - pieceRadius * 0.3, y - pieceRadius * 0.3, pieceRadius * 0.1, x, y, pieceRadius);
+            if (piece.player === 1) {
+                gradient.addColorStop(0, '#6d6d6d');
+                gradient.addColorStop(1, P1_COLOR);
+            } else {
+                gradient.addColorStop(0, '#ff6b6b');
+                gradient.addColorStop(1, P2_COLOR);
+            }
+            ctx.fillStyle = gradient;
+            ctx.fill();
+
+            ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            if (piece.isKing) {
+                ctx.font = `${pieceRadius * 1.5}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(KING_CROWN, x, y);
+            }
+        }
+        
+        function drawHighlights() {
+            if (selectedPiece) {
+                ctx.fillStyle = HIGHLIGHT_COLOR;
+                ctx.fillRect(selectedPiece.c * squareSize, selectedPiece.r * squareSize, squareSize, squareSize);
+            }
+
+            validMoves.forEach(move => {
+                ctx.beginPath();
+                ctx.arc(move.c * squareSize + squareSize / 2, move.r * squareSize + squareSize / 2, squareSize * 0.15, 0, Math.PI * 2);
+                ctx.fillStyle = MOVE_HINT_COLOR;
+                ctx.fill();
+            });
+        }
+        
+        function drawAnimations() {
+            animations.forEach(anim => {
+                const dx = anim.to.c - anim.from.c;
+                const dy = anim.to.r - anim.from.r;
+                
+                // Ease out cubic interpolation
+                const t = 1 - Math.pow(1 - anim.progress, 3);
+                
+                const currentX = (anim.from.c + dx * t) * squareSize + squareSize / 2;
+                const currentY = (anim.from.r + dy * t) * squareSize + squareSize / 2;
+                
+                drawPiece(anim.piece, currentX, currentY);
+            });
+        }
+
+        // Input Handling
+        function handleMouseDown(e) {
+            if (gameState !== 'PLAYING' || animations.length > 0) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const c = Math.floor(x / squareSize);
+            const r = Math.floor(y / squareSize);
+
+            if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) return;
+            
+            const clickedMove = validMoves.find(move => move.r === r && move.c === c);
+
+            if (clickedMove) {
+                movePiece(selectedPiece, clickedMove);
+            } else {
+                selectPiece(r, c);
+            }
+        }
+        
+        function handleKeyDown(e) {
+            if (e.key.toLowerCase() === 'r') {
+                startGame();
+            }
+        }
+
+        // Game Logic
+        function selectPiece(r, c) {
+            const piece = board[r][c];
+            if (piece && piece.player === currentPlayer) {
+                // If a jump is available, only allow selecting pieces that can jump
+                if (jumpAvailable) {
+                    const { jumps } = _calculateMovesForPiece(r, c);
+                    if (jumps.length === 0) {
+                        selectedPiece = null;
+                        validMoves = [];
+                        return;
+                    }
+                }
+                
+                selectedPiece = { r, c, piece };
+                validMoves = getValidMoves(r, c);
+                sound.playSelect();
+            } else {
+                selectedPiece = null;
+                validMoves = [];
+            }
+        }
+        
+        function _calculateMovesForPiece(r, c) {
+            const piece = board[r][c];
+            if (!piece) return { moves: [], jumps: [] };
+
+            const moves = [];
+            const jumps = [];
+            const directions = piece.isKing 
+                ? [[-1, -1], [-1, 1], [1, -1], [1, 1]] 
+                : (piece.player === 1 ? [[-1, -1], [-1, 1]] : [[1, -1], [1, 1]]);
+
+            for (const [dr, dc] of directions) {
+                const r1 = r + dr, c1 = c + dc;
+                if (isValidSquare(r1, c1)) {
+                    if (board[r1][c1] === null) {
+                        moves.push({ r: r1, c: c1, isJump: false });
+                    } else if (board[r1][c1].player !== piece.player) {
+                        const r2 = r + dr * 2, c2 = c + dc * 2;
+                        if (isValidSquare(r2, c2) && board[r2][c2] === null) {
+                            jumps.push({ r: r2, c: c2, isJump: true, jumped: { r: r1, c: c1 } });
+                        }
+                    }
+                }
+            }
+            return { moves, jumps };
+        }
+
+        function updateForcedJumps() {
+            jumpAvailable = false;
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    const piece = board[r][c];
+                    if (piece && piece.player === currentPlayer) {
+                        if (_calculateMovesForPiece(r, c).jumps.length > 0) {
+                            jumpAvailable = true;
+                            return; 
+                        }
+                    }
+                }
+            }
+        }
+
+        function getValidMoves(r, c) {
+            const { moves, jumps } = _calculateMovesForPiece(r, c);
+            return jumpAvailable ? jumps : moves;
+        }
+
+        function isValidSquare(r, c) {
+            return r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE;
+        }
+
+        function movePiece(from, to) {
+            const piece = board[from.r][from.c];
+            
+            const onAnimationEnd = () => {
+                board[to.r][to.c] = piece;
+    
+                if (to.isJump) {
+                    board[to.jumped.r][to.jumped.c] = null;
+                    scores[currentPlayer]++;
+                    sound.playCapture();
+                } else {
+                    sound.playMove();
+                }
+    
+                // King me!
+                if ((piece.player === 1 && to.r === 0) || (piece.player === 2 && to.r === BOARD_SIZE - 1)) {
+                    if(!piece.isKing){
+                       piece.isKing = true;
+                       sound.playKing();
+                    }
+                }
+    
+                // Check for multi-jump
+                if (to.isJump) {
+                    const multiJumps = _calculateMovesForPiece(to.r, to.c).jumps;
+                    if (multiJumps.length > 0) {
+                        jumpAvailable = true; // Stay in jump mode
+                        selectPiece(to.r, to.c); // Keep turn, force next jump
+                        updateUI();
+                        checkGameOver();
+                        return; // End the function here to not switch turns
+                    }
+                }
+                
+                switchTurn();
+                updateUI();
+                checkGameOver();
+            };
+            
+            animations.push({
+                piece: piece,
+                from: {r: from.r, c: from.c},
+                to: {r: to.r, c: to.c},
+                progress: 0,
+                speed: 3, // units per second
+                onEnd: onAnimationEnd
+            });
+
+            board[from.r][from.c] = null; 
+            selectedPiece = null;
+            validMoves = [];
+        }
+
+        function switchTurn() {
+            currentPlayer = currentPlayer === 1 ? 2 : 1;
+            updateForcedJumps();
+        }
+
+        function checkGameOver() {
+            let p1Pieces = 0, p2Pieces = 0;
+            let p1Moves = 0, p2Moves = 0;
+
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    const piece = board[r][c];
+                    if (piece) {
+                        const { moves, jumps } = _calculateMovesForPiece(r, c);
+                        const totalMoves = moves.length + jumps.length;
+                        if (piece.player === 1) {
+                            p1Pieces++;
+                            p1Moves += totalMoves;
+                        } else {
+                            p2Pieces++;
+                            p2Moves += totalMoves;
+                        }
+                    }
+                }
+            }
+
+            // Temporarily set to the other player to check their available moves for stalemate
+            const nextPlayer = currentPlayer === 1 ? 2 : 1;
+            let nextPlayerHasMoves = false;
+            for(let r = 0; r < BOARD_SIZE; r++) {
+                for(let c = 0; c < BOARD_SIZE; c++) {
+                    const piece = board[r][c];
+                    if(piece && piece.player === nextPlayer) {
+                         const { moves, jumps } = _calculateMovesForPiece(r, c);
+                         if(moves.length > 0 || jumps.length > 0){
+                             nextPlayerHasMoves = true;
+                             break;
+                         }
+                    }
+                }
+                if(nextPlayerHasMoves) break;
+            }
+
+            if (p1Pieces === 0) {
+                endGame(2); // Player 2 wins
+            } else if (p2Pieces === 0) {
+                endGame(1); // Player 1 wins
+            } else if (!nextPlayerHasMoves) {
+                endGame(currentPlayer); // Current player wins as opponent has no moves
+            }
+        }
+
+        function endGame(winner) {
+            gameState = 'GAME_OVER';
+            winnerText.textContent = `Player ${winner} ( ${winner === 1 ? 'Black' : 'Red'} ) Wins!`;
+            gameOverScreen.classList.remove('hidden');
+            sound.playWin();
+        }
+        
+        // UI Update
+        function updateUI() {
+            player1ScoreEl.textContent = scores[1];
+            player2ScoreEl.textContent = scores[2];
+            
+            turnTextEl.textContent = currentPlayer === 1 ? 'Black' : 'Red';
+            
+            if (currentPlayer === 1) {
+                player1ScoreBox.style.boxShadow = '0 0 15px var(--accent-color)';
+                player2ScoreBox.style.boxShadow = 'none';
+            } else {
+                player2ScoreBox.style.boxShadow = '0 0 15px var(--accent-color)';
+                player1ScoreBox.style.boxShadow = 'none';
+            }
+        }
+        
+        // Start the game
+        init();
+    });
+    </script>
+</body>
+</html>
