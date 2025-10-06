@@ -1,0 +1,8 @@
+{
+  "name": "Grid Gambit 2",
+  "type": "minesweeper",
+  "folder": "grid_gambit_2",
+  "description": "Every click is a high-stakes gambit where logic is your only weapon against an explosive grid. Outsmart the danger with strategic precision to unleash satisfying, board-clearing chain reactions.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
