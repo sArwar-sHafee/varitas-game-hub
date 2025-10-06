@@ -1,0 +1,8 @@
+{
+  "name": "Checkered Crown",
+  "type": "chess",
+  "folder": "checkered_crown",
+  "description": "Unleash devastating new powers and tactical abilities that can turn the tide in a single move. Forge a brilliant strategy to corner their king and prove you are worthy of the Checkered Crown",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
