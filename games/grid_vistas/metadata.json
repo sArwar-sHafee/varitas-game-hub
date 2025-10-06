@@ -1,0 +1,8 @@
+{
+  "name": "Grid Vistas",
+  "type": "crossword puzzle",
+  "folder": "grid_vistas",
+  "description": "Embark on a journey across a challenging landscape of clever clues and intersecting words. Each correct answer reveals a new piece of the panorama, leading to the breathtaking view of a conquered grid.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grid Vistas - A Canvas Crossword Game</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100%;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e, #16213e, #0f3460, #e94560);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        canvas {
+            display: block;
+            background-color: #0c0c1e;
+            box-shadow: 0 0 30px rgba(233, 69, 96, 0.5);
+            border-radius: 15px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // ES6+ JavaScript for the "Grid Vistas" Crossword Game
+
+        // --- 1. SOUND UTILITY ---
+        // Uses the Web Audio API to generate simple, programmatic sounds.
+        class Sound {
+            constructor() {
+                try {
+                    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) {
+                    console.warn("Web Audio API is not supported in this browser.");
+                    this.audioCtx = null;
+                }
+            }
+
+            playTone(freq, duration, type = 'sine', vol = 0.5) {
+                if (!this.audioCtx) return;
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+
+                oscillator.type = type;
+                oscillator.frequency.setValueAtTime(freq, this.audioCtx.currentTime);
+                gainNode.gain.setValueAtTime(vol, this.audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.00001, this.audioCtx.currentTime + duration);
+
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+
+                oscillator.start(this.audioCtx.currentTime);
+                oscillator.stop(this.audioCtx.currentTime + duration);
+            }
+
+            playClick() { this.playTone(250, 0.08, 'triangle', 0.3); }
+            playType() { this.playTone(440, 0.05, 'sine', 0.4); }
+            playBackspace() { this.playTone(300, 0.06, 'sawtooth', 0.3); }
+            playError() { this.playTone(150, 0.15, 'square', 0.2); }
+            playSuccess() { this.playTone(523.25, 0.1, 'sine', 0.5); setTimeout(() => this.playTone(659.25, 0.1, 'sine', 0.5), 50); }
+            playWin() {
+                this.playTone(523.25, 0.1, 'sine', 0.5); // C5
+                setTimeout(() => this.playTone(659.25, 0.1, 'sine', 0.5), 100); // E5
+                setTimeout(() => this.playTone(783.99, 0.1, 'sine', 0.5), 200); // G5
+                setTimeout(() => this.playTone(1046.50, 0.2, 'sine', 0.6), 300); // C6
+            }
+        }
+        
+        // --- 2. PARTICLE SYSTEM ---
+        // For celebratory visual effects.
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.size = Math.random() * 5 + 2;
+                this.speedX = Math.random() * 6 - 3;
+                this.speedY = Math.random() * -10 - 2;
+                this.life = 1;
+                this.gravity = 0.3;
+            }
+
+            update() {
+                this.x += this.speedX;
+                this.y += this.speedY;
+                this.speedY += this.gravity;
+                this.life -= 0.02;
+            }
+
+            draw(ctx) {
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+            }
+        }
+
+        // --- 3. PUZZLE DATA ---
+        // A Web Development & Technology themed puzzle.
+        const puzzleData = {
+            title: "Web Dev & Tech",
+            size: 13,
+            grid: [
+                [1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1],
+                [1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1],
+                [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0],
+                [1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1],
+                [0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0],
+                [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1],
+                [0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0],
+                [1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1],
+                [0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
+                [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                [1, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1],
+                [1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1],
+            ],
+            answers: [
+                ['H','T','M','L',0,'H','T','T','P',0,'G','R','I'],
+                ['T',0,0,'O',0,'S',0,0,'I',0,'I',0,'D'],
+                ['M','L','C','S','S','A','P','I','S',0,'N',0,0],
+                ['L',0,'R',0,'C',0,'C',0,'O',0,0,'B','O'],
+                ['J','S','O','N',0,'R','E','A','C','T',0,0,0], // CORRECTED: Array was wrong length and content
+                [0,'A',0,'D',0,0,0,'C',0,'H',0,0,0], // CORRECTED: Content adjusted for consistency
+                ['N','O','D','E',0,'J','A','V','A',0,'S',0,'C'],
+                [0,0,0,'B',0,'A',0,0,'C',0,'V',0,0],
+                ['R','E','A','C','T',0,'B','O','O','L','E','A','N'],
+                [0,'U',0,0,'T',0,'R',0,'G',0,'G',0,'I'],
+                ['D','E','B','U','G',0,'I',0,0,'L','P','I','X'], // CORRECTED: Array was wrong length
+                ['I',0,'G',0,'I',0,0,'P',0,'E',0,0,'T'], // CORRECTED: Content adjusted for consistency
+                ['C','A','C','H','E',0,'T',0,0,'A',0,'S','V'], // CORRECTED: Array was wrong length
+            ].map(row => row.map(cell => cell === 0 ? null : cell)),
+            clues: {
+                across: [
+                    { num: 1, clue: "Web page foundation (abbr.)", row: 0, col: 0 },
+                    { num: 4, clue: "Web's request-response protocol", row: 0, col: 5 },
+                    { num: 7, clue: "CSS layout model", row: 0, col: 10 },
+                    { num: 8, clue: "Web page styling (abbr.)", row: 2, col: 2 },
+                    { num: 9, clue: "How programs talk to each other", row: 2, col: 5 },
+                    { num: 10, clue: "Lightweight data format", row: 4, col: 0 },
+                    { num: 12, clue: "Version control hub", row: 4, col: 9 },
+                    { num: 13, clue: "JS runtime environment", row: 6, col: 0 },
+                    { num: 15, clue: "Popular, verbose programming language", row: 6, col: 5 },
+                    { num: 16, clue: "UI library by Facebook", row: 8, col: 0 },
+                    { num: 17, clue: "True or false data type", row: 8, col: 6 },
+                    { num: 18, clue: "Find and fix errors", row: 10, col: 0 },
+                    { num: 20, clue: "Smallest unit of a digital image", row: 10, col: 10 },
+                    { num: 21, clue: "Temporary browser storage", row: 12, col: 0 },
+                    { num: 22, clue: "Resolution-independent image format", row: 12, col: 11 },
+                ],
+                down: [
+                    { num: 1, clue: "A browser's main document", row: 0, col: 0 },
+                    { num: 2, clue: "Style rules for a website", row: 0, col: 3 },
+                    { num: 3, clue: "Computer program instructions", row: 0, col: 5 },
+                    { num: 5, clue: "Gain access to a system", row: 2, col: 2 },
+                    { num: 6, clue: "Node Package Manager (abbr.)", row: 2, col: 8 },
+                    { num: 11, clue: "To retrieve data from a server", row: 4, col: 12 },
+                    { num: 14, clue: "A programming language for the web", row: 6, col: 4 },
+                    { num: 19, clue: "A single point on a screen", row: 10, col: 8 },
+                ]
+            }
+        };
+
+
+        // --- 4. MAIN GAME CLASS ---
+        class GridVistasGame {
+            constructor(canvasId) {
+                this.canvas = document.getElementById(canvasId);
+                this.ctx = this.canvas.getContext('2d');
+                this.sound = new Sound();
+                this.particles = [];
+                
+                this.init();
+            }
+
+            init() {
+                this.gameState = 'START'; // START, PLAYING, GAME_OVER
+                this.puzzle = puzzleData;
+                this.userGrid = Array(this.puzzle.size).fill(null).map(() => Array(this.puzzle.size).fill(''));
+                this.completedWords = new Set();
+
+                this.activeCell = { row: 0, col: 0 };
+                if (this.puzzle.grid[0][0] === 0) {
+                    this.findFirstPlayableCell();
+                }
+                this.direction = 'across'; // 'across' or 'down'
+
+                this.score = 0;
+                this.startTime = Date.now();
+                
+                this.animations = [];
+
+                this.resize();
+                this.addEventListeners();
+                this.gameLoop();
+            }
+            
+            findFirstPlayableCell() {
+                for (let r = 0; r < this.puzzle.size; r++) {
+                    for (let c = 0; c < this.puzzle.size; c++) {
+                        if (this.puzzle.grid[r][c] === 1) {
+                            this.activeCell = { row: r, col: c };
+                            return;
+                        }
+                    }
+                }
+            }
+
+            resize() {
+                const margin = 0.05; // 5% margin
+                const availableWidth = window.innerWidth * (1 - margin);
+                const availableHeight = window.innerHeight * (1 - margin);
+
+                this.canvas.width = Math.min(availableWidth, 1200);
+                this.canvas.height = Math.min(availableHeight, 800);
+
+                // Layout calculations
+                const isLandscape = this.canvas.width > this.canvas.height;
+                const gridPortion = isLandscape ? 0.6 : 0.5;
+                const gridAreaSize = Math.min(this.canvas.width * gridPortion, this.canvas.height);
+
+                this.cellSize = Math.floor(gridAreaSize / (this.puzzle.size + 1));
+                this.gridSize = this.cellSize * this.puzzle.size;
+
+                if (isLandscape) {
+                    this.gridOffset = {
+                        x: this.cellSize,
+                        y: (this.canvas.height - this.gridSize) / 2
+                    };
+                    this.cluesOffset = {
+                        x: this.gridOffset.x + this.gridSize + this.cellSize,
+                        y: this.gridOffset.y
+                    };
+                    this.cluesWidth = this.canvas.width - this.cluesOffset.x - this.cellSize;
+                    this.cluesHeight = this.gridSize;
+                } else {
+                    this.gridOffset = {
+                        x: (this.canvas.width - this.gridSize) / 2,
+                        y: this.cellSize * 1.5
+                    };
+                     this.cluesOffset = {
+                        x: this.gridOffset.x,
+                        y: this.gridOffset.y + this.gridSize + this.cellSize * 0.5
+                    };
+                    this.cluesWidth = this.gridSize;
+                    this.cluesHeight = this.canvas.height - this.cluesOffset.y - this.cellSize * 0.5;
+                }
+            }
+
+            addEventListeners() {
+                window.addEventListener('resize', () => this.resize());
+                
+                this.canvas.addEventListener('click', (e) => this.handleMouseClick(e));
+                window.addEventListener('keydown', (e) => this.handleKeyDown(e));
+            }
+
+            // --- Game State Management ---
+            
+            startGame() {
+                this.gameState = 'PLAYING';
+                this.startTime = Date.now();
+                this.sound.playClick();
+            }
+
+            restartGame() {
+                this.init();
+                this.gameState = 'PLAYING';
+                this.startTime = Date.now();
+            }
+
+            // --- Input Handling ---
+
+            handleMouseClick(e) {
+                const rect = this.canvas.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+
+                if (this.gameState === 'START' || this.gameState === 'GAME_OVER') {
+                    const button = this.getButtonBounds();
+                    if (mouseX > button.x && mouseX < button.x + button.w &&
+                        mouseY > button.y && mouseY < button.y + button.h) {
+                        this.gameState === 'START' ? this.startGame() : this.restartGame();
+                    }
+                    return;
+                }
+
+                if (this.gameState === 'PLAYING') {
+                    const col = Math.floor((mouseX - this.gridOffset.x) / this.cellSize);
+                    const row = Math.floor((mouseY - this.gridOffset.y) / this.cellSize);
+
+                    if (row >= 0 && row < this.puzzle.size && col >= 0 && col < this.puzzle.size && this.puzzle.grid[row][col] === 1) {
+                        if (this.activeCell.row === row && this.activeCell.col === col) {
+                            this.direction = this.direction === 'across' ? 'down' : 'across';
+                        } else {
+                            this.activeCell = { row, col };
+                        }
+                        this.sound.playClick();
+                    }
+                }
+            }
+
+            handleKeyDown(e) {
+                if (this.gameState !== 'PLAYING') return;
+                
+                const { row, col } = this.activeCell;
+                
+                if (e.key.length === 1 && e.key.match(/[a-z]/i)) {
+                    e.preventDefault();
+                    this.userGrid[row][col] = e.key.toUpperCase();
+                    this.sound.playType();
+                    this.animations.push({ type: 'pop', row, col, progress: 0 });
+                    this.moveToNextCell();
+                    this.checkWordComplete();
+                } else {
+                    switch (e.key) {
+                        case 'Backspace':
+                            e.preventDefault();
+                            if (this.userGrid[row][col] === '') {
+                                this.moveToPrevCell();
+                            }
+                            this.userGrid[this.activeCell.row][this.activeCell.col] = '';
+                            this.sound.playBackspace();
+                            break;
+                        case 'ArrowUp': this.moveSelection(-1, 0); break;
+                        case 'ArrowDown': this.moveSelection(1, 0); break;
+                        case 'ArrowLeft': this.moveSelection(0, -1); break;
+                        case 'ArrowRight': this.moveSelection(0, 1); break;
+                        case 'Tab':
+                        case ' ':
+                            e.preventDefault();
+                            this.direction = this.direction === 'across' ? 'down' : 'across';
+                            this.sound.playClick();
+                            break;
+                    }
+                }
+            }
+
+            moveSelection(dRow, dCol) {
+                let { row, col } = this.activeCell;
+                let newRow = row + dRow;
+                let newCol = col + dCol;
+
+                // Wrap around
+                if (newRow < 0) newRow = this.puzzle.size - 1;
+                if (newRow >= this.puzzle.size) newRow = 0;
+                if (newCol < 0) newCol = this.puzzle.size - 1;
+                if (newCol >= this.puzzle.size) newCol = 0;
+
+                // Find next playable cell
+                let attempts = this.puzzle.size * this.puzzle.size;
+                while (this.puzzle.grid[newRow][newCol] === 0 && attempts > 0) {
+                    newRow += dRow;
+                    newCol += dCol;
+                    if (newRow < 0) newRow = this.puzzle.size - 1;
+                    if (newRow >= this.puzzle.size) newRow = 0;
+                    if (newCol < 0) newCol = this.puzzle.size - 1;
+                    if (newCol >= this.puzzle.size) newCol = 0;
+                    attempts--;
+                }
+                
+                if (this.puzzle.grid[newRow][newCol] === 1) {
+                    this.activeCell = { row: newRow, col: newCol };
+                    this.sound.playClick();
+                }
+            }
+            
+            moveToNextCell() {
+                let { row, col } = this.activeCell;
+                if (this.direction === 'across') {
+                    do {
+                        col++;
+                    } while (col < this.puzzle.size && this.puzzle.grid[row][col] === 0);
+                    if (col < this.puzzle.size) this.activeCell.col = col;
+                } else {
+                    do {
+                        row++;
+                    } while (row < this.puzzle.size && this.puzzle.grid[row][col] === 0);
+                    if (row < this.puzzle.size) this.activeCell.row = row;
+                }
+            }
+
+            moveToPrevCell() {
+                 let { row, col } = this.activeCell;
+                if (this.direction === 'across') {
+                    do {
+                        col--;
+                    } while (col >= 0 && this.puzzle.grid[row][col] === 0);
+                    if (col >= 0) this.activeCell.col = col;
+                } else {
+                    do {
+                        row--;
+                    } while (row >= 0 && this.puzzle.grid[row][col] === 0);
+                    if (row >= 0) this.activeCell.row = row;
+                }
+            }
+
+            // --- Game Logic ---
+
+            getCurrentWordInfo() {
+                const { row, col } = this.activeCell;
+                let startRow = row, startCol = col;
+                let word = '';
+                let length = 0;
+
+                if (this.direction === 'across') {
+                    while (startCol > 0 && this.puzzle.grid[row][startCol - 1] === 1) {
+                        startCol--;
+                    }
+                    let c = startCol;
+                    while (c < this.puzzle.size && this.puzzle.grid[row][c] === 1) {
+                        word += this.userGrid[row][c];
+                        length++;
+                        c++;
+                    }
+                    const clueData = this.puzzle.clues.across.find(clue => clue.row === startRow && clue.col === startCol);
+                    return { word, length, startRow, startCol, clueNum: clueData ? clueData.num : null, clueText: clueData ? clueData.clue : '', dir: 'across' };
+                } else {
+                    while (startRow > 0 && this.puzzle.grid[startRow - 1][col] === 1) {
+                        startRow--;
+                    }
+                    let r = startRow;
+                    while (r < this.puzzle.size && this.puzzle.grid[r][col] === 1) {
+                        word += this.userGrid[r][col];
+                        length++;
+                        r++;
+                    }
+                    const clueData = this.puzzle.clues.down.find(clue => clue.row === startRow && clue.col === startCol);
+                    return { word, length, startRow, startCol, clueNum: clueData ? clueData.num : null, clueText: clueData ? clueData.clue : '', dir: 'down' };
+                }
+            }
+
+            checkWordComplete() {
+                const info = this.getCurrentWordInfo();
+                if (!info.clueNum || info.word.length !== info.length) return;
+                
+                const wordId = `${info.dir}-${info.clueNum}`;
+                if (this.completedWords.has(wordId)) return;
+
+                let correctWord = '';
+                if (info.dir === 'across') {
+                    for (let i = 0; i < info.length; i++) {
+                        correctWord += this.puzzle.answers[info.startRow][info.startCol + i];
+                    }
+                } else {
+                    for (let i = 0; i < info.length; i++) {
+                        correctWord += this.puzzle.answers[info.startRow + i][info.startCol];
+                    }
+                }
+                
+                if (info.word.toUpperCase() === correctWord.toUpperCase()) {
+                    this.completedWords.add(wordId);
+                    this.score += 100;
+                    this.sound.playSuccess();
+
+                    // Points for each letter in the word
+                    this.score += info.length * 10;
+
+                    if (this.checkPuzzleComplete()) {
+                        this.endGame();
+                    }
+                }
+            }
+            
+            checkPuzzleComplete() {
+                for (let r = 0; r < this.puzzle.size; r++) {
+                    for (let c = 0; c < this.puzzle.size; c++) {
+                        if (this.puzzle.grid[r][c] === 1) {
+                            if (this.userGrid[r][c].toUpperCase() !== this.puzzle.answers[r][c].toUpperCase()) {
+                                return false;
+                            }
+                        }
+                    }
+                }
+                return true;
+            }
+
+            endGame() {
+                this.gameState = 'GAME_OVER';
+                this.sound.playWin();
+                this.score += 1000; // Puzzle completion bonus
+                const duration = (Date.now() - this.startTime) / 1000;
+                this.score -= Math.floor(duration); // Time penalty
+                if (this.score < 0) this.score = 0;
+
+                // Particle explosion from center of grid
+                const centerX = this.gridOffset.x + this.gridSize / 2;
+                const centerY = this.gridOffset.y + this.gridSize / 2;
+                const colors = ['#e94560', '#f8b400', '#16c79a', '#ffffff'];
+                for(let i=0; i < 200; i++) {
+                    this.particles.push(new Particle(centerX, centerY, colors[Math.floor(Math.random() * colors.length)]));
+                }
+            }
+
+            // --- Drawing ---
+
+            draw() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+                this.drawBackground();
+
+                if (this.gameState === 'START') {
+                    this.drawStartScreen();
+                } else if (this.gameState === 'PLAYING') {
+                    this.drawGameScreen();
+                } else if (this.gameState === 'GAME_OVER') {
+                    this.drawGameScreen(); // Draw the completed grid underneath
+                    this.drawGameOverScreen();
+                }
+                
+                this.updateAndDrawParticles();
+                this.updateAndDrawAnimations();
+            }
+
+            drawBackground() {
+                const grad = this.ctx.createLinearGradient(0, 0, this.canvas.width, this.canvas.height);
+                grad.addColorStop(0, 'rgba(15, 52, 96, 0.8)');
+                grad.addColorStop(1, 'rgba(233, 69, 96, 0.8)');
+                this.ctx.fillStyle = grad;
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+            }
+
+            drawStartScreen() {
+                this.ctx.save();
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+
+                // Title
+                this.ctx.font = `bold ${this.canvas.width * 0.1}px 'Segoe UI', sans-serif`;
+                const titleGrad = this.ctx.createLinearGradient(0, 0, this.canvas.width, 0);
+                titleGrad.addColorStop(0, '#f8b400');
+                titleGrad.addColorStop(1, '#e94560');
+                this.ctx.fillStyle = titleGrad;
+                this.ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                this.ctx.shadowBlur = 10;
+                this.ctx.fillText('Grid Vistas', this.canvas.width / 2, this.canvas.height * 0.3);
+                
+                // Subtitle
+                this.ctx.font = `italic ${this.canvas.width * 0.02}px 'Segoe UI', sans-serif`;
+                this.ctx.fillStyle = '#ffffff';
+                this.ctx.shadowBlur = 5;
+                this.ctx.fillText('A Canvas Crossword Adventure', this.canvas.width / 2, this.canvas.height * 0.42);
+
+                this.drawButton("▶️ Start Game");
+                
+                // Instructions
+                this.ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                this.ctx.font = `${this.canvas.width * 0.015}px 'Segoe UI', sans-serif`;
+                this.ctx.shadowBlur = 0;
+                const instructions = [
+                    "🖱️ Click to select a cell. Click again to switch direction.",
+                    "⌨️ Use Arrow Keys to navigate.",
+                    "⌨️ Type letters to fill the grid.",
+                    "⌨️ Use Space or Tab to switch direction."
+                ];
+                instructions.forEach((line, i) => {
+                     this.ctx.fillText(line, this.canvas.width / 2, this.canvas.height * 0.7 + i * (this.canvas.width * 0.025));
+                });
+
+
+                this.ctx.restore();
+            }
+            
+            drawGameOverScreen() {
+                 this.ctx.save();
+                 this.ctx.fillStyle = 'rgba(12, 12, 30, 0.85)';
+                 this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+                 this.ctx.textAlign = 'center';
+                 this.ctx.textBaseline = 'middle';
+
+                 this.ctx.font = `bold ${this.canvas.width * 0.08}px 'Segoe UI', sans-serif`;
+                 const titleGrad = this.ctx.createLinearGradient(0, 0, this.canvas.width, 0);
+                 titleGrad.addColorStop(0, '#16c79a');
+                 titleGrad.addColorStop(1, '#f8b400');
+                 this.ctx.fillStyle = titleGrad;
+                 this.ctx.shadowColor = 'black';
+                 this.ctx.shadowBlur = 15;
+                 this.ctx.fillText('🎉 You Won! 🎉', this.canvas.width / 2, this.canvas.height * 0.35);
+
+                 this.ctx.font = `bold ${this.canvas.width * 0.04}px 'Segoe UI', sans-serif`;
+                 this.ctx.fillStyle = '#ffffff';
+                 this.ctx.shadowBlur = 10;
+                 this.ctx.fillText(`Final Score: ${this.score}`, this.canvas.width / 2, this.canvas.height * 0.48);
+
+                 this.drawButton("Play Again");
+
+                 this.ctx.restore();
+            }
+
+            drawGameScreen() {
+                this.drawGrid();
+                this.drawClues();
+                this.drawHUD();
+            }
+
+            drawGrid() {
+                this.ctx.save();
+                this.ctx.translate(this.gridOffset.x, this.gridOffset.y);
+
+                const wordInfo = this.getCurrentWordInfo();
+                
+                // Draw highlights first
+                this.ctx.fillStyle = 'rgba(248, 180, 0, 0.3)'; // Word highlight
+                if (wordInfo.dir === 'across' && wordInfo.length > 0) {
+                    this.ctx.fillRect(wordInfo.startCol * this.cellSize, wordInfo.startRow * this.cellSize, wordInfo.length * this.cellSize, this.cellSize);
+                } else if (wordInfo.dir === 'down' && wordInfo.length > 0) {
+                    this.ctx.fillRect(wordInfo.startCol * this.cellSize, wordInfo.startRow * this.cellSize, this.cellSize, wordInfo.length * this.cellSize);
+                }
+
+                this.ctx.fillStyle = 'rgba(248, 180, 0, 0.5)'; // Active cell highlight
+                this.ctx.fillRect(this.activeCell.col * this.cellSize, this.activeCell.row * this.cellSize, this.cellSize, this.cellSize);
+
+
+                // Draw cells and letters
+                const letterFontSize = this.cellSize * 0.6;
+                const numberFontSize = this.cellSize * 0.25;
+                this.ctx.font = `bold ${letterFontSize}px Arial`;
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+
+                for (let row = 0; row < this.puzzle.size; row++) {
+                    for (let col = 0; col < this.puzzle.size; col++) {
+                        const x = col * this.cellSize;
+                        const y = row * this.cellSize;
+
+                        if (this.puzzle.grid[row][col] === 0) {
+                            this.ctx.fillStyle = '#1a1a2e';
+                            this.ctx.fillRect(x, y, this.cellSize, this.cellSize);
+                        } else {
+                            // Cell background and border
+                            this.ctx.fillStyle = '#ffffff';
+                            this.ctx.fillRect(x, y, this.cellSize, this.cellSize);
+                            this.ctx.strokeStyle = '#a0a0c0';
+                            this.ctx.lineWidth = 1;
+                            this.ctx.strokeRect(x, y, this.cellSize, this.cellSize);
+                            
+                            // Draw clue number
+                            const clue = this.puzzle.clues.across.find(c => c.row === row && c.col === col) ||
+                                         this.puzzle.clues.down.find(c => c.row === row && c.col === col);
+                            if (clue) {
+                                this.ctx.fillStyle = '#606080';
+                                this.ctx.font = `bold ${numberFontSize}px Arial`;
+                                this.ctx.textAlign = 'left';
+                                this.ctx.textBaseline = 'top';
+                                this.ctx.fillText(clue.num, x + this.cellSize * 0.1, y + this.cellSize * 0.1);
+                            }
+
+                            // Draw user's letter
+                            if (this.userGrid[row][col] !== '') {
+                                this.ctx.fillStyle = '#0f3460';
+                                this.ctx.font = `bold ${letterFontSize}px Arial`;
+                                this.ctx.textAlign = 'center';
+                                this.ctx.textBaseline = 'middle';
+                                
+                                let scale = 1;
+                                const anim = this.animations.find(a => a.type === 'pop' && a.row === row && a.col === col);
+                                if (anim) {
+                                    // Pop animation scale: 1 -> 1.4 -> 1
+                                    const progress = anim.progress;
+                                    scale = progress < 0.5 ? 1 + 0.8 * progress * 2 : 1 + 0.8 * (1 - progress) * 2;
+                                }
+
+                                this.ctx.save();
+                                this.ctx.translate(x + this.cellSize / 2, y + this.cellSize / 2);
+                                this.ctx.scale(scale, scale);
+                                this.ctx.fillText(this.userGrid[row][col], 0, 0);
+                                this.ctx.restore();
+                            }
+                        }
+                    }
+                }
+                this.ctx.restore();
+            }
+
+            drawClues() {
+                this.ctx.save();
+                this.ctx.translate(this.cluesOffset.x, this.cluesOffset.y);
+                this.ctx.fillStyle = 'rgba(0,0,0,0.2)';
+                this.ctx.strokeStyle = '#e94560';
+                this.ctx.lineWidth = 2;
+                this.roundRect(0, 0, this.cluesWidth, this.cluesHeight, 10);
+                this.ctx.fill();
+                this.ctx.stroke();
+
+                const padding = this.cellSize * 0.5;
+                const columnWidth = this.cluesWidth / 2 - padding * 1.5;
+                const titleFontSize = this.cellSize * 0.5;
+                const clueFontSize = this.cellSize * 0.35;
+                
+                const activeWord = this.getCurrentWordInfo();
+
+                // Across clues
+                this.ctx.fillStyle = '#f8b400';
+                this.ctx.font = `bold ${titleFontSize}px 'Segoe UI', sans-serif`;
+                this.ctx.fillText('Across', padding, padding);
+                this.drawClueList(this.puzzle.clues.across, padding, padding + titleFontSize * 1.5, columnWidth, 'across', activeWord, clueFontSize);
+
+                // Down clues
+                this.ctx.fillStyle = '#f8b400';
+                this.ctx.font = `bold ${titleFontSize}px 'Segoe UI', sans-serif`;
+                this.ctx.fillText('Down', this.cluesWidth / 2 + padding, padding);
+                this.drawClueList(this.puzzle.clues.down, this.cluesWidth / 2 + padding, padding + titleFontSize * 1.5, columnWidth, 'down', activeWord, clueFontSize);
+
+                this.ctx.restore();
+            }
+            
+            drawClueList(clues, x, y, width, dir, activeWord, fontSize) {
+                this.ctx.font = `${fontSize}px 'Segoe UI', sans-serif`;
+                let currentY = y;
+                const lineHeight = fontSize * 1.5;
+
+                for (const clue of clues) {
+                    if (currentY > this.cluesHeight - fontSize) break; // Don't overflow
+                    
+                    const isCompleted = this.completedWords.has(`${dir}-${clue.num}`);
+                    const isActive = activeWord.dir === dir && activeWord.clueNum === clue.num;
+                    
+                    if(isActive) {
+                        this.ctx.fillStyle = 'rgba(248, 180, 0, 0.9)';
+                    } else if (isCompleted) {
+                        this.ctx.fillStyle = 'rgba(22, 199, 154, 0.7)';
+                    } else {
+                        this.ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                    }
+                    
+                    const text = `${clue.num}. ${clue.clue}`;
+                    // Simple word wrapping
+                    const words = text.split(' ');
+                    let line = '';
+                    for (const word of words) {
+                        const testLine = line + word + ' ';
+                        const metrics = this.ctx.measureText(testLine);
+                        if (metrics.width > width && line !== '') {
+                            this.ctx.fillText(line, x, currentY);
+                            currentY += lineHeight;
+                            line = word + ' ';
+                        } else {
+                            line = testLine;
+                        }
+                    }
+                    this.ctx.fillText(line, x, currentY);
+                    currentY += lineHeight;
+                }
+            }
+            
+            drawHUD() {
+                this.ctx.save();
+                this.ctx.fillStyle = 'white';
+                this.ctx.font = `bold ${this.cellSize * 0.4}px 'Segoe UI', sans-serif`;
+                this.ctx.textAlign = 'left';
+                this.ctx.textBaseline = 'top';
+                
+                // Score
+                const scoreText = `Score: ${this.score}`;
+                this.ctx.fillText(scoreText, this.gridOffset.x, this.gridOffset.y - this.cellSize * 0.6);
+                
+                // Active Clue
+                this.ctx.textAlign = 'center';
+                const activeWord = this.getCurrentWordInfo();
+                if(activeWord.clueNum) {
+                    const clueText = `${activeWord.clueNum}${activeWord.dir.charAt(0).toUpperCase()}: ${activeWord.clueText}`;
+                    this.ctx.fillStyle = 'rgba(255,255,255,0.9)';
+                    this.ctx.font = `${this.cellSize * 0.4}px 'Segoe UI', sans-serif`;
+                    this.ctx.fillText(clueText, this.canvas.width / 2, this.cellSize * 0.4);
+                }
+
+                this.ctx.restore();
+            }
+            
+            updateAndDrawParticles() {
+                for (let i = this.particles.length - 1; i >= 0; i--) {
+                    this.particles[i].update();
+                    this.particles[i].draw(this.ctx);
+                    if (this.particles[i].life <= 0) {
+                        this.particles.splice(i, 1);
+                    }
+                }
+            }
+            
+            updateAndDrawAnimations() {
+                 for (let i = this.animations.length - 1; i >= 0; i--) {
+                    const anim = this.animations[i];
+                    anim.progress += 0.1;
+                    if(anim.progress >= 1) {
+                        this.animations.splice(i, 1);
+                    }
+                }
+            }
+            
+            // --- UI Helpers ---
+
+            getButtonBounds() {
+                const w = this.canvas.width * 0.3;
+                const h = this.canvas.height * 0.08;
+                const x = (this.canvas.width - w) / 2;
+                const y = this.canvas.height * 0.55;
+                return { x, y, w, h };
+            }
+
+            drawButton(text) {
+                const bounds = this.getButtonBounds();
+                const grad = this.ctx.createLinearGradient(bounds.x, bounds.y, bounds.x + bounds.w, bounds.y + bounds.h);
+                grad.addColorStop(0, '#e94560');
+                grad.addColorStop(1, '#f8b400');
+                
+                this.ctx.fillStyle = grad;
+                this.ctx.shadowColor = 'black';
+                this.ctx.shadowBlur = 10;
+                this.roundRect(bounds.x, bounds.y, bounds.w, bounds.h, 15);
+                this.ctx.fill();
+                
+                this.ctx.shadowBlur = 0;
+                this.ctx.fillStyle = 'white';
+                this.ctx.font = `bold ${bounds.h * 0.4}px 'Segoe UI', sans-serif`;
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                this.ctx.fillText(text, this.canvas.width / 2, bounds.y + bounds.h / 2);
+            }
+
+            roundRect(x, y, w, h, r) {
+                if (w < 2 * r) r = w / 2;
+                if (h < 2 * r) r = h / 2;
+                this.ctx.beginPath();
+                this.ctx.moveTo(x + r, y);
+                this.ctx.arcTo(x + w, y, x + w, y + h, r);
+                this.ctx.arcTo(x + w, y + h, x, y + h, r);
+                this.ctx.arcTo(x, y + h, x, y, r);
+                this.ctx.arcTo(x, y, x + w, y, r);
+                this.ctx.closePath();
+            }
+
+            // --- Main Loop ---
+            
+            gameLoop() {
+                this.draw();
+                requestAnimationFrame(() => this.gameLoop());
+            }
+        }
+
+        // --- Start the game ---
+        window.onload = () => {
+            new GridVistasGame('gameCanvas');
+        };
+
+    </script>
+</body>
+</html>
