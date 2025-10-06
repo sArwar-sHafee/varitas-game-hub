@@ -1,0 +1,8 @@
+{
+  "name": "Sequence Spark",
+  "type": "simon says memory game",
+  "folder": "sequence_spark",
+  "description": "Challenge a hypnotic sequence of dazzling lights and sounds that pushes your memory to the absolute limit. Perfectly mimic the ever-expanding pattern as it grows faster and more complex to spark an unbeatable high score",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
