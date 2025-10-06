@@ -1,0 +1,8 @@
+{
+  "name": "Paddle Pulse",
+  "type": "pong",
+  "folder": "paddle_pulse",
+  "description": "Feel the beat as every perfectly-timed volley sends a shockwave of light and sound across the arena. Master the hypnotic rhythm to charge and unleash a devastating power-shot that will shatter your opponent's defense.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
