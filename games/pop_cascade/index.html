@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pop Cascade</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #1a1a2e; /* Dark blue background */
+        }
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            color: #fff;
+        }
+        canvas {
+            display: block;
+            background: radial-gradient(circle, #16222A 0%, #0c121c 100%);
+            -webkit-tap-highlight-color: transparent; /* Disable tap highlight on mobile */
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // ES6+ JavaScript code for the game
+        class AudioPlayer {
+            constructor() {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                if (!this.audioContext) {
+                    console.warn("Web Audio API is not supported in this browser.");
+                }
+            }
+            
+            _createOscillator(type, freq, detune = 0) {
+                const oscillator = this.audioContext.createOscillator();
+                oscillator.type = type;
+                oscillator.frequency.setValueAtTime(freq, this.audioContext.currentTime);
+                oscillator.detune.setValueAtTime(detune, this.audioContext.currentTime);
+                return oscillator;
+            }
+
+            _createGain(startValue, duration) {
+                const gainNode = this.audioContext.createGain();
+                gainNode.gain.setValueAtTime(startValue, this.audioContext.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioContext.currentTime + duration);
+                return gainNode;
+            }
+
+            playSound(type) {
+                if (!this.audioContext) return;
+                
+                const now = this.audioContext.currentTime;
+                let osc, gain;
+
+                switch(type) {
+                    case 'shoot':
+                        gain = this._createGain(0.1, 0.2);
+                        osc = this._createOscillator('triangle', 600);
+                        osc.frequency.exponentialRampToValueAtTime(100, now + 0.2);
+                        break;
+                    case 'pop':
+                        gain = this._createGain(0.2, 0.15);
+                        osc = this._createOscillator('sine', 880);
+                        osc.frequency.setValueAtTime(1200, now + 0.02);
+                        break;
+                    case 'bounce':
+                        gain = this._createGain(0.1, 0.2);
+                        osc = this._createOscillator('sine', 300);
+                        break;
+                    case 'snap':
+                         gain = this._createGain(0.15, 0.1);
+                        osc = this._createOscillator('square', 440);
+                        break;
+                    case 'gameover':
+                        gain = this._createGain(0.3, 1.0);
+                        osc = this._createOscillator('sawtooth', 440);
+                        osc.frequency.exponentialRampToValueAtTime(110, now + 1.0);
+                        break;
+                    default:
+                        return;
+                }
+
+                osc.connect(gain);
+                gain.connect(this.audioContext.destination);
+                osc.start(now);
+                osc.stop(now + 1);
+            }
+        }
+
+        class Bubble {
+            constructor(x, y, radius, color, row = -1, col = -1) {
+                this.x = x;
+                this.y = y;
+                this.radius = radius;
+                this.color = color;
+                this.vx = 0;
+                this.vy = 0;
+                this.row = row;
+                this.col = col;
+                this.isPopping = false;
+                this.popAnimation = 0;
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.beginPath();
+                
+                const gradient = ctx.createRadialGradient(
+                    this.x - this.radius * 0.3, this.y - this.radius * 0.3, this.radius * 0.1,
+                    this.x, this.y, this.radius
+                );
+                gradient.addColorStop(0, 'rgba(255, 255, 255, 0.8)');
+                gradient.addColorStop(0.8, this.color);
+                gradient.addColorStop(1, this.color);
+
+                ctx.fillStyle = gradient;
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.closePath();
+                ctx.restore();
+            }
+        }
+        
+        class Particle {
+            constructor(x, y, radius, color) {
+                this.x = x;
+                this.y = y;
+                this.radius = Math.random() * radius * 0.5 + 2;
+                this.color = color;
+                this.life = 1;
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 5 + 1;
+                this.vx = Math.cos(angle) * speed;
+                this.vy = Math.sin(angle) * speed;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vy += 0.1; // gravity
+                this.life -= 0.02;
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        class Game {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
+                this.gameState = 'START'; // START, PLAYING, GAMEOVER
+                this.audioPlayer = new AudioPlayer();
+                this.mouse = { x: 0, y: 0, down: false };
+                this.keys = {};
+                this.init();
+                this.attachEventListeners();
+            }
+
+            init() {
+                this.cols = 12;
+                this.rows = 18;
+                this.bubbleRadius = 1; // Will be calculated on resize
+                this.grid = [];
+                this.colors = ['#EF476F', '#FFD166', '#06D6A0', '#118AB2', '#073B4C'];
+                this.shooterAngle = -Math.PI / 2;
+                this.currentBubble = null;
+                this.nextBubble = null;
+                this.projectile = null;
+                this.particles = [];
+                this.score = 0;
+                this.shotsFired = 0;
+                this.rowsAdded = 0;
+                this.gameOverLineY = 0; // Calculated on resize
+                this.resize();
+                this.setupGrid(8);
+                this.loadBubbles();
+            }
+            
+            startNewGame() {
+                this.gameState = 'PLAYING';
+                this.init();
+            }
+            
+            resize() {
+                const aspectRatio = (this.cols * 2) / (this.rows * Math.sqrt(3));
+                const availableWidth = window.innerWidth;
+                const availableHeight = window.innerHeight;
+
+                let newWidth = availableWidth;
+                let newHeight = newWidth / aspectRatio;
+
+                if (newHeight > availableHeight) {
+                    newHeight = availableHeight;
+                    newWidth = newHeight * aspectRatio;
+                }
+
+                this.canvas.width = newWidth;
+                this.canvas.height = newHeight;
+                
+                this.bubbleRadius = this.canvas.width / (this.cols * 2);
+                this.shooterX = this.canvas.width / 2;
+                this.shooterY = this.canvas.height - this.bubbleRadius * 2;
+                this.gameOverLineY = this.canvas.height - this.bubbleRadius * 4;
+                
+                // Recalculate positions of existing bubbles
+                for (let r = 0; r < this.grid.length; r++) {
+                    for (let c = 0; c < this.grid[r].length; c++) {
+                        if (this.grid[r][c]) {
+                            const bubble = this.grid[r][c];
+                            const { x, y } = this.getGridPosition(r, c);
+                            bubble.x = x;
+                            bubble.y = y;
+                            bubble.radius = this.bubbleRadius;
+                        }
+                    }
+                }
+            }
+
+            attachEventListeners() {
+                const getMousePos = (e) => {
+                    const rect = this.canvas.getBoundingClientRect();
+                    const scaleX = this.canvas.width / rect.width;
+                    const scaleY = this.canvas.height / rect.height;
+                    const clientX = e.clientX ?? e.touches?.[0]?.clientX;
+                    const clientY = e.clientY ?? e.touches?.[0]?.clientY;
+                    if (clientX === undefined || clientY === undefined) return null;
+                    return {
+                        x: (clientX - rect.left) * scaleX,
+                        y: (clientY - rect.top) * scaleY
+                    };
+                };
+
+                const handlePointerMove = (e) => {
+                    e.preventDefault();
+                    const pos = getMousePos(e);
+                    if (pos) this.mouse = { ...this.mouse, ...pos };
+                };
+                
+                const handlePointerDown = (e) => {
+                    e.preventDefault();
+                    // Resume AudioContext on first user interaction for browser compatibility
+                    if (this.audioPlayer.audioContext && this.audioPlayer.audioContext.state === 'suspended') {
+                        this.audioPlayer.audioContext.resume().catch(err => console.error("AudioContext resume failed:", err));
+                    }
+
+                    this.mouse.down = true;
+                    if (this.gameState === 'START' || this.gameState === 'GAMEOVER') {
+                         this.startNewGame();
+                    } else if (this.gameState === 'PLAYING') {
+                        this.fireBubble();
+                    }
+                };
+                
+                const handlePointerUp = (e) => {
+                    e.preventDefault();
+                    this.mouse.down = false;
+                };
+
+                window.addEventListener('resize', () => this.resize());
+                this.canvas.addEventListener('mousemove', handlePointerMove);
+                this.canvas.addEventListener('mousedown', handlePointerDown);
+                this.canvas.addEventListener('mouseup', handlePointerUp);
+                this.canvas.addEventListener('touchmove', handlePointerMove, { passive: false });
+                this.canvas.addEventListener('touchstart', handlePointerDown, { passive: false });
+                this.canvas.addEventListener('touchend', handlePointerUp, { passive: false });
+
+                window.addEventListener('keydown', (e) => {
+                    this.keys[e.code] = true;
+                    if (this.gameState === 'PLAYING' && e.code === 'Space') {
+                        e.preventDefault();
+                        this.fireBubble();
+                    }
+                });
+                window.addEventListener('keyup', (e) => { this.keys[e.code] = false; });
+            }
+
+            setupGrid(numRows) {
+                this.grid = [];
+                for (let r = 0; r < numRows; r++) {
+                    const row = [];
+                    const numCols = this.cols - (r % 2);
+                    for (let c = 0; c < numCols; c++) {
+                        const { x, y } = this.getGridPosition(r, c);
+                        const color = this.colors[Math.floor(Math.random() * this.colors.length)];
+                        row.push(new Bubble(x, y, this.bubbleRadius, color, r, c));
+                    }
+                    this.grid.push(row);
+                }
+            }
+            
+            addNewRow() {
+                this.rowsAdded++;
+                // Shift all existing bubbles down
+                this.grid.unshift([]);
+                 for (let r = 1; r < this.grid.length; r++) {
+                    for (let c = 0; c < this.grid[r].length; c++) {
+                        if (this.grid[r][c]) {
+                            this.grid[r][c].row++;
+                            const {x, y} = this.getGridPosition(this.grid[r][c].row, this.grid[r][c].col);
+                            this.grid[r][c].y = y;
+                        }
+                    }
+                }
+                
+                // Add the new row at the top
+                const newRow = [];
+                const numCols = this.cols - (0 % 2);
+                for (let c = 0; c < numCols; c++) {
+                    const { x, y } = this.getGridPosition(0, c);
+                    const color = this.colors[Math.floor(Math.random() * this.colors.length)];
+                    newRow.push(new Bubble(x, y, this.bubbleRadius, color, 0, c));
+                }
+                this.grid[0] = newRow;
+
+                // Check for game over
+                this.checkGameOverCondition();
+            }
+
+            getGridPosition(row, col) {
+                const x = this.bubbleRadius * (2 * col + 1 + (row % 2));
+                const y = this.bubbleRadius * (1 + row * Math.sqrt(3));
+                return { x, y };
+            }
+            
+            getGridCoordinates(x, y) {
+                const r = Math.round((y / this.bubbleRadius - 1) / Math.sqrt(3));
+                const c = Math.round((x / (2 * this.bubbleRadius)) - 0.5 - ((r % 2) / 2));
+                return { r, c };
+            }
+
+            loadBubbles() {
+                const uniqueColors = [...new Set(this.grid.flat().filter(b => b).map(b => b.color))];
+                const colorPool = uniqueColors.length > 0 ? uniqueColors : this.colors;
+                const getRandomColor = () => colorPool[Math.floor(Math.random() * colorPool.length)];
+
+                if (!this.currentBubble) {
+                    this.currentBubble = new Bubble(this.shooterX, this.shooterY, this.bubbleRadius, getRandomColor());
+                }
+                if (!this.nextBubble) {
+                    this.nextBubble = new Bubble(this.shooterX - this.bubbleRadius * 3, this.shooterY + this.bubbleRadius, this.bubbleRadius, getRandomColor());
+                }
+            }
+
+            fireBubble() {
+                if (this.projectile) return;
+                this.audioPlayer.playSound('shoot');
+                
+                this.projectile = this.currentBubble;
+                const speed = 20 * (this.canvas.height / 800); // Scale speed with canvas size
+                this.projectile.vx = Math.cos(this.shooterAngle) * speed;
+                this.projectile.vy = Math.sin(this.shooterAngle) * speed;
+                
+                this.currentBubble = this.nextBubble;
+                this.currentBubble.x = this.shooterX;
+                this.currentBubble.y = this.shooterY;
+                
+                this.nextBubble = null;
+                this.loadBubbles();
+                this.shotsFired++;
+            }
+
+            updateShooter() {
+                if (this.keys['ArrowLeft']) this.shooterAngle -= 0.05;
+                if (this.keys['ArrowRight']) this.shooterAngle += 0.05;
+                
+                if (this.mouse.x !== this.shooterX || this.mouse.y !== this.shooterY) {
+                    const dx = this.mouse.x - this.shooterX;
+                    const dy = this.mouse.y - this.shooterY;
+                    const targetAngle = Math.atan2(dy, dx);
+                    
+                    let diff = targetAngle - this.shooterAngle;
+                    while (diff < -Math.PI) diff += Math.PI * 2;
+                    while (diff > Math.PI) diff -= Math.PI * 2;
+                    this.shooterAngle += diff * 0.1;
+                }
+
+                // Clamp angle to upper half
+                this.shooterAngle = Math.max(-Math.PI * 0.95, Math.min(-Math.PI * 0.05, this.shooterAngle));
+            }
+
+            updateProjectile() {
+                if (!this.projectile) return;
+
+                this.projectile.x += this.projectile.vx;
+                this.projectile.y += this.projectile.vy;
+
+                // Wall bounce
+                if (this.projectile.x - this.projectile.radius < 0 || this.projectile.x + this.projectile.radius > this.canvas.width) {
+                    this.projectile.vx *= -1;
+                    this.audioPlayer.playSound('bounce');
+                }
+                
+                // Top ceiling collision
+                if (this.projectile.y - this.projectile.radius < 0) {
+                    this.projectile.y = this.projectile.radius;
+                    this.snapBubbleToGrid();
+                    return;
+                }
+
+                // Bubble collision
+                for (let r = 0; r < this.grid.length; r++) {
+                    for (let c = 0; c < this.grid[r].length; c++) {
+                        const bubble = this.grid[r][c];
+                        if (bubble) {
+                            const dx = this.projectile.x - bubble.x;
+                            const dy = this.projectile.y - bubble.y;
+                            const dist = Math.sqrt(dx * dx + dy * dy);
+                            if (dist < this.bubbleRadius * 2) {
+                                this.snapBubbleToGrid();
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            snapBubbleToGrid() {
+                if (!this.projectile) return;
+                
+                let bestPos = null;
+                let minDist = Infinity;
+                
+                const {r: pr, c: pc} = this.getGridCoordinates(this.projectile.x, this.projectile.y);
+
+                // Search for the closest empty hex grid cell around the impact point
+                for (let dr = -2; dr <= 2; dr++) {
+                    for (let dc = -2; dc <= 2; dc++) {
+                        const r = pr + dr;
+                        const c = pc + dc;
+
+                        if (r < 0 || r >= this.rows || c < 0 || c >= this.cols - (r % 2)) continue;
+                        if (this.grid[r] && this.grid[r][c]) continue; // Cell is occupied
+                        
+                        const neighbors = this.getNeighbors(r, c);
+                        const hasNeighbor = neighbors.some(n => this.grid[n.r] && this.grid[n.r][n.c]);
+                        if (!hasNeighbor && r > 0) continue; // Must be next to another bubble (unless it's the ceiling)
+
+                        const {x, y} = this.getGridPosition(r, c);
+                        const dx = this.projectile.x - x;
+                        const dy = this.projectile.y - y;
+                        const dist = dx * dx + dy * dy;
+
+                        if (dist < minDist) {
+                            minDist = dist;
+                            bestPos = { r, c, x, y };
+                        }
+                    }
+                }
+                
+                if (bestPos) {
+                    this.projectile.row = bestPos.r;
+                    this.projectile.col = bestPos.c;
+                    this.projectile.x = bestPos.x;
+                    this.projectile.y = bestPos.y;
+                    
+                    while (this.grid.length <= bestPos.r) {
+                        this.grid.push([]);
+                    }
+
+                    this.grid[bestPos.r][bestPos.c] = this.projectile;
+                    this.audioPlayer.playSound('snap');
+
+                    const matches = this.findMatches(bestPos.r, bestPos.c);
+                    if (matches.length >= 3) {
+                        this.popBubbles(matches);
+                        const floating = this.findFloatingBubbles();
+                        if (floating.length > 0) {
+                            this.popBubbles(floating, true);
+                        }
+                    } else {
+                        if (this.shotsFired > 5 * (this.rowsAdded + 1)) {
+                             this.addNewRow();
+                        }
+                    }
+                } else {
+                    console.error("Could not find a snapping position for the projectile.");
+                }
+
+                this.projectile = null;
+                this.checkGameOverCondition();
+            }
+
+            getNeighbors(r, c) {
+                const parity = r % 2;
+                const neighborCoords = [
+                    { r: r, c: c - 1 },              // Left
+                    { r: r, c: c + 1 },              // Right
+                    { r: r - 1, c: c - 1 + parity },  // Top-Left
+                    { r: r - 1, c: c + parity },      // Top-Right
+                    { r: r + 1, c: c - 1 + parity },  // Bottom-Left
+                    { r: r + 1, c: c + parity }       // Bottom-Right
+                ];
+                
+                // Filter out-of-bounds neighbors
+                return neighborCoords.filter(n => 
+                    n.r >= 0 && n.r < this.rows && 
+                    n.c >= 0 && n.c < this.cols - (n.r % 2)
+                );
+            }
+            
+            findMatches(startR, startC) {
+                const startBubble = this.grid[startR][startC];
+                if (!startBubble) return [];
+
+                const toVisit = [{ r: startR, c: startC }];
+                const visited = new Set([`${startR},${startC}`]);
+                const cluster = [];
+
+                while (toVisit.length > 0) {
+                    const { r, c } = toVisit.pop();
+                    const currentBubble = this.grid[r] ? this.grid[r][c] : null;
+
+                    if (currentBubble && currentBubble.color === startBubble.color) {
+                        cluster.push(currentBubble);
+                        const neighbors = this.getNeighbors(r, c);
+                        for (const neighbor of neighbors) {
+                            if (!visited.has(`${neighbor.r},${neighbor.c}`)) {
+                                visited.add(`${neighbor.r},${neighbor.c}`);
+                                toVisit.push(neighbor);
+                            }
+                        }
+                    }
+                }
+                return cluster;
+            }
+            
+            findFloatingBubbles() {
+                const connected = new Set();
+                const toVisit = [];
+
+                if(this.grid[0]) {
+                    for(let c = 0; c < this.grid[0].length; c++) {
+                        if(this.grid[0][c]) {
+                            toVisit.push({r: 0, c: c});
+                            connected.add(`0,${c}`);
+                        }
+                    }
+                }
+                
+                while (toVisit.length > 0) {
+                    const { r, c } = toVisit.pop();
+                    const neighbors = this.getNeighbors(r, c);
+                    for (const neighbor of neighbors) {
+                        if (!connected.has(`${neighbor.r},${neighbor.c}`) && this.grid[neighbor.r] && this.grid[neighbor.r][neighbor.c]) {
+                            connected.add(`${neighbor.r},${neighbor.c}`);
+                            toVisit.push(neighbor);
+                        }
+                    }
+                }
+                
+                const floating = [];
+                for(let r = 0; r < this.grid.length; r++) {
+                    for(let c = 0; c < this.grid[r].length; c++) {
+                        if(this.grid[r][c] && !connected.has(`${r},${c}`)) {
+                            floating.push(this.grid[r][c]);
+                        }
+                    }
+                }
+                return floating;
+            }
+
+            popBubbles(bubblesToPop, isFloating = false) {
+                 bubblesToPop.forEach(bubble => {
+                    this.grid[bubble.row][bubble.col] = null;
+                    this.score += isFloating ? 20 : 10;
+                    this.audioPlayer.playSound('pop');
+                    for(let i=0; i<5; i++){
+                        this.particles.push(new Particle(bubble.x, bubble.y, this.bubbleRadius, bubble.color));
+                    }
+                });
+            }
+
+            checkGameOverCondition() {
+                if (this.gameState !== 'PLAYING') return;
+                for(let r = 0; r < this.grid.length; r++) {
+                    for(let c = 0; c < this.grid[r].length; c++) {
+                        const bubble = this.grid[r][c];
+                        if (bubble && bubble.y + this.bubbleRadius > this.gameOverLineY) {
+                            this.gameState = 'GAMEOVER';
+                            this.audioPlayer.playSound('gameover');
+                            return;
+                        }
+                    }
+                }
+            }
+
+            updateParticles() {
+                for(let i = this.particles.length - 1; i >= 0; i--) {
+                    this.particles[i].update();
+                    if(this.particles[i].life <= 0) {
+                        this.particles.splice(i, 1);
+                    }
+                }
+            }
+
+            update() {
+                if (this.gameState !== 'PLAYING') return;
+                this.updateShooter();
+                this.updateProjectile();
+                this.updateParticles();
+            }
+
+            drawGrid() {
+                for (let r = 0; r < this.grid.length; r++) {
+                    for (let c = 0; c < this.grid[r].length; c++) {
+                        if (this.grid[r][c]) {
+                            this.grid[r][c].draw(this.ctx);
+                        }
+                    }
+                }
+            }
+            
+            drawShooter() {
+                const ctx = this.ctx;
+                
+                ctx.save();
+                ctx.fillStyle = '#999';
+                ctx.beginPath();
+                ctx.arc(this.shooterX, this.shooterY, this.bubbleRadius * 1.5, Math.PI, 0);
+                ctx.fill();
+                ctx.restore();
+
+                ctx.save();
+                ctx.translate(this.shooterX, this.shooterY);
+                ctx.rotate(this.shooterAngle);
+                ctx.fillStyle = '#fff';
+                ctx.beginPath();
+                ctx.moveTo(this.bubbleRadius, 0);
+                ctx.lineTo(this.bubbleRadius * 2.5, -5);
+                ctx.lineTo(this.bubbleRadius * 2.5, 5);
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
+
+                ctx.save();
+                ctx.setLineDash([5, 10]);
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                let x = this.shooterX + Math.cos(this.shooterAngle) * this.bubbleRadius * 2;
+                let y = this.shooterY + Math.sin(this.shooterAngle) * this.bubbleRadius * 2;
+                let vx = Math.cos(this.shooterAngle) * 10;
+                let vy = Math.sin(this.shooterAngle) * 10;
+                ctx.moveTo(x, y);
+                for(let i = 0; i < 50; i++) {
+                    x += vx;
+                    y += vy;
+                    if(x < this.bubbleRadius || x > this.canvas.width - this.bubbleRadius) vx *= -1;
+                    if(y < 0) break;
+                    ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+                ctx.restore();
+
+                if (this.currentBubble) this.currentBubble.draw(ctx);
+                if (this.nextBubble) this.nextBubble.draw(ctx);
+            }
+
+            drawUI() {
+                const ctx = this.ctx;
+                ctx.save();
+                ctx.fillStyle = 'white';
+                ctx.font = `${this.bubbleRadius * 1.5}px "Helvetica Neue", Arial, sans-serif`;
+                ctx.textAlign = 'left';
+                ctx.fillText(`Score: ${this.score}`, 10, this.bubbleRadius * 1.5);
+                
+                ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
+                ctx.lineWidth = 3;
+                ctx.setLineDash([10, 5]);
+                ctx.beginPath();
+                ctx.moveTo(0, this.gameOverLineY);
+                ctx.lineTo(this.canvas.width, this.gameOverLineY);
+                ctx.stroke();
+
+                ctx.restore();
+            }
+
+            drawParticles() {
+                this.particles.forEach(p => p.draw(this.ctx));
+            }
+
+            drawStartScreen() {
+                this.drawTextScreen('Pop Cascade', 'Click or Tap to Start', 'Use Mouse/Touch to aim, Click/Tap to shoot.');
+            }
+
+            drawGameOverScreen() {
+                this.drawTextScreen('Game Over', `Final Score: ${this.score}`, 'Click or Tap to Play Again');
+            }
+
+            drawTextScreen(title, subtitle, instructions) {
+                const ctx = this.ctx;
+                ctx.save();
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+                ctx.fillStyle = 'white';
+                ctx.textAlign = 'center';
+                
+                const titleSize = Math.min(this.canvas.width / 8, 80);
+                ctx.font = `bold ${titleSize}px "Helvetica Neue", Arial, sans-serif`;
+                ctx.fillText(title, this.canvas.width / 2, this.canvas.height / 2 - 50);
+                
+                const subTitleSize = Math.min(this.canvas.width / 18, 40);
+                ctx.font = `${subTitleSize}px "Helvetica Neue", Arial, sans-serif`;
+                ctx.fillText(subtitle, this.canvas.width / 2, this.canvas.height / 2 + 20);
+
+                const instSize = Math.min(this.canvas.width / 30, 20);
+                ctx.font = `${instSize}px "Helvetica Neue", Arial, sans-serif`;
+                ctx.fillText(instructions, this.canvas.width / 2, this.canvas.height / 2 + 80);
+                ctx.restore();
+            }
+
+            draw() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+                this.drawGrid();
+                if (this.projectile) this.projectile.draw(this.ctx);
+                this.drawParticles();
+                
+                if (this.gameState === 'PLAYING') {
+                    this.drawShooter();
+                    this.drawUI();
+                }
+
+                if (this.gameState === 'START') {
+                    this.drawStartScreen();
+                } else if (this.gameState === 'GAMEOVER') {
+                    this.drawGameOverScreen();
+                }
+            }
+
+            gameLoop() {
+                this.update();
+                this.draw();
+                requestAnimationFrame(() => this.gameLoop());
+            }
+        }
+
+        window.addEventListener('load', () => {
+            const canvas = document.getElementById('gameCanvas');
+            if(canvas) {
+                const game = new Game(canvas);
+                game.gameLoop();
+            } else {
+                console.error("Canvas element not found!");
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "name": "Pop Cascade",
+  "type": "bubble shooter",
+  "folder": "pop_cascade",
+  "description": "Ignite massive chain reactions with one strategic shot. Watch the whole board collapse in a thrilling and satisfying cascade of colorful pops",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
