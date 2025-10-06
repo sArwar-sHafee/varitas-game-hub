@@ -1,0 +1,8 @@
+{
+  "name": "Verse Clash",
+  "type": "card battle game (like Hearthstone-lite)",
+  "folder": "verse_clash",
+  "description": "Unleash powerful creatures and game-changing spells in lightning-fast card combat. Outwit your rival in quick, strategic duels where one clever play can turn the tide and claim victory.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Verse Clash</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100%;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a2e; /* Dark blue background */
+        }
+        canvas {
+            display: block;
+            background: #16213e; /* Slightly lighter game area */
+            background-image: radial-gradient(circle, #1a1a2e, #16213e, #0f3460);
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+    class Sound {
+        constructor() {
+            this.audioCtx = null;
+        }
+
+        init() {
+            if (this.audioCtx) return;
+            try {
+                this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            } catch (e) {
+                console.error("Web Audio API is not supported in this browser");
+            }
+        }
+
+        _createOscillator(type, freq, detune = 0) {
+            if (!this.audioCtx) return null;
+            const oscillator = this.audioCtx.createOscillator();
+            oscillator.type = type;
+            oscillator.frequency.setValueAtTime(freq, this.audioCtx.currentTime);
+            oscillator.detune.setValueAtTime(detune, this.audioCtx.currentTime);
+            return oscillator;
+        }
+
+        _createGain(startValue, endValue, duration) {
+            if (!this.audioCtx) return null;
+            const gainNode = this.audioCtx.createGain();
+            gainNode.gain.setValueAtTime(startValue, this.audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(endValue, this.audioCtx.currentTime + duration);
+            return gainNode;
+        }
+
+        play(soundType) {
+            if (!this.audioCtx) return;
+
+            switch (soundType) {
+                case 'click': {
+                    const osc = this._createOscillator('triangle', 440);
+                    const gain = this._createGain(0.2, 0.001, 0.1);
+                    osc.connect(gain);
+                    gain.connect(this.audioCtx.destination);
+                    osc.start();
+                    osc.stop(this.audioCtx.currentTime + 0.1);
+                    break;
+                }
+                case 'draw': {
+                    const osc = this._createOscillator('sine', 600);
+                    const gain = this._createGain(0.3, 0.001, 0.2);
+                    osc.frequency.exponentialRampToValueAtTime(800, this.audioCtx.currentTime + 0.2);
+                    osc.connect(gain);
+                    gain.connect(this.audioCtx.destination);
+                    osc.start();
+                    osc.stop(this.audioCtx.currentTime + 0.2);
+                    break;
+                }
+                case 'playCard': {
+                    const osc = this._createOscillator('sine', 300);
+                    const gain = this._createGain(0.4, 0.001, 0.3);
+                    osc.frequency.exponentialRampToValueAtTime(500, this.audioCtx.currentTime + 0.3);
+                    osc.connect(gain);
+                    gain.connect(this.audioCtx.destination);
+                    osc.start();
+                    osc.stop(this.audioCtx.currentTime + 0.3);
+                    break;
+                }
+                case 'attack': {
+                    const osc = this._createOscillator('square', 200);
+                    const gain = this._createGain(0.3, 0.001, 0.2);
+                    osc.frequency.exponentialRampToValueAtTime(100, this.audioCtx.currentTime + 0.2);
+                    osc.connect(gain);
+                    gain.connect(this.audioCtx.destination);
+                    osc.start();
+                    osc.stop(this.audioCtx.currentTime + 0.2);
+                    break;
+                }
+                case 'damage': {
+                    const osc = this._createOscillator('sawtooth', 150, 10);
+                    const gain = this._createGain(0.4, 0.001, 0.15);
+                    osc.connect(gain);
+                    gain.connect(this.audioCtx.destination);
+                    osc.start();
+                    osc.stop(this.audioCtx.currentTime + 0.15);
+                    break;
+                }
+                case 'win': {
+                    const notes = [523, 659, 783, 1046];
+                    notes.forEach((freq, i) => {
+                        const osc = this._createOscillator('sine', freq);
+                        const gain = this._createGain(0.3, 0.001, 0.2);
+                        osc.connect(gain);
+                        gain.connect(this.audioCtx.destination);
+                        osc.start(this.audioCtx.currentTime + i * 0.15);
+                        osc.stop(this.audioCtx.currentTime + i * 0.15 + 0.2);
+                    });
+                    break;
+                }
+                 case 'lose': {
+                    const notes = [440, 330, 220, 110];
+                    notes.forEach((freq, i) => {
+                        const osc = this._createOscillator('sawtooth', freq);
+                        const gain = this._createGain(0.3, 0.001, 0.25);
+                        osc.connect(gain);
+                        gain.connect(this.audioCtx.destination);
+                        osc.start(this.audioCtx.currentTime + i * 0.2);
+                        osc.stop(this.audioCtx.currentTime + i * 0.2 + 0.25);
+                    });
+                    break;
+                }
+            }
+        }
+    }
+
+    const sound = new Sound();
+
+    const CARD_LIBRARY = [
+        { id: 1, name: 'Pixel Sprite', emoji: '🧚', cost: 1, attack: 1, health: 2 },
+        { id: 2, name: 'Grave Ghoul', emoji: '🧟', cost: 2, attack: 2, health: 3 },
+        { id: 3, name: 'Stone Golem', emoji: '🗿', cost: 3, attack: 2, health: 5 },
+        { id: 4, name: 'Cyber Knight', emoji: '🤺', cost: 4, attack: 5, health: 4 },
+        { id: 5, name: 'Arcane Mage', emoji: '🧙', cost: 5, attack: 4, health: 6 },
+        { id: 6, name: 'Void Serpent', emoji: '🐍', cost: 6, attack: 7, health: 5 },
+        { id: 7, name: 'Cosmic Dragon', emoji: '🐲', cost: 7, attack: 8, health: 8 },
+        { id: 8, name: 'Mech Titan', emoji: '🤖', cost: 8, attack: 10, health: 7 },
+        { id: 9, name: 'Nimble Scout', emoji: '🥷', cost: 2, attack: 3, health: 2 },
+        { id: 10, name: 'Shield Guardian', emoji: '🛡️', cost: 4, attack: 1, health: 7 },
+    ];
+    
+    class Card {
+        constructor(cardData, owner) {
+            this.id = cardData.id;
+            this.name = cardData.name;
+            this.emoji = cardData.emoji;
+            this.cost = cardData.cost;
+            this.attack = cardData.attack;
+            this.health = cardData.health;
+            this.maxHealth = cardData.health;
+            this.owner = owner;
+
+            this.x = 0; this.y = 0;
+            this.width = 0; this.height = 0;
+            this.targetX = 0; this.targetY = 0;
+
+            this.isHovered = false;
+            this.canAttack = false;
+            this.isPlayedThisTurn = true;
+            this.isDying = false;
+            this.animationProgress = 0;
+            this.attackAnimation = null;
+        }
+        
+        takeDamage(amount) {
+            this.health -= amount;
+            if (this.health <= 0) {
+                this.isDying = true;
+                this.health = 0;
+            }
+        }
+
+        draw(ctx) {
+            const lerp = (a, b, t) => a + (b - a) * t;
+            this.x = lerp(this.x, this.targetX, 0.1);
+            this.y = lerp(this.y, this.targetY, 0.1);
+
+            if (this.attackAnimation) {
+                const progress = (Date.now() - this.attackAnimation.startTime) / this.attackAnimation.duration;
+                if (progress < 1) {
+                    const midProgress = Math.sin(progress * Math.PI);
+                    this.x = lerp(this.attackAnimation.startX, this.attackAnimation.targetX, midProgress);
+                    this.y = lerp(this.attackAnimation.startY, this.attackAnimation.targetY, midProgress);
+                } else {
+                    this.x = this.attackAnimation.startX;
+                    this.y = this.attackAnimation.startY;
+                    this.attackAnimation = null;
+                }
+            }
+
+            ctx.save();
+            ctx.translate(this.x, this.y);
+
+            // Card Shadow
+            ctx.shadowColor = 'rgba(0,0,0,0.5)';
+            ctx.shadowBlur = 15;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 5;
+
+            // Card Body
+            const isPlayerCard = this.owner.isPlayer;
+            const canBePlayed = isPlayerCard && this.owner.mana >= this.cost;
+            const canAttackNow = isPlayerCard && this.canAttack;
+            
+            let baseColor = isPlayerCard ? '#0f3460' : '#533483';
+            let borderColor = isPlayerCard ? '#508C9B' : '#845EC2';
+            
+            if (this.isHovered) {
+                borderColor = '#FFFFFF';
+            }
+            if(canBePlayed) {
+                 borderColor = '#9EFF00'; // Playable glow
+            }
+            if(canAttackNow) {
+                 borderColor = '#FFD700'; // Attack glow
+            }
+
+            // Draw rounded rectangle
+            ctx.fillStyle = baseColor;
+            ctx.strokeStyle = borderColor;
+            ctx.lineWidth = this.isHovered ? 4 : 2;
+            
+            ctx.beginPath();
+            ctx.moveTo(10, 0);
+            ctx.lineTo(this.width - 10, 0);
+            ctx.quadraticCurveTo(this.width, 0, this.width, 10);
+            ctx.lineTo(this.width, this.height - 10);
+            ctx.quadraticCurveTo(this.width, this.height, this.width - 10, this.height);
+            ctx.lineTo(10, this.height);
+            ctx.quadraticCurveTo(0, this.height, 0, this.height - 10);
+            ctx.lineTo(0, 10);
+            ctx.quadraticCurveTo(0, 0, 10, 0);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+            
+            ctx.shadowColor = 'transparent'; // Reset shadow for text
+
+            // Mana Cost
+            ctx.fillStyle = '#1e90ff';
+            ctx.beginPath();
+            ctx.arc(15, 15, 12, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 16px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(this.cost, 15, 16);
+
+            // Emoji/Art
+            ctx.font = `${this.width * 0.4}px Arial`;
+            ctx.fillText(this.emoji, this.width / 2, this.height / 2.2);
+
+            // Name
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${this.width * 0.1}px Arial`;
+            ctx.fillText(this.name, this.width / 2, this.height * 0.75);
+
+            // Attack
+            ctx.fillStyle = '#ff4757';
+            ctx.beginPath();
+            ctx.arc(15, this.height - 15, 12, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 16px Arial';
+            ctx.fillText(this.attack, 15, this.height - 14);
+
+            // Health
+            ctx.fillStyle = this.health < this.maxHealth ? '#e84118' : '#2ed573';
+            ctx.beginPath();
+            ctx.arc(this.width - 15, this.height - 15, 12, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 16px Arial';
+            ctx.fillText(this.health, this.width - 15, this.height - 14);
+
+            ctx.restore();
+        }
+    }
+
+    class Player {
+        constructor(isPlayer, game) {
+            this.isPlayer = isPlayer;
+            this.game = game;
+            this.health = 30;
+            this.mana = 0;
+            this.maxMana = 0;
+            this.deck = [];
+            this.hand = [];
+            this.board = [];
+
+            this.avatarEmoji = isPlayer ? '😀' : '🤖';
+        }
+
+        initDeck() {
+            this.deck = [];
+            for (let i = 0; i < 2; i++) {
+                CARD_LIBRARY.forEach(cardData => {
+                    this.deck.push(new Card(cardData, this));
+                });
+            }
+            this.shuffleDeck();
+        }
+
+        shuffleDeck() {
+            for (let i = this.deck.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [this.deck[i], this.deck[j]] = [this.deck[j], this.deck[i]];
+            }
+        }
+
+        drawCard() {
+            if (this.deck.length > 0 && this.hand.length < 10) {
+                const card = this.deck.pop();
+                this.hand.push(card);
+                sound.play('draw');
+                return card;
+            }
+            return null;
+        }
+        
+        takeDamage(amount) {
+            this.health -= amount;
+            this.game.addEffect('damageNumber', {
+                x: this.isPlayer ? this.game.width / 2 : this.game.width / 2,
+                y: this.isPlayer ? this.game.height - 50 : 50,
+                amount
+            });
+            sound.play('damage');
+            if (this.health <= 0) {
+                this.health = 0;
+                this.game.endGame(this.isPlayer ? this.game.ai : this.game.player);
+            }
+        }
+    }
+
+    class Game {
+        constructor(canvas) {
+            this.canvas = canvas;
+            this.ctx = canvas.getContext('2d');
+            this.width = 0;
+            this.height = 0;
+            this.scale = 1;
+
+            this.state = 'START_SCREEN'; // START_SCREEN, PLAYING, GAME_OVER
+            this.winner = null;
+            
+            this.player = new Player(true, this);
+            this.ai = new Player(false, this);
+            this.currentPlayer = null;
+
+            this.mouse = { x: 0, y: 0, down: false };
+            this.draggingCard = null;
+            this.dragOffsetX = 0;
+            this.dragOffsetY = 0;
+            
+            this.selectedCard = null;
+            this.effects = []; // For particles, damage numbers, etc.
+
+            this.resize();
+            window.addEventListener('resize', () => this.resize());
+            this.canvas.addEventListener('mousedown', (e) => this.onMouseDown(e));
+            this.canvas.addEventListener('mouseup', (e) => this.onMouseUp(e));
+            this.canvas.addEventListener('mousemove', (e) => this.onMouseMove(e));
+            window.addEventListener('keydown', (e) => this.onKeyDown(e));
+        }
+
+        resize() {
+            const dpr = window.devicePixelRatio || 1;
+            this.canvas.width = window.innerWidth * dpr;
+            this.canvas.height = window.innerHeight * dpr;
+            this.ctx.scale(dpr, dpr);
+            this.width = window.innerWidth;
+            this.height = window.innerHeight;
+            this.scale = Math.min(this.width / 1280, this.height / 720);
+            
+            this.updateCardPositions();
+        }
+
+        start() {
+            this.state = 'PLAYING';
+            this.winner = null;
+            this.player.initDeck();
+            this.ai.initDeck();
+            
+            this.player.health = 30; this.ai.health = 30;
+            this.player.mana = 0; this.ai.mana = 0;
+            this.player.maxMana = 0; this.ai.maxMana = 0;
+            this.player.hand = []; this.ai.hand = [];
+            this.player.board = []; this.ai.board = [];
+
+            for (let i = 0; i < 3; i++) {
+                this.player.drawCard();
+                this.ai.drawCard();
+            }
+            
+            this.currentPlayer = this.player;
+            this.nextTurn();
+        }
+        
+        onMouseDown(e) {
+            sound.init(); // Initialize audio on first user interaction
+            
+            const rect = this.canvas.getBoundingClientRect();
+            this.mouse.x = e.clientX - rect.left;
+            this.mouse.y = e.clientY - rect.top;
+            this.mouse.down = true;
+
+            if (this.state === 'PLAYING' && this.currentPlayer === this.player) {
+                // Check if clicking a card in hand to drag
+                for (let i = this.player.hand.length - 1; i >= 0; i--) {
+                    const card = this.player.hand[i];
+                    if (this.isMouseOver(card)) {
+                        if (this.player.mana >= card.cost) {
+                            this.draggingCard = card;
+                            this.dragOffsetX = this.mouse.x - card.x;
+                            this.dragOffsetY = this.mouse.y - card.y;
+                            sound.play('click');
+                            return;
+                        }
+                    }
+                }
+                
+                // Check if clicking a card on board to attack
+                for(const card of this.player.board) {
+                    if(this.isMouseOver(card) && card.canAttack) {
+                        this.selectedCard = card;
+                        sound.play('click');
+                        return;
+                    }
+                }
+            }
+        }
+        
+        onMouseUp(e) {
+            this.mouse.down = false;
+            
+            if (this.state === 'PLAYING') {
+                if (this.draggingCard) {
+                    // Try to play card
+                    const playZoneY = this.height / 2 + 20 * this.scale;
+                    if (this.draggingCard.y < playZoneY) {
+                        this.playCard(this.draggingCard, this.player);
+                    }
+                    this.draggingCard = null;
+                } else if (this.selectedCard) {
+                    // Try to attack
+                    let target = null;
+                    // Target enemy card
+                    for (const card of this.ai.board) {
+                        if (this.isMouseOver(card)) {
+                            target = card;
+                            break;
+                        }
+                    }
+                    // Target enemy player
+                    const aiAvatar = { x: this.width/2 - 40 * this.scale, y: 30 * this.scale, width: 80 * this.scale, height: 80 * this.scale };
+                    if (!target && this.isMouseOver(aiAvatar)) {
+                        target = this.ai;
+                    }
+                    
+                    if (target) {
+                        this.executeAttack(this.selectedCard, target);
+                    }
+                    this.selectedCard = null;
+                }
+
+                // End turn button
+                const btn = this.getEndTurnButtonRect();
+                if(this.isMouseOver(btn) && this.currentPlayer === this.player) {
+                    this.nextTurn();
+                }
+
+            } else { // START_SCREEN or GAME_OVER
+                const btn = this.getStartButtonRect();
+                if(this.isMouseOver(btn)) {
+                    sound.play('click');
+                    this.start();
+                }
+            }
+        }
+
+        onMouseMove(e) {
+            const rect = this.canvas.getBoundingClientRect();
+            this.mouse.x = e.clientX - rect.left;
+            this.mouse.y = e.clientY - rect.top;
+
+            if (this.draggingCard) {
+                this.draggingCard.targetX = this.mouse.x - this.dragOffsetX;
+                this.draggingCard.targetY = this.mouse.y - this.dragOffsetY;
+            } else {
+                 [...this.player.hand, ...this.player.board, ...this.ai.board].forEach(card => {
+                    card.isHovered = this.isMouseOver(card);
+                });
+            }
+        }
+        
+        onKeyDown(e) {
+            if (e.key.toLowerCase() === 'e' && this.state === 'PLAYING' && this.currentPlayer === this.player) {
+                this.nextTurn();
+            }
+        }
+
+        isMouseOver(obj) {
+            return this.mouse.x > obj.x && this.mouse.x < obj.x + obj.width &&
+                   this.mouse.y > obj.y && this.mouse.y < obj.y + obj.height;
+        }
+
+        playCard(card, player) {
+            if (player.mana >= card.cost && player.board.length < 7) {
+                player.mana -= card.cost;
+                player.hand = player.hand.filter(c => c !== card);
+                player.board.push(card);
+                sound.play('playCard');
+            }
+        }
+
+        executeAttack(attacker, target) {
+            attacker.attackAnimation = {
+                startX: attacker.targetX,
+                startY: attacker.targetY,
+                targetX: target.x || target.targetX,
+                targetY: target.y || target.targetY,
+                startTime: Date.now(),
+                duration: 400
+            };
+            
+            setTimeout(() => {
+                const isTargetPlayer = target instanceof Player;
+                this.addEffect('particle', { x: attacker.x + attacker.width/2, y: attacker.y + attacker.height/2, color: '#ff4757'});
+                
+                if (isTargetPlayer) {
+                    target.takeDamage(attacker.attack);
+                } else {
+                    target.takeDamage(attacker.attack);
+                    attacker.takeDamage(target.attack);
+                    this.addEffect('particle', { x: target.x + target.width/2, y: target.y + target.height/2, color: '#e84118'});
+                }
+                sound.play('attack');
+            }, 200);
+
+            attacker.canAttack = false;
+        }
+
+        nextTurn() {
+            if (this.state !== 'PLAYING') return;
+
+            sound.play('click');
+            this.currentPlayer = (this.currentPlayer === this.player) ? this.ai : this.player;
+            
+            // Start of turn effects
+            this.currentPlayer.maxMana = Math.min(10, this.currentPlayer.maxMana + 1);
+            this.currentPlayer.mana = this.currentPlayer.maxMana;
+            this.currentPlayer.drawCard();
+            
+            this.currentPlayer.board.forEach(card => {
+                card.isPlayedThisTurn = false;
+                card.canAttack = true;
+            });
+
+            if (this.currentPlayer === this.ai) {
+                this.aiTurn();
+            }
+        }
+
+        aiTurn() {
+            setTimeout(() => {
+                // AI plays cards
+                let playedCard = true;
+                while(playedCard) {
+                    playedCard = false;
+                    const playableCards = this.ai.hand.filter(c => c.cost <= this.ai.mana);
+                    if (playableCards.length > 0 && this.ai.board.length < 7) {
+                        // Simple logic: play the most expensive card it can afford
+                        playableCards.sort((a,b) => b.cost - a.cost);
+                        this.playCard(playableCards[0], this.ai);
+                        playedCard = true;
+                    }
+                }
+            }, 1000);
+            
+            setTimeout(() => {
+                // AI attacks
+                const attackers = this.ai.board.filter(c => c.canAttack);
+                attackers.forEach(attacker => {
+                    // Simple logic: attack face if it's a good trade or lethal, else trade
+                    if (this.player.board.length > 0) {
+                        // Prioritize killing a minion
+                        let bestTarget = null;
+                        for(const target of this.player.board){
+                            if(attacker.attack >= target.health) {
+                                bestTarget = target;
+                                break;
+                            }
+                        }
+                        // If no kill, attack highest attack minion
+                        if(!bestTarget) {
+                            bestTarget = this.player.board.reduce((prev, curr) => prev.attack > curr.attack ? prev : curr);
+                        }
+                        if(bestTarget) this.executeAttack(attacker, bestTarget);
+
+                    } else { // Attack player
+                        this.executeAttack(attacker, this.player);
+                    }
+                });
+            }, 2000);
+
+            setTimeout(() => this.nextTurn(), 3000);
+        }
+
+        update() {
+            // Card death
+            [this.player, this.ai].forEach(p => {
+                p.board.forEach(card => {
+                    if(card.isDying) {
+                        this.addEffect('particle', { x: card.x + card.width/2, y: card.y + card.height/2, color: '#7f8fa6', count: 20 });
+                    }
+                });
+                p.board = p.board.filter(c => !c.isDying);
+            });
+            
+            this.updateCardPositions();
+            
+            // Update effects
+            this.effects.forEach(e => e.update());
+            this.effects = this.effects.filter(e => e.life > 0);
+        }
+
+        updateCardPositions() {
+            const cardWidth = 100 * this.scale;
+            const cardHeight = 140 * this.scale;
+
+            // Player hand
+            const handWidth = this.player.hand.length * (cardWidth * 0.7);
+            this.player.hand.forEach((card, i) => {
+                card.width = cardWidth; card.height = cardHeight;
+                if(card !== this.draggingCard) {
+                    card.targetX = (this.width / 2) - (handWidth / 2) + (i * cardWidth * 0.7);
+                    card.targetY = this.height - cardHeight - 10 * this.scale;
+                    if(card.isHovered) {
+                         card.targetY -= 20 * this.scale;
+                    }
+                }
+            });
+
+            // Player board
+            const playerBoardWidth = this.player.board.length * (cardWidth + 10 * this.scale);
+            this.player.board.forEach((card, i) => {
+                card.width = cardWidth; card.height = cardHeight;
+                card.targetX = (this.width / 2) - (playerBoardWidth / 2) + (i * (cardWidth + 10 * this.scale));
+                card.targetY = this.height / 2 + 10 * this.scale;
+            });
+            
+            // AI board
+            const aiBoardWidth = this.ai.board.length * (cardWidth + 10 * this.scale);
+            this.ai.board.forEach((card, i) => {
+                card.width = cardWidth; card.height = cardHeight;
+                card.targetX = (this.width / 2) - (aiBoardWidth / 2) + (i * (cardWidth + 10 * this.scale));
+                card.targetY = this.height / 2 - cardHeight - 10 * this.scale;
+            });
+        }
+        
+        addEffect(type, options) {
+            if (type === 'particle') {
+                const count = options.count || 10;
+                for (let i = 0; i < count; i++) {
+                    this.effects.push(new Particle(options.x, options.y, options.color));
+                }
+            } else if (type === 'damageNumber') {
+                 this.effects.push(new DamageNumber(options.x, options.y, options.amount));
+            }
+        }
+        
+        endGame(winner) {
+            this.state = 'GAME_OVER';
+            this.winner = winner;
+            sound.play(winner === this.player ? 'win' : 'lose');
+        }
+
+        draw() {
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            this.ctx.save();
+            const dpr = window.devicePixelRatio || 1;
+            this.ctx.scale(dpr,dpr);
+
+            // Background
+            const gradient = this.ctx.createLinearGradient(0, 0, 0, this.height);
+            gradient.addColorStop(0, '#16213e');
+            gradient.addColorStop(0.5, '#0f3460');
+            gradient.addColorStop(1, '#1a1a2e');
+            this.ctx.fillStyle = gradient;
+            this.ctx.fillRect(0, 0, this.width, this.height);
+            
+            if (this.state === 'START_SCREEN' || this.state === 'GAME_OVER') {
+                this.drawMenu();
+                this.ctx.restore();
+                return;
+            }
+            
+            // Draw board line
+            this.ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+            this.ctx.lineWidth = 2;
+            this.ctx.beginPath();
+            this.ctx.moveTo(0, this.height / 2);
+            this.ctx.lineTo(this.width, this.height / 2);
+            this.ctx.stroke();
+
+            // Draw players
+            this.drawPlayerInfo(this.player);
+            this.drawPlayerInfo(this.ai);
+
+            // Draw cards
+            this.ai.board.forEach(card => card.draw(this.ctx));
+            this.player.board.forEach(card => card.draw(this.ctx));
+            this.player.hand.forEach(card => card.draw(this.ctx));
+            
+            // Draw dragging card on top
+            if (this.draggingCard) this.draggingCard.draw(this.ctx);
+            
+            // Draw targeting line
+            if (this.selectedCard) {
+                this.ctx.strokeStyle = '#9EFF00';
+                this.ctx.lineWidth = 3;
+                this.ctx.beginPath();
+                this.ctx.moveTo(this.selectedCard.x + this.selectedCard.width/2, this.selectedCard.y + this.selectedCard.height/2);
+                this.ctx.lineTo(this.mouse.x, this.mouse.y);
+                this.ctx.stroke();
+            }
+            
+            // Draw End Turn button
+            const btn = this.getEndTurnButtonRect();
+            const isMyTurn = this.currentPlayer === this.player;
+            this.ctx.fillStyle = isMyTurn ? '#2ed573' : '#7f8fa6';
+            if (isMyTurn && this.isMouseOver(btn)) this.ctx.fillStyle = '#7bed9f';
+            this.ctx.fillRect(btn.x, btn.y, btn.width, btn.height);
+            this.ctx.fillStyle = 'white';
+            this.ctx.font = `bold ${18 * this.scale}px Arial`;
+            this.ctx.textAlign = 'center';
+            this.ctx.textBaseline = 'middle';
+            this.ctx.fillText(isMyTurn ? 'End Turn (E)' : "Opponent's Turn", btn.x + btn.width/2, btn.y + btn.height/2);
+
+            // Draw effects
+            this.effects.forEach(e => e.draw(this.ctx));
+            
+            this.ctx.restore();
+        }
+        
+        drawPlayerInfo(player) {
+            const isPlayer = player.isPlayer;
+            const yBase = isPlayer ? this.height - (90 * this.scale) : (10 * this.scale);
+            const avatarX = this.width / 2 - 180 * this.scale;
+            const manaX = this.width / 2 + 120 * this.scale;
+
+            // Avatar & Health
+            this.ctx.font = `${60 * this.scale}px Arial`;
+            this.ctx.textAlign = 'center';
+            this.ctx.textBaseline = 'middle';
+            this.ctx.fillText(player.avatarEmoji, avatarX, yBase + 40 * this.scale);
+            
+            this.ctx.fillStyle = '#e84118';
+            this.ctx.beginPath();
+            this.ctx.arc(avatarX + 40 * this.scale, yBase + 60 * this.scale, 20 * this.scale, 0, Math.PI * 2);
+            this.ctx.fill();
+            this.ctx.fillStyle = 'white';
+            this.ctx.font = `bold ${22 * this.scale}px Arial`;
+            this.ctx.fillText(player.health, avatarX + 40 * this.scale, yBase + 61 * this.scale);
+            
+            // Mana
+            this.ctx.fillStyle = '#1e90ff';
+            this.ctx.font = `bold ${24 * this.scale}px Arial`;
+            this.ctx.fillText(`💎 ${player.mana} / ${player.maxMana}`, manaX, yBase + 40 * this.scale);
+            
+             // Deck count
+            const deckX = isPlayer ? this.width - 60 * this.scale : 60 * this.scale;
+            const deckY = isPlayer ? this.height - 60 * this.scale : 60 * this.scale;
+            this.ctx.fillStyle = '#574b90';
+            this.ctx.fillRect(deckX - 30 * this.scale, deckY - 45 * this.scale, 60*this.scale, 90*this.scale);
+            this.ctx.strokeStyle = '#d1d8e0';
+            this.ctx.strokeRect(deckX - 30 * this.scale, deckY - 45 * this.scale, 60*this.scale, 90*this.scale);
+            this.ctx.fillStyle = 'white';
+            this.ctx.fillText(player.deck.length, deckX, deckY);
+        }
+
+        getStartButtonRect() {
+            const btnWidth = 250 * this.scale;
+            const btnHeight = 60 * this.scale;
+            return {
+                x: this.width/2 - btnWidth/2,
+                y: this.height * 0.6,
+                width: btnWidth,
+                height: btnHeight
+            };
+        }
+        
+        getEndTurnButtonRect() {
+             const btnWidth = 200 * this.scale;
+             const btnHeight = 50 * this.scale;
+             return {
+                x: this.width - btnWidth - 20 * this.scale,
+                y: this.height/2 - btnHeight/2,
+                width: btnWidth,
+                height: btnHeight
+             };
+        }
+
+        drawMenu() {
+            this.ctx.textAlign = 'center';
+            this.ctx.fillStyle = 'white';
+
+            // Title
+            this.ctx.font = `bold ${80 * this.scale}px 'Arial Black', Gadget, sans-serif`;
+            this.ctx.shadowColor = '#e040fb';
+            this.ctx.shadowBlur = 20;
+            this.ctx.fillText('Verse Clash', this.width / 2, this.height * 0.25);
+            this.ctx.shadowColor = 'transparent';
+
+            if (this.state === 'GAME_OVER') {
+                 this.ctx.font = `bold ${50 * this.scale}px Arial`;
+                 const resultText = this.winner === this.player ? 'You Win! 🎉' : 'You Lose 😔';
+                 this.ctx.fillStyle = this.winner === this.player ? '#2ed573' : '#ff4757';
+                 this.ctx.fillText(resultText, this.width / 2, this.height * 0.45);
+            }
+
+            // Button
+            const btn = this.getStartButtonRect();
+            this.ctx.fillStyle = this.isMouseOver(btn) ? '#7CFC00' : '#32CD32';
+            this.ctx.fillRect(btn.x, btn.y, btn.width, btn.height);
+            
+            this.ctx.fillStyle = 'black';
+            this.ctx.font = `bold ${24 * this.scale}px Arial`;
+            const btnText = this.state === 'START_SCREEN' ? 'Start Game' : 'Play Again';
+            this.ctx.fillText(btnText, this.width / 2, btn.y + btn.height / 2 + 2 * this.scale);
+            
+            // Instructions
+            this.ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            this.ctx.font = `${18 * this.scale}px Arial`;
+            const instructions = [
+                'Drag cards from your hand to the board to play them.',
+                'Your mana (💎) refills and increases each turn.',
+                'Click your cards on the board to attack enemy cards or the enemy player.',
+                'Press (E) to end your turn. Reduce the opponent\'s health to 0 to win!'
+            ];
+            instructions.forEach((line, i) => {
+                this.ctx.fillText(line, this.width / 2, this.height * 0.75 + i * 25 * this.scale);
+            });
+        }
+        
+        loop() {
+            this.update();
+            this.draw();
+            requestAnimationFrame(() => this.loop());
+        }
+    }
+
+    class Particle {
+        constructor(x, y, color) {
+            this.x = x;
+            this.y = y;
+            this.color = color || '#ff4757';
+            this.size = Math.random() * 5 + 2;
+            this.life = 1;
+            this.vx = (Math.random() - 0.5) * 6;
+            this.vy = (Math.random() - 0.5) * 6;
+            this.gravity = 0.1;
+        }
+
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            this.vy += this.gravity;
+            this.life -= 0.02;
+            this.size *= 0.98;
+        }
+
+        draw(ctx) {
+            ctx.fillStyle = this.color;
+            ctx.globalAlpha = this.life;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+    }
+
+    class DamageNumber {
+        constructor(x, y, amount) {
+            this.x = x;
+            this.y = y;
+            this.amount = `-${amount}`;
+            this.life = 1;
+            this.vy = -2;
+        }
+        
+        update() {
+            this.y += this.vy;
+            this.vy *= 0.98;
+            this.life -= 0.015;
+        }
+        
+        draw(ctx) {
+            ctx.fillStyle = 'red';
+            ctx.font = `bold ${36 * game.scale}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.globalAlpha = this.life;
+            ctx.fillText(this.amount, this.x, this.y);
+            ctx.globalAlpha = 1;
+        }
+    }
+
+    const canvas = document.getElementById('gameCanvas');
+    const game = new Game(canvas);
+    game.loop();
+    </script>
+</body>
+</html>
