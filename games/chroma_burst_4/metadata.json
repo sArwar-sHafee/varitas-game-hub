@@ -1,0 +1,8 @@
+{
+  "name": "Chroma Burst 4",
+  "type": "breakout/brick breaker",
+  "folder": "chroma_burst_4",
+  "description": "Annihilate kaleidoscopic levels by triggering explosive, color-based chain reactions. Every impact unleashes a cascade of satisfying destruction and reality-warping power-ups.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
