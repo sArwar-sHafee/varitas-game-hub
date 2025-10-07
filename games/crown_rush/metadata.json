@@ -1,0 +1,8 @@
+{
+  "name": "Crown Rush",
+  "type": "checkers",
+  "folder": "crown_rush",
+  "description": "Outwit your opponent in a frantic dash across the board, capturing every piece in your path. Crown your checker to become an unstoppable king and sweep the field for a glorious victory",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

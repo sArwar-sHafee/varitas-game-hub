@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crown Rush</title>
+    <style>
+        :root {
+            --bg-color: #2c3e50;
+            --primary-color: #e74c3c;
+            --secondary-color: #ecf0f1;
+            --accent-color: #3498db;
+            --shadow-color: rgba(0, 0, 0, 0.5);
+            --light-square: #f0d9b5;
+            --dark-square: #b58863;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--bg-color);
+            color: var(--secondary-color);
+        }
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+
+        #game-container {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        canvas {
+            background-color: #fff;
+            box-shadow: 0 10px 20px var(--shadow-color);
+            border-radius: 10px;
+            max-width: 95vmin;
+            max-height: 95vmin;
+            aspect-ratio: 1 / 1;
+        }
+
+        .screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: rgba(44, 62, 80, 0.85);
+            text-align: center;
+            transition: opacity 0.5s ease, visibility 0.5s ease;
+            opacity: 1;
+            visibility: visible;
+            z-index: 10;
+        }
+
+        .screen.hidden {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+
+        .screen h1 {
+            font-size: clamp(3rem, 10vmin, 6rem);
+            color: var(--primary-color);
+            text-shadow: 3px 3px 0 var(--shadow-color);
+            margin: 0;
+        }
+        
+        .screen h2 {
+            font-size: clamp(1.5rem, 5vmin, 3rem);
+            color: var(--accent-color);
+            margin-top: 1rem;
+        }
+
+        .screen p {
+            font-size: clamp(1rem, 3vmin, 1.5rem);
+            max-width: 80%;
+            margin-bottom: 2rem;
+            line-height: 1.5;
+        }
+
+        .screen button {
+            font-size: clamp(1.2rem, 4vmin, 2rem);
+            padding: 0.8em 1.5em;
+            border: none;
+            border-radius: 10px;
+            background-color: var(--primary-color);
+            color: var(--secondary-color);
+            cursor: pointer;
+            box-shadow: 0 5px 15px var(--shadow-color);
+            transition: transform 0.2s ease, background-color 0.2s ease;
+        }
+
+        .screen button:hover {
+            transform: scale(1.05);
+            background-color: #c0392b;
+        }
+        
+        #instructions {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            font-size: clamp(0.7rem, 2vmin, 1rem);
+            background: rgba(0,0,0,0.4);
+            padding: 8px;
+            border-radius: 5px;
+            z-index: 5;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="instructions">
+            <p><strong>Controls:</strong> Click to select/move pieces. [R] to restart.</p>
+        </div>
+        <div id="start-screen" class="screen">
+            <h1>👑 Crown Rush 👑</h1>
+            <p>The classic game of checkers with a modern twist. Capture all your opponent's pieces to win!</p>
+            <button id="start-button">Start Game</button>
+        </div>
+        <div id="game-over-screen" class="screen hidden">
+            <h1 id="game-over-title">Game Over</h1>
+            <h2 id="winner-text"></h2>
+            <p>Press the button or 'R' to play again.</p>
+            <button id="restart-button">Play Again</button>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- DOM Elements ---
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+            const startScreen = document.getElementById('start-screen');
+            const gameOverScreen = document.getElementById('game-over-screen');
+            const startButton = document.getElementById('start-button');
+            const restartButton = document.getElementById('restart-button');
+            const winnerText = document.getElementById('winner-text');
+
+            // --- Game Constants ---
+            const BOARD_SIZE = 8;
+            const PIECE = { EMPTY: 0, P1: 1, P2: 2, P1_KING: 3, P2_KING: 4 };
+            const PLAYER_COLOR = { [PIECE.P1]: '#e74c3c', [PIECE.P1_KING]: '#c0392b' }; // Red
+            const OPPONENT_COLOR = { [PIECE.P2]: '#3498db', [PIECE.P2_KING]: '#2980b9' }; // Blue
+            const PLAYER_EMOJI = { [PIECE.P1]: '🔴', [PIECE.P2]: '🔵' };
+            const LIGHT_SQUARE_COLOR = '#f0d9b5';
+            const DARK_SQUARE_COLOR = '#b58863';
+
+            // --- Game State ---
+            let gameState = 'START'; // START, PLAYING, GAME_OVER
+            let board = [];
+            let tileSize;
+            let currentPlayer;
+            let selectedPiece = null;
+            let possibleMoves = [];
+            let scores = { [PIECE.P1]: 0, [PIECE.P2]: 0 };
+            let mustJump = false;
+            let animation = null;
+
+            // --- Audio ---
+            let audioCtx;
+            const playSound = (type) => {
+                if (!audioCtx) return;
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+
+                switch (type) {
+                    case 'move':
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.3);
+                        break;
+                    case 'capture':
+                        oscillator.type = 'square';
+                        oscillator.frequency.setValueAtTime(220, audioCtx.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.4);
+                        break;
+                    case 'king':
+                        oscillator.type = 'triangle';
+                        oscillator.frequency.setValueAtTime(660, audioCtx.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.5);
+                        break;
+                    case 'win':
+                        oscillator.type = 'sawtooth';
+                        oscillator.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
+                        oscillator.frequency.linearRampToValueAtTime(1046.50, audioCtx.currentTime + 0.5); // C6
+                        gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.7);
+                        break;
+                }
+                oscillator.start(audioCtx.currentTime);
+                oscillator.stop(audioCtx.currentTime + 1);
+            };
+
+            const initAudio = () => {
+                if (!audioCtx) {
+                    try {
+                        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    } catch(e) {
+                        console.error('Web Audio API is not supported in this browser');
+                    }
+                }
+            };
+            
+            // --- Game Setup ---
+            const resizeCanvas = () => {
+                const size = Math.min(window.innerWidth, window.innerHeight) * 0.9;
+                canvas.width = size;
+                canvas.height = size;
+                tileSize = canvas.width / BOARD_SIZE;
+                draw();
+            };
+
+            const setupBoard = () => {
+                board = Array(BOARD_SIZE).fill(0).map(() => Array(BOARD_SIZE).fill(PIECE.EMPTY));
+                for (let row = 0; row < BOARD_SIZE; row++) {
+                    for (let col = 0; col < BOARD_SIZE; col++) {
+                        if ((row + col) % 2 !== 0) { // Dark squares
+                            if (row < 3) board[row][col] = PIECE.P2;
+                            else if (row > 4) board[row][col] = PIECE.P1;
+                        }
+                    }
+                }
+            };
+
+            const startGame = () => {
+                initAudio();
+                gameState = 'PLAYING';
+                setupBoard();
+                currentPlayer = PIECE.P1;
+                scores = { [PIECE.P1]: 12, [PIECE.P2]: 12 };
+                selectedPiece = null;
+                possibleMoves = [];
+                mustJump = false;
+                startScreen.classList.add('hidden');
+                gameOverScreen.classList.add('hidden');
+                findPossibleMovesForPlayer(currentPlayer); // Check for forced jumps at start
+                draw();
+            };
+
+            // --- Drawing ---
+            const draw = () => {
+                if (gameState !== 'PLAYING' && gameState !== 'GAME_OVER') return;
+                
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                drawBoard();
+                drawHighlights();
+                if (!animation) {
+                    drawPieces();
+                }
+                drawUI();
+            };
+
+            const drawBoard = () => {
+                for (let row = 0; row < BOARD_SIZE; row++) {
+                    for (let col = 0; col < BOARD_SIZE; col++) {
+                        ctx.fillStyle = (row + col) % 2 === 0 ? LIGHT_SQUARE_COLOR : DARK_SQUARE_COLOR;
+                        ctx.fillRect(col * tileSize, row * tileSize, tileSize, tileSize);
+                    }
+                }
+            };
+
+            const drawPieces = () => {
+                for (let row = 0; row < BOARD_SIZE; row++) {
+                    for (let col = 0; col < BOARD_SIZE; col++) {
+                        const piece = board[row][col];
+                        if (piece !== PIECE.EMPTY) {
+                            drawPiece(col, row, piece);
+                        }
+                    }
+                }
+            };
+
+            const drawPiece = (col, row, piece, sizeFactor = 1) => {
+                const x = col * tileSize + tileSize / 2;
+                const y = row * tileSize + tileSize / 2;
+                const radius = (tileSize / 2) * 0.75 * sizeFactor;
+
+                ctx.save();
+                ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+                ctx.shadowBlur = 5;
+                ctx.shadowOffsetX = 2;
+                ctx.shadowOffsetY = 2;
+
+                if (piece === PIECE.P1 || piece === PIECE.P1_KING) {
+                    ctx.fillStyle = PLAYER_COLOR[piece] || PLAYER_COLOR[PIECE.P1];
+                } else {
+                    ctx.fillStyle = OPPONENT_COLOR[piece] || OPPONENT_COLOR[PIECE.P2];
+                }
+
+                ctx.beginPath();
+                ctx.arc(x, y, radius, 0, Math.PI * 2);
+                ctx.fill();
+
+                if (piece === PIECE.P1_KING || piece === PIECE.P2_KING) {
+                    ctx.fillStyle = '#FFD700'; // Gold
+                    ctx.font = `${radius}px sans-serif`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('👑', x, y);
+                }
+                ctx.restore();
+            };
+
+            const drawHighlights = () => {
+                if (selectedPiece) {
+                    ctx.fillStyle = 'rgba(255, 255, 0, 0.4)';
+                    ctx.fillRect(selectedPiece.col * tileSize, selectedPiece.row * tileSize, tileSize, tileSize);
+                }
+
+                possibleMoves.forEach(move => {
+                    ctx.fillStyle = 'rgba(0, 255, 0, 0.4)';
+                    ctx.beginPath();
+                    ctx.arc(move.to.col * tileSize + tileSize / 2, move.to.row * tileSize + tileSize / 2, tileSize / 4, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+            };
+
+            const drawUI = () => {
+                // Score and Turn Info
+                ctx.font = `bold ${tileSize * 0.3}px 'Segoe UI', sans-serif`;
+                ctx.textAlign = 'center';
+
+                // Player 1 (Bottom)
+                ctx.fillStyle = PLAYER_COLOR[PIECE.P1];
+                ctx.fillText(`${PLAYER_EMOJI[PIECE.P1]} Score: ${12 - scores[PIECE.P2]}`, canvas.width / 2, canvas.height - tileSize * 0.15);
+                
+                // Player 2 (Top)
+                ctx.fillStyle = OPPONENT_COLOR[PIECE.P2];
+                ctx.fillText(`${PLAYER_EMOJI[PIECE.P2]} Score: ${12 - scores[PIECE.P1]}`, canvas.width / 2, tileSize * 0.4);
+
+                // Current Turn
+                ctx.fillStyle = currentPlayer === PIECE.P1 ? PLAYER_COLOR[PIECE.P1] : OPPONENT_COLOR[PIECE.P2];
+                ctx.globalAlpha = 0.8;
+                ctx.beginPath();
+                if (currentPlayer === PIECE.P1) {
+                    ctx.rect(0, canvas.height - tileSize * 0.6, canvas.width, tileSize * 0.6);
+                } else {
+                    ctx.rect(0, 0, canvas.width, tileSize * 0.6);
+                }
+                ctx.fill();
+                ctx.globalAlpha = 1.0;
+
+                ctx.fillStyle = 'white';
+                if (currentPlayer === PIECE.P1) {
+                    ctx.fillText("Your Turn", canvas.width / 2, canvas.height - tileSize * 0.2);
+                } else {
+                    ctx.fillText("Opponent's Turn", canvas.width / 2, tileSize * 0.35);
+                }
+            };
+            
+            // --- Game Logic ---
+            const getPieceAt = (row, col) => (board[row] && board[row][col] !== undefined) ? board[row][col] : null;
+            const isPlayerPiece = (piece, player) => (player === PIECE.P1) ? (piece === PIECE.P1 || piece === PIECE.P1_KING) : (piece === PIECE.P2 || piece === PIECE.P2_KING);
+            const isKing = (piece) => piece === PIECE.P1_KING || piece === PIECE.P2_KING;
+
+            const findPossibleMovesForPiece = (row, col) => {
+                const piece = getPieceAt(row, col);
+                if (!piece || piece === PIECE.EMPTY) return [];
+                
+                const moves = [];
+                const directions = [];
+                const player = isPlayerPiece(piece, PIECE.P1) ? PIECE.P1 : PIECE.P2;
+                const moveDir = (player === PIECE.P1) ? -1 : 1;
+
+                if (isKing(piece)) {
+                    directions.push({ r: 1, c: -1 }, { r: 1, c: 1 }, { r: -1, c: -1 }, { r: -1, c: 1 });
+                } else {
+                    directions.push({ r: moveDir, c: -1 }, { r: moveDir, c: 1 });
+                }
+
+                for (const dir of directions) {
+                    const r1 = row + dir.r, c1 = col + dir.c;
+                    // Simple move
+                    if (getPieceAt(r1, c1) === PIECE.EMPTY) {
+                        moves.push({ from: {row, col}, to: {row: r1, col: c1} });
+                    }
+                    // Jump move
+                    else if (getPieceAt(r1, c1) !== null && !isPlayerPiece(getPieceAt(r1, c1), player)) {
+                        const r2 = row + 2 * dir.r, c2 = col + 2 * dir.c;
+                        if (getPieceAt(r2, c2) === PIECE.EMPTY) {
+                            moves.push({ from: {row, col}, to: {row: r2, col: c2}, captured: {row: r1, col: c1} });
+                        }
+                    }
+                }
+                return moves;
+            };
+
+            const findPossibleMovesForPlayer = (player) => {
+                let allMoves = [];
+                let jumpMoves = [];
+                for (let r = 0; r < BOARD_SIZE; r++) {
+                    for (let c = 0; c < BOARD_SIZE; c++) {
+                        if (isPlayerPiece(getPieceAt(r, c), player)) {
+                            const moves = findPossibleMovesForPiece(r, c);
+                            moves.forEach(move => {
+                                if (move.captured) jumpMoves.push(move);
+                                allMoves.push(move);
+                            });
+                        }
+                    }
+                }
+                mustJump = jumpMoves.length > 0;
+                return mustJump ? jumpMoves : allMoves;
+            };
+
+            const handlePieceClick = (row, col) => {
+                if (isPlayerPiece(getPieceAt(row, col), currentPlayer)) {
+                    let movesForPiece = findPossibleMovesForPiece(row, col);
+                    if (mustJump) {
+                        movesForPiece = movesForPiece.filter(m => m.captured);
+                    }
+                    
+                    if (movesForPiece.length > 0) {
+                        selectedPiece = { row, col };
+                        possibleMoves = movesForPiece;
+                    } else {
+                        selectedPiece = null;
+                        possibleMoves = [];
+                    }
+                } else {
+                    selectedPiece = null;
+                    possibleMoves = [];
+                }
+                draw();
+            };
+
+            const handleMoveClick = (row, col) => {
+                const move = possibleMoves.find(m => m.to.row === row && m.to.col === col);
+                if (move) {
+                    executeMove(move);
+                }
+            };
+            
+            const executeMove = (move) => {
+                const { from, to, captured } = move;
+                const piece = board[from.row][from.col];
+                
+                selectedPiece = null;
+                possibleMoves = [];
+                
+                // Animate the move
+                animation = {
+                    piece,
+                    startX: from.col * tileSize,
+                    startY: from.row * tileSize,
+                    endX: to.col * tileSize,
+                    endY: to.row * tileSize,
+                    progress: 0,
+                    onComplete: () => {
+                        board[from.row][from.col] = PIECE.EMPTY;
+                        let newPiece = piece;
+                        
+                        // Check for kinging
+                        if ((to.row === 0 && piece === PIECE.P1) || (to.row === BOARD_SIZE - 1 && piece === PIECE.P2)) {
+                            newPiece = (piece === PIECE.P1) ? PIECE.P1_KING : PIECE.P2_KING;
+                            playSound('king');
+                        }
+                        
+                        board[to.row][to.col] = newPiece;
+
+                        if (captured) {
+                            board[captured.row][captured.col] = PIECE.EMPTY;
+                            playSound('capture');
+                            scores[currentPlayer === PIECE.P1 ? PIECE.P2 : PIECE.P1]--;
+
+                            // Check for multi-jump
+                            const nextJumps = findPossibleMovesForPiece(to.row, to.col).filter(m => m.captured);
+                            if (nextJumps.length > 0) {
+                                selectedPiece = { row: to.row, col: to.col };
+                                possibleMoves = nextJumps;
+                                mustJump = true;
+                                animation = null;
+                                draw();
+                                return; // Don't switch player
+                            }
+                        } else {
+                            playSound('move');
+                        }
+
+                        switchPlayer();
+                    }
+                };
+            };
+
+            const switchPlayer = () => {
+                currentPlayer = (currentPlayer === PIECE.P1) ? PIECE.P2 : PIECE.P1;
+                const movesForNewPlayer = findPossibleMovesForPlayer(currentPlayer);
+                if (scores[PIECE.P1] === 0 || scores[PIECE.P2] === 0 || movesForNewPlayer.length === 0) {
+                    endGame();
+                } else {
+                    draw();
+                }
+            };
+
+            const endGame = () => {
+                gameState = 'GAME_OVER';
+                let winner;
+                if (scores[PIECE.P1] === 0) winner = PIECE.P2;
+                else if (scores[PIECE.P2] === 0) winner = PIECE.P1;
+                else winner = (currentPlayer === PIECE.P1) ? PIECE.P2 : PIECE.P1; // Current player has no moves
+
+                const winnerName = winner === PIECE.P1 ? `${PLAYER_EMOJI[PIECE.P1]} Red Player` : `${PLAYER_EMOJI[PIECE.P2]} Blue Player`;
+                winnerText.textContent = `${winnerName} Wins!`;
+                gameOverScreen.classList.remove('hidden');
+                playSound('win');
+            };
+
+            // --- Animation Loop ---
+            const gameLoop = (timestamp) => {
+                if (animation) {
+                    animation.progress += 0.08; // speed of animation
+                    if (animation.progress >= 1) {
+                        animation.progress = 1;
+                        const onComplete = animation.onComplete;
+                        animation = null;
+                        onComplete();
+                    }
+                    
+                    // Redraw everything for animation
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    drawBoard();
+                    
+                    // Draw static pieces (all pieces except the one being animated)
+                    const fromRow = Math.floor(animation.startY / tileSize);
+                    const fromCol = Math.floor(animation.startX / tileSize);
+                    for (let r = 0; r < BOARD_SIZE; r++) {
+                        for (let c = 0; c < BOARD_SIZE; c++) {
+                            if (board[r][c] !== PIECE.EMPTY) {
+                                // Don't draw the piece at its starting position because it's being animated
+                                if (r !== fromRow || c !== fromCol) {
+                                    drawPiece(c, r, board[r][c]);
+                                }
+                            }
+                        }
+                    }
+
+                    // Draw animated piece
+                    const currentX = animation.startX + (animation.endX - animation.startX) * animation.progress;
+                    const currentY = animation.startY + (animation.endY - animation.startY) * animation.progress;
+                    drawPiece(currentX / tileSize, currentY / tileSize, animation.piece);
+                    drawUI();
+                }
+
+                requestAnimationFrame(gameLoop);
+            };
+
+            // --- Event Listeners ---
+            const getMousePos = (e) => {
+                const rect = canvas.getBoundingClientRect();
+                return {
+                    x: e.clientX - rect.left,
+                    y: e.clientY - rect.top
+                };
+            };
+            
+            canvas.addEventListener('click', (e) => {
+                if (gameState !== 'PLAYING' || animation) return;
+                initAudio();
+                const { x, y } = getMousePos(e);
+                const col = Math.floor(x / tileSize);
+                const row = Math.floor(y / tileSize);
+
+                const isPossibleMove = possibleMoves.some(m => m.to.row === row && m.to.col === col);
+                if (selectedPiece && isPossibleMove) {
+                    handleMoveClick(row, col);
+                } else {
+                    handlePieceClick(row, col);
+                }
+            });
+
+            window.addEventListener('resize', resizeCanvas);
+            window.addEventListener('keydown', (e) => {
+                if (e.key.toLowerCase() === 'r' && (gameState === 'PLAYING' || gameState === 'GAME_OVER')) {
+                    startGame();
+                }
+            });
+
+            startButton.addEventListener('click', startGame);
+            restartButton.addEventListener('click', startGame);
+
+            // --- Initial Kick-off ---
+            resizeCanvas();
+            requestAnimationFrame(gameLoop);
+        });
+    </script>
+</body>
+</html>
