@@ -1,0 +1,8 @@
+{
+  "name": "Mind Spark 3",
+  "type": "memory card game",
+  "folder": "mind_spark_3",
+  "description": "Challenge your mind to find not pairs, but dazzling trios in this high-speed memory showdown. Link your matches to unleash powerful scoring combos and spark a brilliant victory",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
