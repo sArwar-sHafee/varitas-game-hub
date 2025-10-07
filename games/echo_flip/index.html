@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Echo Flip - A Memory Card Game</title>
+    <style>
+        :root {
+            --bg-grad-start: #1e3c72;
+            --bg-grad-end: #2a5298;
+            --card-back-grad-start: #ff6e7f;
+            --card-back-grad-end: #bfe9ff;
+            --card-face-color: #ffffff;
+            --text-color: #ffffff;
+            --shadow-color: rgba(0, 0, 0, 0.3);
+            --glow-color: rgba(255, 255, 255, 0.7);
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: linear-gradient(135deg, var(--bg-grad-start), var(--bg-grad-end));
+            font-family: 'Arial', sans-serif;
+            color: var(--text-color);
+        }
+
+        #game-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            height: 100%;
+        }
+
+        canvas {
+            display: block;
+            background-color: transparent;
+            box-shadow: 0 10px 30px var(--shadow-color);
+            border-radius: 15px;
+            touch-action: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        // Use strict mode for better error handling
+        'use strict';
+
+        // --- GAME SETUP ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // --- GAME STATE & CONSTANTS ---
+        const GAME_STATE = {
+            START: 'start',
+            PLAYING: 'playing',
+            GAME_OVER: 'game_over'
+        };
+
+        let currentState = GAME_STATE.START;
+        let score = 0;
+        let finalTime = 0;
+        let startTime = 0;
+        let moves = 0;
+        
+        const EMOJIS = ['🐶', '🐱', '🐭', '🐹', '🐰', '🦊', '🐻', '🐼'];
+        const GRID_SIZE = 4;
+        let cards = [];
+        let flippedCards = [];
+        let matchedPairs = 0;
+        let isChecking = false; // Prevents flipping more than 2 cards at a time
+
+        let mouse = { x: 0, y: 0, isDown: false };
+        let scale = 1;
+
+        // --- AUDIO CONTEXT ---
+        let audioCtx;
+        const sounds = {};
+
+        function initAudio() {
+            if (audioCtx) return;
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                
+                // Create simple programmatic sounds
+                sounds.flip = createSound(880, 0.1, 'triangle', 0.1);
+                sounds.match = createSound(523.25, 0.2, 'sine', 0.2, 659.25);
+                sounds.nomatch = createSound(220, 0.2, 'sawtooth', 0.15);
+                sounds.win = createSound(523.25, 0.5, 'sine', 0.3, 659.25, 783.99, 1046.50);
+            } catch (e) {
+                console.error("Web Audio API is not supported in this browser");
+            }
+        }
+
+        function createSound(startFreq, duration, type, volume, ...otherFreqs) {
+            return () => {
+                if (!audioCtx) return;
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                
+                gainNode.gain.setValueAtTime(volume, audioCtx.currentTime);
+                oscillator.type = type;
+
+                const freqs = [startFreq, ...otherFreqs];
+                const noteDuration = duration / freqs.length;
+
+                freqs.forEach((freq, i) => {
+                    oscillator.frequency.setValueAtTime(freq, audioCtx.currentTime + i * noteDuration);
+                });
+
+                gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + duration);
+                
+                oscillator.start(audioCtx.currentTime);
+                oscillator.stop(audioCtx.currentTime + duration);
+            };
+        }
+
+        // --- CARD CLASS ---
+        class Card {
+            constructor(x, y, size, emoji, id) {
+                this.x = x;
+                this.y = y;
+                this.size = size;
+                this.emoji = emoji;
+                this.id = id;
+
+                this.isFlipped = false;
+                this.isMatched = false;
+                
+                // Animation properties
+                this.scaleX = 1;
+                this.isAnimating = false;
+                this.hoverScale = 1;
+            }
+            
+            flip() {
+                if (this.isAnimating || this.isFlipped) return;
+                sounds.flip && sounds.flip();
+                this.isAnimating = true;
+                let targetScaleX = 0;
+
+                const animate = () => {
+                    this.scaleX += (targetScaleX - this.scaleX) * 0.2;
+
+                    if (Math.abs(this.scaleX - targetScaleX) < 0.01) {
+                        if (targetScaleX === 0) {
+                            this.isFlipped = !this.isFlipped;
+                            targetScaleX = 1;
+                            requestAnimationFrame(animate);
+                        } else {
+                            this.scaleX = 1;
+                            this.isAnimating = false;
+                        }
+                    } else {
+                        requestAnimationFrame(animate);
+                    }
+                };
+                
+                animate();
+            }
+
+            isMouseOver(mx, my) {
+                return mx > this.x && mx < this.x + this.size && my > this.y && my < this.y + this.size;
+            }
+
+            update(isHovered) {
+                // Smooth hover effect
+                const targetHoverScale = (isHovered && !this.isMatched && !this.isFlipped) ? 1.05 : 1;
+                this.hoverScale += (targetHoverScale - this.hoverScale) * 0.2;
+            }
+            
+            draw(ctx) {
+                ctx.save();
+                
+                const centerX = this.x + this.size / 2;
+                const centerY = this.y + this.size / 2;
+                ctx.translate(centerX, centerY);
+                ctx.scale(this.scaleX * this.hoverScale, this.hoverScale);
+                ctx.translate(-centerX, -centerY);
+
+                const cornerRadius = this.size * 0.1;
+
+                ctx.shadowColor = 'rgba(0,0,0,0.3)';
+                ctx.shadowBlur = 15;
+                ctx.shadowOffsetX = 5;
+                ctx.shadowOffsetY = 5;
+
+                ctx.beginPath();
+                ctx.moveTo(this.x + cornerRadius, this.y);
+                ctx.lineTo(this.x + this.size - cornerRadius, this.y);
+                ctx.quadraticCurveTo(this.x + this.size, this.y, this.x + this.size, this.y + cornerRadius);
+                ctx.lineTo(this.x + this.size, this.y + this.size - cornerRadius);
+                ctx.quadraticCurveTo(this.x + this.size, this.y + this.size, this.x + this.size - cornerRadius, this.y + this.size);
+                ctx.lineTo(this.x + cornerRadius, this.y + this.size);
+                ctx.quadraticCurveTo(this.x, this.y + this.size, this.x, this.y + this.size - cornerRadius);
+                ctx.lineTo(this.x, this.y + cornerRadius);
+                ctx.quadraticCurveTo(this.x, this.y, this.x + cornerRadius, this.y);
+                ctx.closePath();
+                
+                if (this.isFlipped || this.isMatched) {
+                    ctx.fillStyle = this.isMatched ? '#a8e6cf' : 'var(--card-face-color)';
+                    ctx.fill();
+                    
+                    ctx.shadowColor = 'transparent';
+
+                    ctx.font = `${this.size * 0.6}px Arial`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(this.emoji, this.x + this.size / 2, this.y + this.size / 2 + (this.size * 0.05));
+                } else {
+                    const gradient = ctx.createLinearGradient(this.x, this.y, this.x + this.size, this.y + this.size);
+                    gradient.addColorStop(0, 'var(--card-back-grad-start)');
+                    gradient.addColorStop(1, 'var(--card-back-grad-end)');
+                    ctx.fillStyle = gradient;
+                    ctx.fill();
+
+                    ctx.shadowColor = 'transparent';
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                    ctx.font = `${this.size * 0.5}px Arial`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('?', this.x + this.size / 2, this.y + this.size / 2);
+                }
+                
+                ctx.restore();
+            }
+        }
+
+        // --- GAME LOGIC ---
+        function setupGame() {
+            flippedCards = [];
+            matchedPairs = 0;
+            score = 0;
+            moves = 0;
+            isChecking = false;
+
+            const cardSymbols = [...EMOJIS, ...EMOJIS];
+            // Shuffle algorithm (Fisher-Yates)
+            for (let i = cardSymbols.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [cardSymbols[i], cardSymbols[j]] = [cardSymbols[j], cardSymbols[i]];
+            }
+            
+            cards = [];
+            for (let i = 0; i < GRID_SIZE * GRID_SIZE; i++) {
+                const emoji = cardSymbols[i];
+                const id = EMOJIS.indexOf(emoji);
+                cards.push(new Card(0, 0, 0, emoji, id));
+            }
+
+            updateLayout();
+        }
+
+        function startGame() {
+            initAudio(); // Initialize audio on first user interaction
+            currentState = GAME_STATE.PLAYING;
+            startTime = performance.now();
+            setupGame();
+        }
+        
+        function handleCardClick(card) {
+            if (isChecking || card.isFlipped || card.isMatched || flippedCards.length >= 2) {
+                return;
+            }
+
+            card.flip();
+            flippedCards.push(card);
+
+            if (flippedCards.length === 2) {
+                isChecking = true;
+                moves++;
+                checkForMatch();
+            }
+        }
+        
+        function checkForMatch() {
+            const [card1, card2] = flippedCards;
+            if (card1.id === card2.id) {
+                // It's a match!
+                setTimeout(() => {
+                    card1.isMatched = true;
+                    card2.isMatched = true;
+                    matchedPairs++;
+                    score += 100;
+                    flippedCards = [];
+                    isChecking = false;
+                    sounds.match && sounds.match();
+
+                    if (matchedPairs === EMOJIS.length) {
+                        // Game Won!
+                        sounds.win && sounds.win();
+                        finalTime = (performance.now() - startTime) / 1000;
+                        currentState = GAME_STATE.GAME_OVER;
+                    }
+                }, 700);
+            } else {
+                // Not a match
+                score = Math.max(0, score - 10);
+                setTimeout(() => {
+                    card1.flip();
+                    card2.flip();
+                    flippedCards = [];
+                    isChecking = false;
+                    sounds.nomatch && sounds.nomatch();
+                }, 1200);
+            }
+        }
+
+        // --- DRAWING FUNCTIONS ---
+        function drawBackground() {
+            const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+            gradient.addColorStop(0, 'var(--bg-grad-start)');
+            gradient.addColorStop(1, 'var(--bg-grad-end)');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        function drawTextWithGlow(text, x, y, fontSize, color, align = 'center') {
+            ctx.font = `${fontSize}px Arial`;
+            ctx.textAlign = align;
+            ctx.textBaseline = 'middle';
+            
+            ctx.shadowColor = 'var(--glow-color)';
+            ctx.shadowBlur = 15;
+            ctx.fillStyle = color;
+            ctx.fillText(text, x, y);
+            
+            ctx.shadowColor = 'transparent';
+            ctx.shadowBlur = 0;
+        }
+
+        function drawButton(text, x, y, width, height, isHovered) {
+            const cornerRadius = height / 3;
+            ctx.beginPath();
+            ctx.moveTo(x + cornerRadius, y);
+            ctx.lineTo(x + width - cornerRadius, y);
+            ctx.arcTo(x + width, y, x + width, y + cornerRadius, cornerRadius);
+            ctx.lineTo(x + width, y + height - cornerRadius);
+            ctx.arcTo(x + width, y + height, x + width - cornerRadius, y + height, cornerRadius);
+            ctx.lineTo(x + cornerRadius, y + height);
+            ctx.arcTo(x, y + height, x, y + height - cornerRadius, cornerRadius);
+            ctx.lineTo(x, y + cornerRadius);
+            ctx.arcTo(x, y, x + cornerRadius, y, cornerRadius);
+            ctx.closePath();
+            
+            ctx.save();
+            if (isHovered) {
+                ctx.shadowColor = 'var(--glow-color)';
+                ctx.shadowBlur = 20;
+            } else {
+                ctx.shadowColor = 'var(--shadow-color)';
+                ctx.shadowBlur = 10;
+                ctx.shadowOffsetX = 2;
+                ctx.shadowOffsetY = 4;
+            }
+            
+            const gradient = ctx.createLinearGradient(x, y, x, y + height);
+            gradient.addColorStop(0, '#ff7e5f');
+            gradient.addColorStop(1, '#feb47b');
+            ctx.fillStyle = gradient;
+            ctx.fill();
+            ctx.restore();
+            
+            drawTextWithGlow(text, x + width / 2, y + height / 2, height * 0.4, 'var(--text-color)');
+        }
+
+        function drawStartScreen() {
+            drawTextWithGlow('Echo Flip', canvas.width / 2, canvas.height * 0.3, scale * 1.5, 'var(--text-color)');
+            drawTextWithGlow('Match all the pairs!', canvas.width / 2, canvas.height * 0.45, scale * 0.6, 'var(--text-color)');
+            
+            const btnWidth = scale * 4;
+            const btnHeight = scale * 1;
+            const btnX = canvas.width / 2 - btnWidth / 2;
+            const btnY = canvas.height * 0.6;
+            const isHovered = mouse.x > btnX && mouse.x < btnX + btnWidth && mouse.y > btnY && mouse.y < btnY + btnHeight;
+            
+            drawButton('Start Game', btnX, btnY, btnWidth, btnHeight, isHovered);
+        }
+
+        function drawGameScreen() {
+            let hoveredCard = null;
+            cards.forEach(card => {
+                const isHovered = !card.isFlipped && !card.isMatched && card.isMouseOver(mouse.x, mouse.y);
+                if (isHovered) hoveredCard = card;
+                card.update(isHovered);
+                card.draw(ctx);
+            });
+
+            canvas.style.cursor = hoveredCard ? 'pointer' : 'default';
+
+            drawTextWithGlow(`Score: ${score}`, scale * 0.5, scale * 0.5, scale * 0.5, 'var(--text-color)', 'left');
+            drawTextWithGlow(`Moves: ${moves}`, canvas.width - scale * 0.5, scale * 0.5, scale * 0.5, 'var(--text-color)', 'right');
+            drawTextWithGlow(`Press 'R' to Restart`, canvas.width / 2, canvas.height - scale * 0.5, scale * 0.4, 'var(--text-color)');
+        }
+
+        function drawGameOverScreen() {
+            drawTextWithGlow('You Won!', canvas.width / 2, canvas.height * 0.3, scale * 1.5, '#ffd700');
+            drawTextWithGlow(`Final Score: ${score}`, canvas.width / 2, canvas.height * 0.45, scale * 0.7, 'var(--text-color)');
+            drawTextWithGlow(`Time: ${finalTime.toFixed(2)}s | Moves: ${moves}`, canvas.width / 2, canvas.height * 0.55, scale * 0.5, 'var(--text-color)');
+
+            const btnWidth = scale * 4.5;
+            const btnHeight = scale * 1;
+            const btnX = canvas.width / 2 - btnWidth / 2;
+            const btnY = canvas.height * 0.7;
+            const isHovered = mouse.x > btnX && mouse.x < btnX + btnWidth && mouse.y > btnY && mouse.y < btnY + btnHeight;
+            
+            drawButton('Play Again', btnX, btnY, btnWidth, btnHeight, isHovered);
+        }
+
+        // --- MAIN GAME LOOP ---
+        function gameLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawBackground();
+
+            switch (currentState) {
+                case GAME_STATE.START:
+                    drawStartScreen();
+                    break;
+                case GAME_STATE.PLAYING:
+                    drawGameScreen();
+                    break;
+                case GAME_STATE.GAME_OVER:
+                    drawGameOverScreen();
+                    break;
+            }
+            
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // --- LAYOUT & EVENT LISTENERS ---
+        function updateLayout() {
+            const size = Math.min(window.innerWidth, window.innerHeight) * 0.95;
+            canvas.width = size;
+            canvas.height = size;
+            
+            const boardSize = size * 0.9;
+            scale = boardSize / 5; // Unified scale factor for all UI elements
+
+            if (cards.length > 0) {
+                const cardSize = boardSize / GRID_SIZE * 0.85;
+                const gap = (boardSize - (cardSize * GRID_SIZE)) / (GRID_SIZE + 1);
+                const startX = (canvas.width - boardSize) / 2 + gap;
+                const startY = (canvas.height - boardSize) / 2 + gap;
+
+                cards.forEach((card, i) => {
+                    const row = Math.floor(i / GRID_SIZE);
+                    const col = i % GRID_SIZE;
+                    card.x = startX + col * (cardSize + gap);
+                    card.y = startY + row * (cardSize + gap);
+                    card.size = cardSize;
+                });
+            }
+        }
+        
+        function getMousePos(event) {
+            const rect = canvas.getBoundingClientRect();
+            let x, y;
+            if (event.touches && event.touches.length > 0) {
+                x = event.touches[0].clientX - rect.left;
+                y = event.touches[0].clientY - rect.top;
+            } else {
+                x = event.clientX - rect.left;
+                y = event.clientY - rect.top;
+            }
+            return { x, y };
+        }
+
+        function handleInteractionStart(event) {
+            event.preventDefault();
+            mouse.isDown = true;
+            const pos = getMousePos(event);
+            mouse.x = pos.x;
+            mouse.y = pos.y;
+            
+            if (currentState === GAME_STATE.PLAYING) {
+                for (const card of cards) {
+                    if (card.isMouseOver(mouse.x, mouse.y)) {
+                        handleCardClick(card);
+                        break; 
+                    }
+                }
+            } else if (currentState === GAME_STATE.START) {
+                const btnWidth = scale * 4;
+                const btnHeight = scale * 1;
+                const btnX = canvas.width / 2 - btnWidth / 2;
+                const btnY = canvas.height * 0.6;
+                if (mouse.x > btnX && mouse.x < btnX + btnWidth && mouse.y > btnY && mouse.y < btnY + btnHeight) {
+                    startGame();
+                }
+            } else if (currentState === GAME_STATE.GAME_OVER) {
+                const btnWidth = scale * 4.5;
+                const btnHeight = scale * 1;
+                const btnX = canvas.width / 2 - btnWidth / 2;
+                const btnY = canvas.height * 0.7;
+                if (mouse.x > btnX && mouse.x < btnX + btnWidth && mouse.y > btnY && mouse.y < btnY + btnHeight) {
+                    startGame();
+                }
+            }
+        }
+
+        function handleInteractionMove(event) {
+            event.preventDefault();
+            const pos = getMousePos(event);
+            mouse.x = pos.x;
+            mouse.y = pos.y;
+        }
+        
+        function handleInteractionEnd() {
+            mouse.isDown = false;
+        }
+
+        function handleKeyDown(event) {
+            if (event.key.toLowerCase() === 'r') {
+                if (currentState === GAME_STATE.PLAYING || currentState === GAME_STATE.GAME_OVER) {
+                    startGame();
+                }
+            }
+        }
+
+        window.addEventListener('resize', updateLayout);
+        canvas.addEventListener('mousedown', handleInteractionStart);
+        canvas.addEventListener('mousemove', handleInteractionMove);
+        window.addEventListener('mouseup', handleInteractionEnd);
+        
+        canvas.addEventListener('touchstart', handleInteractionStart, { passive: false });
+        canvas.addEventListener('touchmove', handleInteractionMove, { passive: false });
+        window.addEventListener('touchend', handleInteractionEnd);
+        
+        window.addEventListener('keydown', handleKeyDown);
+
+        // --- INITIALIZE ---
+        updateLayout();
+        gameLoop();
+
+    </script>
+</body>
+</html>

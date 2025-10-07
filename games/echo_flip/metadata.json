@@ -1,0 +1,8 @@
+{
+  "name": "Echo Flip",
+  "type": "memory card game",
+  "folder": "echo_flip",
+  "description": "Flip a match to trigger an \"echo,\" a thrilling chain reaction that reveals clues and flips more cards across the board. Master the cascade of memories to create a perfect, mind-bending turn and clear the table in a flash",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
