@@ -1,0 +1,8 @@
+{
+  "name": "Mine Mischief",
+  "type": "minesweeper",
+  "folder": "mine_mischief",
+  "description": "Outwit a delightfully tricky minefield where every click is a high-stakes puzzle of explosive pranks. Use pure logic and a steady nerve to defuse the chaos for that immensely satisfying board clear",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

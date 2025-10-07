@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Mine Mischief</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100%;
+            width: 100%;
+            background: #1a2a3a;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        canvas {
+            display: block;
+            background: #1a2a3a;
+            background-image: linear-gradient(135deg, #1a2a3a 0%, #2a3a4a 100%);
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        class SoundEngine {
+            constructor() {
+                this.audioContext = null;
+                this.isMuted = false;
+            }
+
+            init() {
+                if (!this.audioContext) {
+                    try {
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    } catch (e) {
+                        console.error("Web Audio API is not supported in this browser");
+                    }
+                }
+            }
+            
+            _play(type, frequency, duration, volume = 0.5) {
+                if (!this.audioContext || this.isMuted) return;
+
+                const oscillator = this.audioContext.createOscillator();
+                const gainNode = this.audioContext.createGain();
+
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioContext.destination);
+
+                oscillator.type = type;
+                oscillator.frequency.setValueAtTime(frequency, this.audioContext.currentTime);
+
+                gainNode.gain.setValueAtTime(volume, this.audioContext.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioContext.currentTime + duration);
+
+                oscillator.start(this.audioContext.currentTime);
+                oscillator.stop(this.audioContext.currentTime + duration);
+            }
+
+            click() { this._play('triangle', 600, 0.1, 0.3); }
+            flag() { this._play('sine', 800, 0.1, 0.4); }
+            unflag() { this._play('sine', 700, 0.1, 0.4); }
+            error() { this._play('square', 150, 0.15, 0.2); }
+            
+            explosion() {
+                if (!this.audioContext || this.isMuted) return;
+
+                const source = this.audioContext.createBufferSource();
+                const bufferSize = this.audioContext.sampleRate * 0.5; // 0.5 sec
+                const buffer = this.audioContext.createBuffer(1, bufferSize, this.audioContext.sampleRate);
+                let data = buffer.getChannelData(0);
+
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = Math.random() * 2 - 1;
+                }
+                source.buffer = buffer;
+
+                const gainNode = this.audioContext.createGain();
+                gainNode.gain.setValueAtTime(0.5, this.audioContext.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioContext.currentTime + 0.5);
+
+                source.connect(gainNode);
+                gainNode.connect(this.audioContext.destination);
+                source.start();
+            }
+
+            win() {
+                this._play('sine', 523.25, 0.15, 0.4); // C5
+                setTimeout(() => this._play('sine', 659.25, 0.15, 0.4), 150); // E5
+                setTimeout(() => this._play('sine', 783.99, 0.15, 0.4), 300); // G5
+                setTimeout(() => this._play('sine', 1046.50, 0.25, 0.5), 450); // C6
+            }
+        }
+        
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.radius = Math.random() * 4 + 1;
+                this.life = 1;
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 5 + 2;
+                this.vx = Math.cos(angle) * speed;
+                this.vy = Math.sin(angle) * speed - 3; // Initial upward motion
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vy += 0.1; // Gravity
+                this.life -= 0.015;
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = this.life > 0 ? this.life : 0;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        class Cell {
+            constructor(row, col, size) {
+                this.row = row;
+                this.col = col;
+                this.size = size;
+                this.isMine = false;
+                this.isRevealed = false;
+                this.isFlagged = false;
+                this.adjacentMines = 0;
+                this.revealAnimation = 0; // 0 to 1
+            }
+
+            draw(ctx, game) {
+                const x = this.col * this.size + game.gridOffset.x;
+                const y = this.row * this.size + game.gridOffset.y;
+                const numberColors = ['#000', '#1976d2', '#388e3c', '#d32f2f', '#7b1fa2', '#ff8f00', '#00838f', '#424242', '#9e9e9e'];
+                
+                ctx.font = `bold ${this.size * 0.6}px 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+
+                // Base cell style
+                if (!this.isRevealed) {
+                    const grad = ctx.createLinearGradient(x, y, x + this.size, y + this.size);
+                    grad.addColorStop(0, '#4a5a6a');
+                    grad.addColorStop(1, '#3a4a5a');
+                    ctx.fillStyle = grad;
+                    ctx.fillRect(x, y, this.size, this.size);
+                    
+                    // Inner bevel effect
+                    ctx.strokeStyle = '#5a6a7a';
+                    ctx.lineWidth = this.size * 0.05;
+                    ctx.strokeRect(x + ctx.lineWidth/2, y + ctx.lineWidth/2, this.size - ctx.lineWidth, this.size - ctx.lineWidth);
+                } else {
+                    if (this.revealAnimation < 1) {
+                        this.revealAnimation += 0.1;
+                    }
+                    const scale = 1 - 0.2 * Math.sin(this.revealAnimation * Math.PI);
+                    
+                    ctx.fillStyle = (this.row + this.col) % 2 === 0 ? '#2c3e50' : '#283848';
+                    ctx.fillRect(x, y, this.size, this.size);
+
+                    if (this.isMine) {
+                        ctx.save();
+                        ctx.translate(x + this.size/2, y + this.size/2);
+                        ctx.scale(scale, scale);
+                        ctx.fillText('💣', 0, this.size * 0.05);
+                        ctx.restore();
+                    } else if (this.adjacentMines > 0) {
+                        ctx.fillStyle = numberColors[this.adjacentMines];
+                        ctx.save();
+                        ctx.translate(x + this.size/2, y + this.size/2);
+                        ctx.scale(scale, scale);
+                        ctx.fillText(this.adjacentMines, 0, 0);
+                        ctx.restore();
+                    }
+                }
+                
+                if (this.isFlagged) {
+                    ctx.save();
+                    ctx.globalAlpha = 1;
+                    ctx.font = `bold ${this.size * 0.6}px 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif`;
+                    ctx.fillText('🚩', x + this.size / 2, y + this.size / 2 + this.size*0.05);
+                    ctx.restore();
+                }
+
+                // Highlight effect
+                if (game.cursor.row === this.row && game.cursor.col === this.col && !this.isRevealed) {
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+                    ctx.fillRect(x, y, this.size, this.size);
+                }
+            }
+        }
+        
+        class MineMischiefGame {
+            constructor(canvasId) {
+                this.canvas = document.getElementById(canvasId);
+                this.ctx = this.canvas.getContext('2d');
+                this.sound = new SoundEngine();
+                
+                this.difficulty = {
+                    'easy': { rows: 10, cols: 10, mines: 12 },
+                    'medium': { rows: 16, cols: 16, mines: 40 },
+                    'hard': { rows: 16, cols: 30, mines: 99 }
+                };
+                this.currentDifficulty = 'easy';
+
+                this.particles = [];
+                this.reset();
+                this.addEventListeners();
+                this.resize();
+                this.loop();
+            }
+            
+            reset() {
+                const { rows, cols, mines } = this.difficulty[this.currentDifficulty];
+                this.rows = rows;
+                this.cols = cols;
+                this.mineCount = mines;
+
+                this.gameState = 'start'; // 'start', 'playing', 'win', 'lose'
+                this.isFirstClick = true;
+                this.grid = [];
+                this.minesLeft = this.mineCount;
+                this.revealedCount = 0;
+                this.timer = 0;
+                this.startTime = null;
+                this.cursor = { row: Math.floor(rows/2), col: Math.floor(cols/2) };
+                this.lastTime = 0;
+                this.particles = [];
+                this.isLeftMouseDown = false;
+                this.isRightMouseDown = false;
+                this.initGrid();
+            }
+
+            initGrid() {
+                this.grid = Array.from({ length: this.rows }, (_, r) => 
+                    Array.from({ length: this.cols }, (_, c) => new Cell(r, c, this.cellSize))
+                );
+            }
+
+            placeMines(initialRow, initialCol) {
+                let minesPlaced = 0;
+                const safeZone = new Set();
+                for (let r_off = -1; r_off <= 1; r_off++) {
+                    for (let c_off = -1; c_off <= 1; c_off++) {
+                        safeZone.add(`${initialRow + r_off},${initialCol + c_off}`);
+                    }
+                }
+                
+                while (minesPlaced < this.mineCount) {
+                    const row = Math.floor(Math.random() * this.rows);
+                    const col = Math.floor(Math.random() * this.cols);
+                    const posKey = `${row},${col}`;
+
+                    if (!this.grid[row][col].isMine && !safeZone.has(posKey)) {
+                        this.grid[row][col].isMine = true;
+                        minesPlaced++;
+                    }
+                }
+
+                for (let r = 0; r < this.rows; r++) {
+                    for (let c = 0; c < this.cols; c++) {
+                        if (this.grid[r][c].isMine) continue;
+                        let count = 0;
+                        this.getNeighbors(r, c).forEach(n => {
+                            if (n.isMine) count++;
+                        });
+                        this.grid[r][c].adjacentMines = count;
+                    }
+                }
+            }
+
+            getNeighbors(row, col) {
+                const neighbors = [];
+                for (let r_off = -1; r_off <= 1; r_off++) {
+                    for (let c_off = -1; c_off <= 1; c_off++) {
+                        if (r_off === 0 && c_off === 0) continue;
+                        const newRow = row + r_off;
+                        const newCol = col + c_off;
+                        if (newRow >= 0 && newRow < this.rows && newCol >= 0 && newCol < this.cols) {
+                            neighbors.push(this.grid[newRow][newCol]);
+                        }
+                    }
+                }
+                return neighbors;
+            }
+            
+            revealCell(row, col) {
+                if (row < 0 || row >= this.rows || col < 0 || col >= this.cols) return;
+                const cell = this.grid[row][col];
+                if (cell.isRevealed || cell.isFlagged) return;
+
+                if (this.isFirstClick) {
+                    this.placeMines(row, col);
+                    this.isFirstClick = false;
+                    this.gameState = 'playing';
+                    this.startTime = Date.now();
+                }
+
+                cell.isRevealed = true;
+                cell.revealAnimation = 0;
+                this.revealedCount++;
+                this.sound.click();
+
+                if (cell.isMine) {
+                    this.gameOver(false);
+                    return;
+                }
+
+                if (cell.adjacentMines === 0) {
+                    this.getNeighbors(row, col).forEach(n => this.revealCell(n.row, n.col));
+                }
+                
+                this.checkWinCondition();
+            }
+
+            chord(row, col) {
+                const cell = this.grid[row][col];
+                if (!cell.isRevealed || cell.adjacentMines === 0) return;
+
+                const neighbors = this.getNeighbors(row, col);
+                const flaggedNeighbors = neighbors.filter(n => n.isFlagged).length;
+
+                if (flaggedNeighbors === cell.adjacentMines) {
+                    neighbors.forEach(n => {
+                        if (!n.isFlagged && !n.isRevealed) {
+                            this.revealCell(n.row, n.col);
+                        }
+                    });
+                } else {
+                    this.sound.error();
+                }
+            }
+            
+            toggleFlag(row, col) {
+                if (this.isFirstClick) return;
+                if (this.gameState !== 'playing') return;
+                const cell = this.grid[row][col];
+                if (cell.isRevealed) return;
+                
+                if (cell.isFlagged) {
+                    cell.isFlagged = false;
+                    this.minesLeft++;
+                    this.sound.unflag();
+                } else if (this.minesLeft > 0) {
+                    cell.isFlagged = true;
+                    this.minesLeft--;
+                    this.sound.flag();
+                }
+                this.checkWinCondition();
+            }
+
+            checkWinCondition() {
+                if (this.gameState !== 'playing') return;
+                const nonMineCells = this.rows * this.cols - this.mineCount;
+                if (this.revealedCount === nonMineCells) {
+                    this.gameOver(true);
+                }
+            }
+
+            gameOver(isWin) {
+                this.gameState = isWin ? 'win' : 'lose';
+                this.startTime = null;
+
+                if (isWin) {
+                    this.sound.win();
+                    for(let r=0; r<this.rows; r++) {
+                        for(let c=0; c<this.cols; c++) {
+                            if(this.grid[r][c].isMine && !this.grid[r][c].isFlagged) this.grid[r][c].isFlagged = true;
+                        }
+                    }
+                    this.minesLeft = 0;
+                    this.createParticleExplosion(this.canvas.width/2, this.canvas.height/2, 200);
+                } else {
+                    this.sound.explosion();
+                    this.grid.forEach(row => row.forEach(cell => {
+                        if (cell.isMine) {
+                            cell.isRevealed = true;
+                            if (!cell.isFlagged) {
+                                this.createParticleExplosion(
+                                    cell.col * this.cellSize + this.gridOffset.x + this.cellSize / 2, 
+                                    cell.row * this.cellSize + this.gridOffset.y + this.cellSize / 2, 
+                                    30, '#ff4545');
+                            }
+                        }
+                    }));
+                }
+            }
+            
+            createParticleExplosion(x, y, count, color = null) {
+                const colors = ['#f44336', '#e91e63', '#9c27b0', '#673ab7', '#3f51b5', '#2196f3', '#03a9f4', '#00bcd4', '#009688', '#4caf50', '#8bc34a', '#cddc39', '#ffeb3b', '#ffc107', '#ff9800'];
+                for (let i = 0; i < count; i++) {
+                    const particleColor = color || colors[Math.floor(Math.random() * colors.length)];
+                    this.particles.push(new Particle(x, y, particleColor));
+                }
+            }
+
+            update(timestamp) {
+                const deltaTime = timestamp - (this.lastTime || timestamp);
+                this.lastTime = timestamp;
+
+                if (this.gameState === 'playing' && this.startTime) {
+                    this.timer = (Date.now() - this.startTime) / 1000;
+                }
+                
+                this.particles.forEach((p, i) => {
+                    p.update();
+                    if (p.life <= 0) this.particles.splice(i, 1);
+                });
+            }
+
+            draw() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                // Draw grid
+                if (this.grid.length) {
+                    this.grid.forEach(row => row.forEach(cell => cell.draw(this.ctx, this)));
+                }
+                
+                // Draw UI
+                this.drawUI();
+                
+                // Draw Particles
+                this.particles.forEach(p => p.draw(this.ctx));
+                
+                // Draw overlays
+                if (this.gameState === 'start') this.drawOverlay("Mine Mischief", "Click or press Enter to Start");
+                else if (this.gameState === 'win') this.drawOverlay("You Win! 😎", `Time: ${this.timer.toFixed(2)}s. Click to Restart.`);
+                else if (this.gameState === 'lose') this.drawOverlay("Game Over 😵", "A mine was detonated! Click to Restart.");
+            }
+            
+            drawUI() {
+                const padding = this.canvas.width * 0.02;
+                const fontSize = Math.min(this.canvas.width * 0.04, 30);
+                this.ctx.font = `bold ${fontSize}px 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif`;
+                this.ctx.fillStyle = '#ecf0f1';
+                this.ctx.textAlign = 'left';
+                this.ctx.textBaseline = 'top';
+                
+                // Mines Left
+                this.ctx.fillText(`🚩 ${this.minesLeft}`, padding, padding);
+                
+                // Timer
+                this.ctx.textAlign = 'right';
+                this.ctx.fillText(`⏱️ ${this.timer.toFixed(1)}`, this.canvas.width - padding, padding);
+
+                // Smiley face restart button
+                const smileySize = fontSize * 1.5;
+                this.smileyPos = { x: this.canvas.width / 2, y: padding + smileySize/2, size: smileySize };
+                let smiley = '😊';
+                if(this.gameState === 'win') smiley = '😎';
+                if(this.gameState === 'lose') smiley = '😵';
+
+                this.ctx.font = `${smileySize}px sans-serif`;
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                this.ctx.fillText(smiley, this.smileyPos.x, this.smileyPos.y);
+            }
+
+            drawOverlay(title, subtitle) {
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+
+                // Title
+                const titleSize = Math.min(this.canvas.width * 0.1, 80);
+                this.ctx.font = `bold ${titleSize}px 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif`;
+                this.ctx.fillStyle = '#fff';
+                this.ctx.fillText(title, this.canvas.width / 2, this.canvas.height / 2 - titleSize);
+                
+                // Subtitle
+                const subSize = Math.min(this.canvas.width * 0.04, 24);
+                this.ctx.font = `${subSize}px 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif`;
+                this.ctx.fillStyle = '#bdc3c7';
+                this.ctx.fillText(subtitle, this.canvas.width / 2, this.canvas.height / 2);
+                
+                if (this.gameState === 'start') {
+                    // Difficulty buttons
+                    this.difficultyButtons = {};
+                    const buttonWidth = this.canvas.width * 0.2;
+                    const buttonHeight = subSize * 2;
+                    const spacing = buttonWidth * 1.2;
+                    let i = 0;
+                    for (const diff in this.difficulty) {
+                        const x = this.canvas.width / 2 + (i - 1) * spacing;
+                        const y = this.canvas.height / 2 + subSize * 3;
+                        
+                        this.ctx.fillStyle = this.currentDifficulty === diff ? '#2980b9' : '#34495e';
+                        this.ctx.fillRect(x - buttonWidth/2, y - buttonHeight/2, buttonWidth, buttonHeight);
+                        this.ctx.fillStyle = '#ecf0f1';
+                        this.ctx.font = `bold ${subSize * 0.8}px 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif`;
+                        this.ctx.fillText(diff.toUpperCase(), x, y);
+
+                        this.difficultyButtons[diff] = { x: x - buttonWidth/2, y: y - buttonHeight/2, w: buttonWidth, h: buttonHeight };
+                        i++;
+                    }
+                    // Instructions
+                    this.ctx.fillStyle = '#bdc3c7';
+                    const instSize = Math.min(this.canvas.width * 0.025, 16);
+                    this.ctx.font = `${instSize}px 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif`;
+                    const startY = this.canvas.height / 2 + subSize * 6;
+                    this.ctx.fillText("Left Click: Reveal | Right Click: Flag", this.canvas.width / 2, startY);
+                    this.ctx.fillText("Arrows: Move | Enter/Space: Reveal | F: Flag", this.canvas.width / 2, startY + instSize * 1.5);
+                }
+            }
+
+            loop(timestamp = 0) {
+                this.update(timestamp);
+                this.draw();
+                requestAnimationFrame(this.loop.bind(this));
+            }
+            
+            resize() {
+                this.canvas.width = window.innerWidth;
+                this.canvas.height = window.innerHeight;
+                
+                const topMargin = 80;
+                const hPadd = this.canvas.width * 0.05;
+                const vPadd = this.canvas.height * 0.05 + topMargin;
+
+                const availableWidth = this.canvas.width - 2 * hPadd;
+                const availableHeight = this.canvas.height - vPadd;
+                
+                this.cellSize = Math.floor(Math.min(availableWidth / this.cols, availableHeight / this.rows));
+                
+                const gridWidth = this.cols * this.cellSize;
+                const gridHeight = this.rows * this.cellSize;
+                
+                this.gridOffset = {
+                    x: (this.canvas.width - gridWidth) / 2,
+                    y: (this.canvas.height - gridHeight + topMargin) / 2
+                };
+
+                if (this.grid.length) {
+                    this.grid.forEach(row => row.forEach(cell => cell.size = this.cellSize));
+                }
+                this.draw();
+            }
+
+            getCellFromCoords(x, y) {
+                if (x < this.gridOffset.x || y < this.gridOffset.y) return null;
+                const col = Math.floor((x - this.gridOffset.x) / this.cellSize);
+                const row = Math.floor((y - this.gridOffset.y) / this.cellSize);
+                if (row >= 0 && row < this.rows && col >= 0 && col < this.cols) {
+                    return this.grid[row][col];
+                }
+                return null;
+            }
+
+            addEventListeners() {
+                window.addEventListener('resize', () => this.resize());
+
+                this.canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+                this.canvas.addEventListener('mousedown', e => {
+                    e.preventDefault();
+                    this.sound.init(); // Initialize audio on user interaction
+                    
+                    if (this.gameState === 'start') {
+                        let buttonClicked = false;
+                        if (this.difficultyButtons) {
+                           for(const diff in this.difficultyButtons) {
+                              const btn = this.difficultyButtons[diff];
+                              if (e.clientX > btn.x && e.clientX < btn.x + btn.w && e.clientY > btn.y && e.clientY < btn.y + btn.h) {
+                                  this.currentDifficulty = diff;
+                                  this.reset();
+                                  this.resize();
+                                  buttonClicked = true;
+                                  break;
+                              }
+                           }
+                        }
+                        if (buttonClicked) {
+                            return; // Just changed difficulty, wait for another click to start.
+                        }
+                        this.gameState = 'playing'; // This is a "start game" click. Fall through to the game logic below.
+                    }
+
+                    if (this.gameState === 'win' || this.gameState === 'lose') {
+                        this.reset();
+                        this.resize();
+                        return;
+                    }
+                    
+                    // Check smiley click
+                    const dx = e.clientX - this.smileyPos.x;
+                    const dy = e.clientY - this.smileyPos.y;
+                    if(Math.sqrt(dx*dx + dy*dy) < this.smileyPos.size/2) {
+                        this.reset();
+                        this.resize();
+                        return;
+                    }
+
+                    const cell = this.getCellFromCoords(e.clientX, e.clientY);
+                    if (!cell) return;
+                    this.cursor = { row: cell.row, col: cell.col };
+
+                    if (this.gameState === 'playing') {
+                        if (e.button === 0) { // Left click
+                            if (e.buttons === 3) { // Chord when both buttons are down
+                                this.chord(cell.row, cell.col);
+                            } else {
+                                this.isLeftMouseDown = true;
+                            }
+                        } else if (e.button === 2) { // Right click
+                            this.isRightMouseDown = true;
+                            this.toggleFlag(cell.row, cell.col);
+                        } else if (e.button === 1) { // Middle click
+                            this.chord(cell.row, cell.col);
+                        }
+                    }
+                });
+
+                this.canvas.addEventListener('mouseup', e => {
+                    if (this.gameState !== 'playing') {
+                        this.isLeftMouseDown = false;
+                        this.isRightMouseDown = false;
+                        return;
+                    }
+                    const cell = this.getCellFromCoords(e.clientX, e.clientY);
+                    
+                    if (e.button === 0 && this.isLeftMouseDown) {
+                        if (cell) this.revealCell(cell.row, cell.col);
+                    }
+                    this.isLeftMouseDown = false;
+                    this.isRightMouseDown = false;
+                });
+
+                this.canvas.addEventListener('mousemove', e => {
+                    if (this.gameState !== 'playing') return;
+                    const cell = this.getCellFromCoords(e.clientX, e.clientY);
+                    if (cell) {
+                        this.cursor = { row: cell.row, col: cell.col };
+                    }
+                });
+
+                window.addEventListener('keydown', e => {
+                    e.preventDefault();
+                    this.sound.init();
+
+                    if (this.gameState === 'start') {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            this.gameState = 'playing';
+                            // Fall through to process this key press as the first move.
+                        } else {
+                            return; // Ignore other keys on start screen
+                        }
+                    }
+                    
+                    if (this.gameState === 'win' || this.gameState === 'lose') {
+                        if(e.key === 'Enter' || e.key === ' ') {
+                            this.reset();
+                            this.resize();
+                        }
+                        return;
+                    }
+                    if (this.gameState !== 'playing') return;
+
+                    let { row, col } = this.cursor;
+                    switch (e.key) {
+                        case 'ArrowUp': row--; break;
+                        case 'ArrowDown': row++; break;
+                        case 'ArrowLeft': col--; break;
+                        case 'ArrowRight': col++; break;
+                        case 'f':
+                        case 'm':
+                            this.toggleFlag(row, col);
+                            break;
+                        case ' ':
+                        case 'Enter':
+                            this.revealCell(row, col);
+                            break;
+                    }
+
+                    this.cursor.row = Math.max(0, Math.min(this.rows - 1, row));
+                    this.cursor.col = Math.max(0, Math.min(this.cols - 1, col));
+                });
+            }
+        }
+        
+        window.addEventListener('DOMContentLoaded', () => {
+            new MineMischiefGame('gameCanvas');
+        });
+    </script>
+</body>
+</html>
