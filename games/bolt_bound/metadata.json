@@ -1,0 +1,8 @@
+{
+  "name": "Bolt Bound",
+  "type": "endless runner",
+  "folder": "bolt_bound",
+  "description": "Surge through a collapsing reality by chaining impossible, lightning-fast dashes between crumbling platforms. Master your electric momentum to become an unstoppable current and shatter every record in your path.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
