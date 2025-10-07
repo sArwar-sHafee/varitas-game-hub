@@ -1,0 +1,8 @@
+{
+  "name": "Letter Drop",
+  "type": "hangman",
+  "folder": "letter_drop",
+  "description": "Test your wits in a race against gravity as letters drop from above! Tap the right ones to solve the puzzle before your chances completely fall away.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

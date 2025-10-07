@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Letter Drop</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #1a1a2e;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Arial', sans-serif;
+        }
+        canvas {
+            display: block;
+            background: #0f0c29; /* fallback for old browsers */
+            background: -webkit-linear-gradient(to right, #24243e, #302b63, #0f0c29);
+            background: linear-gradient(to right, #24243e, #302b63, #0f0c29);
+            box-shadow: 0 0 30px rgba(255, 255, 255, 0.1);
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // ES6+ JavaScript code for the "Letter Drop" game
+
+        class Game {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
+                this.gameState = 'start'; // 'start', 'playing', 'gameOver'
+                this.score = 0;
+                this.lives = 6;
+                this.wordList = [
+                    "JAVASCRIPT", "CANVAS", "DEVELOPER", "ANIMATION", "RESPONSIVE",
+                    "INTERFACE", "COMPONENT", "FRAMEWORK", "LIBRARY", "ALGORITHM",
+                    "VARIABLE", "FUNCTION", "OBJECT", "METHOD", "PROMISE"
+                ];
+                this.currentWord = '';
+                this.guessedLetters = new Set();
+                this.displayWord = [];
+
+                this.particles = [];
+                this.fallingLetters = [];
+                this.keyboard = {};
+                this.buttons = [];
+                
+                this.initAudio();
+                this.resize();
+                this.initKeyboard();
+                this.initEventListeners();
+                this.animate();
+            }
+
+            initAudio() {
+                try {
+                    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) {
+                    console.error("Web Audio API is not supported in this browser");
+                    this.audioCtx = null;
+                }
+            }
+            
+            playSound(type) {
+                if (!this.audioCtx || this.audioCtx.state === 'suspended') return;
+
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+                
+                gainNode.gain.setValueAtTime(0.2, this.audioCtx.currentTime);
+
+                switch(type) {
+                    case 'correct':
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(440, this.audioCtx.currentTime);
+                        oscillator.frequency.linearRampToValueAtTime(880, this.audioCtx.currentTime + 0.1);
+                        gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + 0.2);
+                        break;
+                    case 'wrong':
+                        oscillator.type = 'square';
+                        oscillator.frequency.setValueAtTime(220, this.audioCtx.currentTime);
+                        oscillator.frequency.linearRampToValueAtTime(110, this.audioCtx.currentTime + 0.2);
+                        gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + 0.3);
+                        break;
+                    case 'win':
+                        this.playArpeggio([523.25, 659.25, 783.99, 1046.50], 0.1);
+                        break;
+                    case 'lose':
+                        this.playArpeggio([300, 200, 150, 100], 0.15);
+                        break;
+                    case 'click':
+                        oscillator.type = 'triangle';
+                        oscillator.frequency.setValueAtTime(600, this.audioCtx.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + 0.1);
+                        break;
+                }
+                
+                oscillator.start(this.audioCtx.currentTime);
+                oscillator.stop(this.audioCtx.currentTime + 0.3);
+            }
+
+            playArpeggio(frequencies, duration) {
+                if (!this.audioCtx || this.audioCtx.state === 'suspended') return;
+                let startTime = this.audioCtx.currentTime;
+                frequencies.forEach((freq, i) => {
+                    const osc = this.audioCtx.createOscillator();
+                    const gain = this.audioCtx.createGain();
+                    osc.connect(gain);
+                    gain.connect(this.audioCtx.destination);
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, startTime + i * duration);
+                    gain.gain.setValueAtTime(0.2, startTime + i * duration);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, startTime + (i + 1) * duration);
+                    osc.start(startTime + i * duration);
+                    osc.stop(startTime + (i + 1) * duration);
+                });
+            }
+
+            resize() {
+                this.width = window.innerWidth;
+                this.height = window.innerHeight;
+                this.canvas.width = this.width;
+                this.canvas.height = this.height;
+                this.initKeyboard();
+            }
+
+            initEventListeners() {
+                window.addEventListener('resize', () => this.resize());
+                window.addEventListener('keydown', (e) => this.handleKeyPress(e.key.toUpperCase()));
+                this.canvas.addEventListener('click', (e) => this.handleClick(e.clientX, e.clientY));
+            }
+
+            initKeyboard() {
+                const rows = ["QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"];
+                const keySize = Math.min(this.width * 0.07, this.height * 0.07, 50);
+                const keyGap = keySize * 0.1;
+                this.keyboard.keys = [];
+                
+                rows.forEach((row, rowIndex) => {
+                    const rowWidth = row.length * (keySize + keyGap) - keyGap;
+                    let startX = (this.width - rowWidth) / 2;
+                    let startY = this.height - (3 - rowIndex) * (keySize + keyGap) - this.height * 0.05;
+
+                    for (let char of row) {
+                        this.keyboard.keys.push({
+                            char: char,
+                            x: startX,
+                            y: startY,
+                            width: keySize,
+                            height: keySize,
+                        });
+                        startX += keySize + keyGap;
+                    }
+                });
+            }
+
+            handleClick(x, y) {
+                // Resume audio context on first user interaction, as required by modern browsers.
+                if (this.audioCtx && this.audioCtx.state === 'suspended') {
+                    this.audioCtx.resume();
+                }
+
+                 if (this.gameState === 'playing') {
+                    for (const key of this.keyboard.keys) {
+                        if (x > key.x && x < key.x + key.width &&
+                            y > key.y && y < key.y + key.height &&
+                            !this.guessedLetters.has(key.char)) {
+                            this.playSound('click');
+                            this.handleKeyPress(key.char);
+                            break;
+                        }
+                    }
+                } else {
+                    for (const button of this.buttons) {
+                        if (x > button.x && x < button.x + button.width &&
+                            y > button.y && y < button.y + button.height) {
+                                this.playSound('click');
+                                button.action();
+                                break;
+                        }
+                    }
+                }
+            }
+
+            handleKeyPress(key) {
+                if (this.gameState !== 'playing' || !/^[A-Z]$/.test(key)) return;
+                if (this.guessedLetters.has(key)) return;
+
+                this.guessedLetters.add(key);
+                let found = false;
+
+                for (let i = 0; i < this.currentWord.length; i++) {
+                    if (this.currentWord[i] === key) {
+                        this.displayWord[i] = { char: key, scale: 1.5 };
+                        found = true;
+                    }
+                }
+
+                if (found) {
+                    this.score += 10;
+                    this.playSound('correct');
+                    this.createParticles(this.width / 2, this.height / 2, 'gold', 20);
+                } else {
+                    this.lives--;
+                    this.score = Math.max(0, this.score - 5);
+                    this.playSound('wrong');
+                    this.shakeScreen();
+                }
+
+                this.checkGameState();
+            }
+            
+            shakeScreen() {
+                this.canvas.style.transition = 'transform 0.05s';
+                this.canvas.style.transform = 'translateX(10px)';
+                setTimeout(() => this.canvas.style.transform = 'translateX(-10px)', 50);
+                setTimeout(() => this.canvas.style.transform = 'translateX(5px)', 100);
+                setTimeout(() => this.canvas.style.transform = 'translateX(0px)', 150);
+            }
+
+            checkGameState() {
+                const wordIsGuessed = this.displayWord.every(item => item.char !== '_');
+                if (wordIsGuessed) {
+                    this.gameState = 'gameOver';
+                    this.gameOverMessage = '🎉 YOU WIN! 🎉';
+                    this.score += 50;
+                    this.playSound('win');
+                    for(let i=0; i<10; i++){
+                        setTimeout(() => this.createParticles(Math.random() * this.width, Math.random() * this.height, `hsl(${Math.random()*360}, 100%, 70%)`, 50), i * 100);
+                    }
+                } else if (this.lives <= 0) {
+                    this.gameState = 'gameOver';
+                    this.gameOverMessage = 'GAME OVER';
+                    this.playSound('lose');
+                    // Reveal the word on loss
+                    this.displayWord = this.currentWord.split('').map(char => ({ char: char, scale: 1 }));
+                }
+            }
+
+            startNewGame() {
+                this.gameState = 'playing';
+                this.lives = 6;
+                this.guessedLetters.clear();
+                this.currentWord = this.wordList[Math.floor(Math.random() * this.wordList.length)];
+                this.displayWord = this.currentWord.split('').map(char => ({ char: '_', scale: 1 }));
+                this.particles = [];
+                this.buttons = []; // Clear buttons from previous screen
+            }
+            
+            resetGame() {
+                this.score = 0;
+                this.startNewGame();
+            }
+
+            createParticles(x, y, color, count) {
+                for (let i = 0; i < count; i++) {
+                    this.particles.push(new Particle(x, y, color));
+                }
+            }
+            
+            createFallingLetter() {
+                if(this.gameState !== 'playing') return;
+                const char = String.fromCharCode(65 + Math.floor(Math.random() * 26));
+                const x = Math.random() * this.width;
+                const size = this.width * 0.02 + Math.random() * 20;
+                const speed = 1 + Math.random() * 2;
+                this.fallingLetters.push(new FallingLetter(char, x, -size, size, speed));
+            }
+
+            animate() {
+                this.update();
+                this.draw();
+                requestAnimationFrame(() => this.animate());
+            }
+
+            update() {
+                this.particles.forEach((p, i) => {
+                    p.update();
+                    if (p.life <= 0) this.particles.splice(i, 1);
+                });
+                
+                this.displayWord.forEach(letter => {
+                    if (letter.scale > 1) {
+                        letter.scale -= 0.05;
+                    } else {
+                        letter.scale = 1;
+                    }
+                });
+
+                if (this.gameState === 'playing' && Math.random() < 0.02) {
+                    this.createFallingLetter();
+                }
+
+                this.fallingLetters.forEach((fl, i) => {
+                    fl.update();
+                    if (fl.y > this.height + fl.size) {
+                        this.fallingLetters.splice(i, 1);
+                    }
+                });
+            }
+
+            draw() {
+                this.ctx.clearRect(0, 0, this.width, this.height);
+
+                this.fallingLetters.forEach(fl => fl.draw(this.ctx));
+                this.particles.forEach(p => p.draw(this.ctx));
+
+                switch (this.gameState) {
+                    case 'start':
+                        this.drawStartScreen();
+                        break;
+                    case 'playing':
+                        this.drawGameScreen();
+                        break;
+                    case 'gameOver':
+                        this.drawGameOverScreen();
+                        break;
+                }
+            }
+
+            drawText(text, x, y, size, color, align = 'center', font = 'Arial') {
+                this.ctx.fillStyle = color;
+                this.ctx.font = `bold ${size}px ${font}`;
+                this.ctx.textAlign = align;
+                this.ctx.textBaseline = 'middle';
+                this.ctx.fillText(text, x, y);
+            }
+
+            drawButton(button) {
+                this.ctx.fillStyle = button.color;
+                this.ctx.strokeStyle = button.borderColor;
+                this.ctx.lineWidth = 4;
+                this.ctx.beginPath();
+                this.ctx.roundRect(button.x, button.y, button.width, button.height, 15);
+                this.ctx.fill();
+                this.ctx.stroke();
+                this.drawText(button.text, button.x + button.width / 2, button.y + button.height / 2, button.height * 0.4, button.textColor);
+            }
+
+            drawStartScreen() {
+                this.drawText('LETTER DROP', this.width / 2, this.height * 0.3, this.width * 0.1, 'rgba(255, 255, 255, 0.9)', 'center', 'Impact');
+                
+                const instructionSize = Math.min(this.width * 0.02, 22);
+                this.drawText('A Hangman Style Word Game', this.width / 2, this.height * 0.4, instructionSize, '#e0e0e0');
+                this.drawText('Guess the word before you run out of lives!', this.width / 2, this.height * 0.5, instructionSize, '#e0e0e0');
+                this.drawText('Use your keyboard or click the on-screen letters.', this.width / 2, this.height * 0.55, instructionSize, '#e0e0e0');
+
+                const btnWidth = Math.min(this.width * 0.3, 300);
+                const btnHeight = Math.min(this.height * 0.08, 70);
+                this.buttons = [{
+                    x: (this.width - btnWidth) / 2,
+                    y: this.height * 0.65,
+                    width: btnWidth,
+                    height: btnHeight,
+                    text: 'START GAME',
+                    color: '#4CAF50',
+                    borderColor: '#81C784',
+                    textColor: 'white',
+                    action: () => this.resetGame()
+                }];
+                this.drawButton(this.buttons[0]);
+            }
+
+            drawGameScreen() {
+                const uiFontSize = Math.min(this.width * 0.03, 30);
+                // Draw Score and Lives
+                this.drawText(`Score: ${this.score}`, this.width * 0.05, this.height * 0.05, uiFontSize, 'white', 'left');
+                this.drawText(`Lives: ${'❤️'.repeat(this.lives)}`, this.width * 0.95, this.height * 0.05, uiFontSize, '#ff4d4d', 'right');
+
+                // Draw Hangman
+                this.drawHangman();
+
+                // Draw Word
+                const wordAreaWidth = this.width * 0.9;
+                const letterCount = this.currentWord.length;
+                const maxLetterSize = Math.min(this.width * 0.05, 60);
+                const letterSpacing = Math.min(wordAreaWidth / letterCount, maxLetterSize + 20);
+                
+                const wordWidth = letterCount * letterSpacing;
+                let startX = (this.width - wordWidth) / 2 + letterSpacing / 2;
+                
+                this.displayWord.forEach((letter, i) => {
+                    const yPos = this.height * 0.65;
+                    const scale = letter.scale;
+                    const size = maxLetterSize * scale;
+                    this.ctx.font = `bold ${size}px Arial`;
+                    this.ctx.textAlign = 'center';
+                    this.ctx.textBaseline = 'middle';
+                    
+                    if (letter.char !== '_') {
+                        this.ctx.fillStyle = '#66ff66';
+                        this.ctx.fillText(letter.char, startX + i * letterSpacing, yPos);
+                    } else {
+                        this.ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                        this.ctx.fillRect(startX + i * letterSpacing - letterSpacing/3, yPos + size/2.5, letterSpacing*0.6, 4);
+                    }
+                });
+
+                // Draw Keyboard
+                this.drawKeyboard();
+            }
+
+            drawKeyboard() {
+                this.keyboard.keys.forEach(key => {
+                    const isGuessed = this.guessedLetters.has(key.char);
+                    const isCorrect = this.currentWord.includes(key.char);
+
+                    if (isGuessed) {
+                        this.ctx.fillStyle = isCorrect ? '#3a5a40' : '#4a4e69';
+                    } else {
+                        this.ctx.fillStyle = '#9a8c98';
+                    }
+
+                    this.ctx.strokeStyle = '#c9ada7';
+                    this.ctx.lineWidth = 2;
+                    this.ctx.beginPath();
+                    this.ctx.roundRect(key.x, key.y, key.width, key.height, 5);
+                    this.ctx.fill();
+                    this.ctx.stroke();
+                    this.drawText(key.char, key.x + key.width / 2, key.y + key.height / 2, key.height * 0.5, isGuessed ? '#22223b' : 'white');
+                });
+            }
+
+            drawHangman() {
+                const parts = 6 - this.lives;
+                const color = '#f2e9e4';
+                const centerX = this.width / 2;
+                const topY = this.height * 0.15;
+                const scale = Math.min(this.width / 800, this.height / 800);
+
+                const gallowsW = 150 * scale;
+                const gallowsH = 250 * scale;
+                const ropeL = 50 * scale;
+                const headR = 25 * scale;
+                const bodyL = 80 * scale;
+                const limbL = 50 * scale;
+                
+                const ropeX = centerX + gallowsW / 3;
+                
+                this.ctx.strokeStyle = color;
+                this.ctx.lineWidth = 5 * scale;
+
+                // Gallows
+                this.ctx.beginPath();
+                this.ctx.moveTo(centerX - gallowsW, topY + gallowsH);
+                this.ctx.lineTo(centerX, topY + gallowsH); // Base
+                this.ctx.moveTo(centerX - gallowsW / 2, topY + gallowsH);
+                this.ctx.lineTo(centerX - gallowsW / 2, topY); // Pole
+                this.ctx.lineTo(ropeX, topY); // Top bar
+                this.ctx.lineTo(ropeX, topY + ropeL); // Rope
+                this.ctx.stroke();
+
+                if (parts > 0) { // Head
+                    this.ctx.beginPath();
+                    this.ctx.arc(ropeX, topY + ropeL + headR, headR, 0, Math.PI * 2);
+                    this.ctx.stroke();
+                }
+                if (parts > 1) { // Body
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(ropeX, topY + ropeL + headR * 2);
+                    this.ctx.lineTo(ropeX, topY + ropeL + headR * 2 + bodyL);
+                    this.ctx.stroke();
+                }
+                if (parts > 2) { // Left Arm
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(ropeX, topY + ropeL + headR * 2 + 20 * scale);
+                    this.ctx.lineTo(ropeX - limbL, topY + ropeL + headR * 2 + 10 * scale);
+                    this.ctx.stroke();
+                }
+                if (parts > 3) { // Right Arm
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(ropeX, topY + ropeL + headR * 2 + 20 * scale);
+                    this.ctx.lineTo(ropeX + limbL, topY + ropeL + headR * 2 + 10 * scale);
+                    this.ctx.stroke();
+                }
+                if (parts > 4) { // Left Leg
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(ropeX, topY + ropeL + headR * 2 + bodyL);
+                    this.ctx.lineTo(ropeX - limbL, topY + ropeL + headR * 2 + bodyL + limbL);
+                    this.ctx.stroke();
+                }
+                if (parts > 5) { // Right Leg
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(ropeX, topY + ropeL + headR * 2 + bodyL);
+                    this.ctx.lineTo(ropeX + limbL, topY + ropeL + headR * 2 + bodyL + limbL);
+                    this.ctx.stroke();
+                }
+            }
+
+            drawGameOverScreen() {
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                this.ctx.fillRect(0, 0, this.width, this.height);
+
+                this.drawText(this.gameOverMessage, this.width / 2, this.height * 0.3, this.width * 0.08, this.gameOverMessage.includes('WIN') ? '#4CAF50' : '#F44336', 'center', 'Impact');
+                
+                const infoSize = Math.min(this.width * 0.025, 28);
+                this.drawText(`The word was: ${this.currentWord}`, this.width / 2, this.height * 0.45, infoSize, '#e0e0e0');
+                this.drawText(`Final Score: ${this.score}`, this.width / 2, this.height * 0.5, infoSize, '#e0e0e0');
+
+                const btnWidth = Math.min(this.width * 0.3, 320);
+                const btnHeight = Math.min(this.height * 0.08, 70);
+                
+                this.buttons = [{
+                    x: (this.width - btnWidth) / 2,
+                    y: this.height * 0.6,
+                    width: btnWidth,
+                    height: btnHeight,
+                    text: 'PLAY AGAIN',
+                    color: '#2196F3',
+                    borderColor: '#64B5F6',
+                    textColor: 'white',
+                    action: () => this.startNewNewGame()
+                }];
+
+                this.drawButton(this.buttons[0]);
+            }
+        }
+
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.size = Math.random() * 7 + 3;
+                this.vx = (Math.random() - 0.5) * 8;
+                this.vy = (Math.random() - 0.5) * 8 - 5;
+                this.life = 100;
+                this.gravity = 0.2;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vy += this.gravity;
+                this.life--;
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = this.life / 100;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+        
+        class FallingLetter {
+            constructor(char, x, y, size, speed) {
+                this.char = char;
+                this.x = x;
+                this.y = y;
+                this.size = size;
+                this.speed = speed;
+                this.color = `hsla(${Math.random() * 360}, 100%, 80%, 0.3)`;
+            }
+
+            update() {
+                this.y += this.speed;
+            }
+
+            draw(ctx) {
+                ctx.fillStyle = this.color;
+                ctx.font = `${this.size}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.fillText(this.char, this.x, this.y);
+            }
+        }
+
+        window.onload = () => {
+            const canvas = document.getElementById('gameCanvas');
+            new Game(canvas);
+        };
+    </script>
+</body>
+</html>
