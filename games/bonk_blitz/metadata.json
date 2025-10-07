@@ -1,0 +1,8 @@
+{
+  "name": "Bonk Blitz",
+  "type": "whack-a-mole",
+  "folder": "bonk_blitz",
+  "description": "Unleash a rapid-fire bonking assault as targets erupt in a chaotic, unpredictable frenzy. Test your lightning-fast reflexes to chain massive combos and dominate this addictively fun arcade blitz",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bonk Blitz</title>
+    <style>
+        :root {
+            --bg-color: #87CEEB;
+            --grass-color-1: #89C643;
+            --grass-color-2: #76B42E;
+            --hole-color-1: #986633;
+            --hole-color-2: #654321;
+            --text-color: #FFFFFF;
+            --shadow-color: rgba(0, 0, 0, 0.5);
+            --overlay-bg: rgba(0, 0, 0, 0.7);
+            --button-bg: #FF6347;
+            --button-hover-bg: #FF4500;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: var(--bg-color);
+            font-family: 'Arial Rounded MT Bold', 'Helvetica Rounded', Arial, sans-serif;
+        }
+
+        #game-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            height: 100%;
+        }
+
+        canvas {
+            background: var(--bg-color);
+            display: block;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2), 0 6px 6px rgba(0,0,0,0.25);
+            border-radius: 15px;
+            cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" style="font-size: 32px;"><text y="32" x="0">🔨</text></svg>') 16 16, auto;
+        }
+        
+        .overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: var(--text-color);
+            background: var(--overlay-bg);
+            backdrop-filter: blur(8px);
+            padding: 40px;
+            border-radius: 20px;
+            text-align: center;
+            box-shadow: 0 0 30px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            transition: opacity 0.3s ease, visibility 0.3s ease;
+            z-index: 10;
+        }
+
+        .overlay.hidden {
+            opacity: 0;
+            visibility: hidden;
+        }
+
+        .overlay h1 {
+            font-size: 4rem;
+            margin: 0 0 20px 0;
+            text-shadow: 3px 3px 0px var(--shadow-color);
+        }
+
+        .overlay p {
+            font-size: 1.2rem;
+            max-width: 400px;
+            margin: 0 0 30px 0;
+            line-height: 1.5;
+        }
+        
+        .overlay #final-score {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #FFD700;
+            margin-bottom: 30px;
+        }
+
+        .overlay button {
+            padding: 15px 30px;
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: var(--text-color);
+            background-color: var(--button-bg);
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background-color 0.2s ease, transform 0.1s ease;
+            box-shadow: 0 5px 0 #C14A34;
+        }
+
+        .overlay button:hover {
+            background-color: var(--button-hover-bg);
+        }
+
+        .overlay button:active {
+            transform: translateY(3px);
+            box-shadow: 0 2px 0 #C14A34;
+        }
+        
+        @media (max-width: 600px) {
+            .overlay h1 { font-size: 3rem; }
+            .overlay p { font-size: 1rem; }
+            .overlay button { font-size: 1.2rem; }
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="game-canvas"></canvas>
+    </div>
+
+    <div id="start-screen" class="overlay">
+        <h1>Bonk Blitz</h1>
+        <p>Moles are causing trouble! Click or tap to bonk them as fast as you can before the time runs out. Press SPACE or click the button to start!</p>
+        <button id="start-button">Start Game</button>
+    </div>
+
+    <div id="game-over-screen" class="overlay hidden">
+        <h1>Game Over!</h1>
+        <p>Your final score is:</p>
+        <div id="final-score">0</div>
+        <button id="restart-button">Play Again</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+
+        const startScreen = document.getElementById('start-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const startButton = document.getElementById('start-button');
+        const restartButton = document.getElementById('restart-button');
+        const finalScoreDisplay = document.getElementById('final-score');
+
+        // --- Game Constants ---
+        const GAME_DURATION = 30; // seconds
+        const MOLE_APPEAR_MIN_TIME = 300; // ms
+        const MOLE_APPEAR_MAX_TIME = 1000; // ms
+        const MOLE_UP_DURATION = 1200; // ms
+        const BONKED_EFFECT_DURATION = 300; // ms
+        const NUM_HOLES = 9;
+        
+        // --- Game State ---
+        let score = 0;
+        let timeLeft = GAME_DURATION;
+        let gameState = 'start'; // 'start', 'playing', 'gameOver'
+        let moles = [];
+        let holePositions = [];
+        let gameTimerInterval = null;
+        let moleSpawnTimeout = null;
+        let particles = [];
+        let lastTime = 0;
+
+        // --- Audio ---
+        let audioCtx;
+        
+        function initAudio() {
+            if (audioCtx) return;
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            } catch (e) {
+                console.error("Web Audio API is not supported in this browser");
+            }
+        }
+        
+        function playSound(type) {
+            if (!audioCtx) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+
+            if (type === 'bonk') {
+                oscillator.type = 'triangle';
+                oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
+                oscillator.frequency.exponentialRampToValueAtTime(220, audioCtx.currentTime + 0.1);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
+            } else if (type === 'start') {
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(261.63, audioCtx.currentTime); // C4
+                gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+                setTimeout(() => {
+                    const osc2 = audioCtx.createOscillator();
+                    const gain2 = audioCtx.createGain();
+                    osc2.connect(gain2);
+                    gain2.connect(audioCtx.destination);
+                    gain2.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                    osc2.type = 'sine';
+                    osc2.frequency.setValueAtTime(392.00, audioCtx.currentTime); // G4
+                    gain2.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+                    osc2.start(audioCtx.currentTime);
+                    osc2.stop(audioCtx.currentTime + 0.15);
+                }, 100);
+            }
+
+            oscillator.start(audioCtx.currentTime);
+            oscillator.stop(audioCtx.currentTime + 0.3);
+        }
+
+        // --- Easing Function for smooth animation ---
+        function easeInOutQuad(t) {
+            return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+        }
+
+        // --- Mole Class ---
+        class Mole {
+            constructor(holeIndex) {
+                this.holeIndex = holeIndex;
+                this.state = 'hiding'; // 'rising', 'up', 'hiding', 'bonked'
+                this.animationProgress = 0;
+                this.animationStartTime = 0;
+                this.size = Math.min(canvas.width, canvas.height) / 8;
+                this.isDone = false;
+            }
+            
+            appear() {
+                this.state = 'rising';
+                this.animationStartTime = performance.now();
+                
+                setTimeout(() => {
+                    if (this.state === 'up') this.hide();
+                }, MOLE_UP_DURATION);
+            }
+
+            hide() {
+                this.state = 'hiding';
+                this.animationStartTime = performance.now();
+            }
+
+            bonk() {
+                if (this.state !== 'up' && this.state !== 'rising') return false;
+                
+                this.state = 'bonked';
+                this.animationStartTime = performance.now();
+                score++;
+                playSound('bonk');
+                createBonkParticles(holePositions[this.holeIndex].x, holePositions[this.holeIndex].y - this.size / 2);
+
+                setTimeout(() => {
+                    if (this.state === 'bonked') this.hide();
+                 }, BONKED_EFFECT_DURATION);
+
+                return true;
+            }
+
+            update(deltaTime) {
+                const elapsed = performance.now() - this.animationStartTime;
+                
+                if (this.state === 'rising') {
+                    const duration = 500; // Rise animation duration
+                    this.animationProgress = Math.min(elapsed / duration, 1);
+                    if (this.animationProgress >= 1) {
+                        this.state = 'up';
+                        this.animationProgress = 1;
+                    }
+                } else if (this.state === 'hiding') {
+                    const duration = 300; // Hide animation duration
+                    this.animationProgress = Math.max(1 - (elapsed / duration), 0);
+                    if (this.animationProgress <= 0) {
+                        this.animationProgress = 0;
+                        this.isDone = true; // Mark for removal by the main game loop
+                    }
+                }
+            }
+            
+            draw() {
+                const { x, y } = holePositions[this.holeIndex];
+                const easedProgress = easeInOutQuad(this.animationProgress);
+                const currentY = y + (this.size * 0.6) * (1 - easedProgress);
+
+                ctx.save();
+                ctx.translate(x, currentY);
+
+                // Mole body
+                ctx.fillStyle = '#A0522D';
+                ctx.beginPath();
+                ctx.arc(0, 0, this.size / 2, Math.PI, 0);
+                ctx.fill();
+
+                // Mole emoji
+                ctx.font = `${this.size * 0.8}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                const moleEmoji = this.state === 'bonked' ? '😵' : '😀';
+                ctx.fillText(moleEmoji, 0, -this.size * 0.1);
+                
+                if (this.state === 'bonked') {
+                    // Stars effect
+                    ctx.fillStyle = 'yellow';
+                    ctx.font = `${this.size * 0.3}px sans-serif`;
+                    const bonkTime = (performance.now() - this.animationStartTime) / BONKED_EFFECT_DURATION;
+                    
+                    ctx.save();
+                    ctx.rotate(bonkTime * Math.PI * 2);
+                    ctx.fillText('⭐', -this.size * 0.4, -this.size * 0.4);
+                    ctx.rotate(Math.PI / 2);
+                    ctx.fillText('⭐', -this.size * 0.4, -this.size * 0.4);
+                    ctx.restore();
+                }
+
+                ctx.restore();
+            }
+        }
+        
+        // --- Particle Class for Bonk Effect ---
+        class Particle {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.size = Math.random() * 10 + 5;
+                this.speedX = Math.random() * 6 - 3;
+                this.speedY = Math.random() * -8 - 2;
+                this.gravity = 0.2;
+                this.life = 1; // 1 = 100%
+                this.fade = Math.random() * 0.05 + 0.01;
+                this.color = `hsl(${Math.random() * 60 + 20}, 100%, 50%)`;
+            }
+
+            update(deltaTime) {
+                const dt = deltaTime / 16.67; // Normalize to 60fps for consistent physics
+                this.speedY += this.gravity * dt;
+                this.x += this.speedX * dt;
+                this.y += this.speedY * dt;
+                this.life -= this.fade * dt;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = this.life > 0 ? this.life : 0;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                // Star shape
+                for (let i = 0; i < 10; i++) {
+                    const angle = (i * Math.PI * 2) / 10;
+                    const radius = i % 2 === 0 ? this.size : this.size / 2;
+                    ctx.lineTo(this.x + radius * Math.cos(angle), this.y + radius * Math.sin(angle));
+                }
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        function createBonkParticles(x, y) {
+            for (let i = 0; i < 20; i++) {
+                particles.push(new Particle(x, y));
+            }
+        }
+
+        // --- Game Logic ---
+        function setupCanvas() {
+            const container = document.getElementById('game-container');
+            const aspectRatio = 16 / 10;
+            let containerWidth = container.clientWidth;
+            let containerHeight = container.clientHeight;
+
+            let newWidth, newHeight;
+
+            if (containerWidth / containerHeight > aspectRatio) {
+                newHeight = containerHeight * 0.9;
+                newWidth = newHeight * aspectRatio;
+            } else {
+                newWidth = containerWidth * 0.9;
+                newHeight = newWidth / aspectRatio;
+            }
+
+            canvas.width = newWidth;
+            canvas.height = newHeight;
+            
+            calculateHolePositions();
+        }
+
+        function calculateHolePositions() {
+            holePositions = [];
+            const cols = 3;
+            const rows = 3;
+            const colWidth = canvas.width / (cols + 1);
+            const rowHeight = (canvas.height * 0.7) / (rows + 1);
+            const startY = canvas.height * 0.3;
+
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    holePositions.push({
+                        x: colWidth * (c + 1),
+                        y: startY + rowHeight * (r + 1)
+                    });
+                }
+            }
+        }
+
+        function startGame() {
+            if (gameState === 'playing') return;
+            
+            initAudio();
+            playSound('start');
+
+            gameState = 'playing';
+            score = 0;
+            timeLeft = GAME_DURATION;
+            moles = [];
+            particles = [];
+            
+            if (gameTimerInterval) clearInterval(gameTimerInterval);
+            if (moleSpawnTimeout) clearTimeout(moleSpawnTimeout);
+
+            startScreen.classList.add('hidden');
+            gameOverScreen.classList.add('hidden');
+
+            gameTimerInterval = setInterval(() => {
+                timeLeft--;
+                if (timeLeft <= 0) {
+                    timeLeft = 0;
+                    endGame();
+                }
+            }, 1000);
+            
+            spawnMole();
+            lastTime = performance.now();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function endGame() {
+            gameState = 'gameOver';
+            clearInterval(gameTimerInterval);
+            clearTimeout(moleSpawnTimeout);
+            
+            finalScoreDisplay.textContent = score;
+            gameOverScreen.classList.remove('hidden');
+        }
+        
+        function spawnMole() {
+            if (gameState !== 'playing') return;
+
+            const occupiedHoles = moles.map(m => m.holeIndex);
+            const availableHoles = [];
+            for(let i=0; i<NUM_HOLES; i++) {
+                if(!occupiedHoles.includes(i)) {
+                    availableHoles.push(i);
+                }
+            }
+
+            if (availableHoles.length > 0) {
+                const holeIndex = availableHoles[Math.floor(Math.random() * availableHoles.length)];
+                const newMole = new Mole(holeIndex);
+                moles.push(newMole);
+                newMole.appear();
+            }
+
+            const nextSpawnTime = Math.random() * (MOLE_APPEAR_MAX_TIME - MOLE_APPEAR_MIN_TIME) + MOLE_APPEAR_MIN_TIME;
+            moleSpawnTimeout = setTimeout(spawnMole, nextSpawnTime);
+        }
+
+        function handleCanvasClick(event) {
+            if (gameState !== 'playing') return;
+
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const x = (event.clientX - rect.left) * scaleX;
+            const y = (event.clientY - rect.top) * scaleY;
+            
+            let bonked = false;
+            // Iterate backwards to safely handle bonking one mole per click
+            for (let i = moles.length - 1; i >= 0; i--) {
+                const mole = moles[i];
+                if (mole.state === 'up' || mole.state === 'rising') {
+                    const molePos = holePositions[mole.holeIndex];
+                    const easedProgress = easeInOutQuad(mole.animationProgress);
+                    const currentMoleY = molePos.y + (mole.size * 0.6) * (1 - easedProgress);
+
+                    const distance = Math.sqrt(Math.pow(x - molePos.x, 2) + Math.pow(y - currentMoleY, 2));
+                    if (distance < mole.size / 2) {
+                        if (mole.bonk()) {
+                           bonked = true;
+                           break; // Only bonk one mole per click
+                        }
+                    }
+                }
+            }
+        }
+        
+        // --- Drawing ---
+        function drawBackground() {
+            // Sky
+            const skyGradient = ctx.createLinearGradient(0, 0, 0, canvas.height * 0.6);
+            skyGradient.addColorStop(0, '#87CEEB');
+            skyGradient.addColorStop(1, '#B0E0E6');
+            ctx.fillStyle = skyGradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Grass
+            const grassGradient = ctx.createLinearGradient(0, canvas.height * 0.25, 0, canvas.height);
+            grassGradient.addColorStop(0, '#89C643');
+            grassGradient.addColorStop(1, '#76B42E');
+            ctx.fillStyle = grassGradient;
+            ctx.beginPath();
+            ctx.moveTo(0, canvas.height);
+            ctx.lineTo(0, canvas.height * 0.3);
+            ctx.quadraticCurveTo(canvas.width / 2, canvas.height * 0.2, canvas.width, canvas.height * 0.3);
+            ctx.lineTo(canvas.width, canvas.height);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        function drawHoles() {
+            const holeSize = Math.min(canvas.width, canvas.height) / 9;
+            holePositions.forEach(pos => {
+                // Hole shadow/depth
+                ctx.fillStyle = 'var(--hole-color-2)';
+                ctx.beginPath();
+                ctx.ellipse(pos.x, pos.y, holeSize / 1.8, holeSize / 4, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Hole lip
+                ctx.fillStyle = 'var(--hole-color-1)';
+                ctx.beginPath();
+                ctx.ellipse(pos.x, pos.y - holeSize / 20, holeSize / 1.7, holeSize / 3.5, 0, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+        
+        function drawHUD() {
+            ctx.fillStyle = 'white';
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 4;
+            const fontSize = canvas.height / 18;
+            ctx.font = `bold ${fontSize}px 'Arial Rounded MT Bold', sans-serif`;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+
+            const scoreText = `Score: ${score}`;
+            ctx.strokeText(scoreText, 20, 20);
+            ctx.fillText(scoreText, 20, 20);
+
+            ctx.textAlign = 'right';
+            const timeText = `Time: ${timeLeft}`;
+            ctx.strokeText(timeText, canvas.width - 20, 20);
+            ctx.fillText(timeText, canvas.width - 20, 20);
+        }
+        
+        function update(deltaTime) {
+            moles.forEach(mole => mole.update(deltaTime));
+            moles = moles.filter(mole => !mole.isDone);
+            
+            for (let i = particles.length - 1; i >= 0; i--) {
+                particles[i].update(deltaTime);
+                if (particles[i].life <= 0) {
+                    particles.splice(i, 1);
+                }
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawBackground();
+            
+            // Draw moles that are behind holes first for proper layering if needed in future
+            const molesBehind = moles.filter(m => m.animationProgress < 0.5);
+            molesBehind.forEach(mole => mole.draw());
+
+            drawHoles();
+
+            // Draw moles that are in front of holes
+            const molesInFront = moles.filter(m => m.animationProgress >= 0.5);
+            molesInFront.forEach(mole => mole.draw());
+            
+            // Draw particles on top of everything
+            particles.forEach(p => p.draw());
+
+            if (gameState === 'playing') {
+                drawHUD();
+            }
+        }
+        
+        function gameLoop(timestamp) {
+            const deltaTime = timestamp - lastTime;
+            lastTime = timestamp;
+
+            if (gameState === 'playing') {
+                update(deltaTime);
+            }
+            
+            draw();
+            
+            if (gameState !== 'gameOver') {
+                 requestAnimationFrame(gameLoop);
+            }
+        }
+
+        // --- Event Listeners ---
+        window.addEventListener('resize', () => {
+            setupCanvas();
+            draw(); // Redraw static elements on resize
+        });
+
+        startButton.addEventListener('click', startGame);
+        restartButton.addEventListener('click', startGame);
+        canvas.addEventListener('click', (event) => {
+            initAudio(); // Initialize audio on first user interaction
+            handleCanvasClick(event);
+        });
+        
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' || e.key === 'Enter') {
+                e.preventDefault();
+                if (gameState === 'start' || gameState === 'gameOver') {
+                    startGame();
+                }
+            }
+        });
+
+        // --- Initial Setup ---
+        setupCanvas();
+        requestAnimationFrame(gameLoop); // Start the loop to draw the initial state
+    </script>
+</body>
+</html>
