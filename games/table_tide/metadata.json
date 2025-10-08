@@ -1,0 +1,8 @@
+{
+  "name": "Table Tide",
+  "type": "air hockey",
+  "folder": "table_tide",
+  "description": "Brace for impact as the tide unleashes waves of multi-pucks and shifts the table right under your mallet. Master the chaotic currents and unpredictable ricochets to sweep your opponent away",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

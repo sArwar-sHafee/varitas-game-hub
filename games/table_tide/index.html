@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Table Tide Air Hockey</title>
+    <style>
+        :root {
+            --primary-color: #0d8abc;
+            --secondary-color: #f5f5f5;
+            --accent-color: #ff4757;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background: #1e1e1e;
+            color: var(--secondary-color);
+            overflow: hidden;
+        }
+
+        #game-container {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            height: 100%;
+        }
+
+        canvas {
+            background-color: #000;
+            display: block;
+            box-shadow: 0 0 30px rgba(0, 180, 255, 0.5);
+            border-radius: 20px;
+        }
+
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: rgba(10, 20, 40, 0.85);
+            backdrop-filter: blur(5px);
+            text-align: center;
+            transition: opacity 0.5s ease;
+            z-index: 10;
+        }
+
+        .overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .overlay h1 {
+            font-size: 5rem;
+            margin-bottom: 0.2em;
+            text-shadow: 0 0 20px var(--primary-color);
+            background: linear-gradient(45deg, var(--primary-color), var(--accent-color));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .overlay h2 {
+            font-size: 2.5rem;
+            margin-bottom: 1em;
+            color: var(--secondary-color);
+        }
+
+        .overlay p {
+            font-size: 1.2rem;
+            max-width: 500px;
+            margin-bottom: 1.5em;
+            line-height: 1.6;
+        }
+        
+        .overlay .controls {
+            margin-bottom: 2em;
+            background: rgba(0,0,0,0.2);
+            padding: 1em 2em;
+            border-radius: 10px;
+        }
+        
+        .overlay .controls p {
+            margin-bottom: 0.5em;
+        }
+        
+        .overlay .winner-emoji {
+            font-size: 6rem;
+            margin-bottom: 0.2em;
+        }
+
+        .overlay button {
+            font-size: 1.5rem;
+            padding: 0.8em 2em;
+            border: none;
+            border-radius: 50px;
+            background: linear-gradient(45deg, var(--accent-color), #ffa502);
+            color: white;
+            cursor: pointer;
+            text-transform: uppercase;
+            font-weight: bold;
+            letter-spacing: 1px;
+            box-shadow: 0 5px 15px rgba(255, 71, 87, 0.4);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .overlay button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(255, 71, 87, 0.6);
+        }
+        
+        @media (max-width: 600px) {
+            .overlay h1 { font-size: 3rem; }
+            .overlay h2 { font-size: 2rem; }
+            .overlay p { font-size: 1rem; }
+            .overlay button { font-size: 1.2rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <div id="start-screen" class="overlay">
+            <h1>Table Tide</h1>
+            <p>The futuristic air hockey experience. First to 7 points wins!</p>
+            <div class="controls">
+                <p><strong>Controls:</strong></p>
+                <p><strong>Mouse:</strong> Move your cursor to control the paddle.</p>
+                <p><strong>Keyboard:</strong> Use WASD or Arrow Keys.</p>
+            </div>
+            <button id="start-button">Start Game</button>
+        </div>
+        
+        <div id="game-over-screen" class="overlay hidden">
+            <h1 id="game-over-title">Game Over</h1>
+            <div id="winner-emoji" class="winner-emoji"></div>
+            <h2 id="winner-text">You Win!</h2>
+            <p id="final-score">Final Score: 7 - 5</p>
+            <button id="restart-button">Play Again</button>
+        </div>
+
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- DOM Elements ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const gameContainer = document.getElementById('game-container');
+        const startScreen = document.getElementById('start-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const startButton = document.getElementById('start-button');
+        const restartButton = document.getElementById('restart-button');
+        const winnerText = document.getElementById('winner-text');
+        const finalScoreText = document.getElementById('final-score');
+        const winnerEmoji = document.getElementById('winner-emoji');
+
+        // --- Game Constants ---
+        const WINNING_SCORE = 7;
+        const TABLE_ASPECT_RATIO = 2; // width is twice the height
+        const PUCK_FRICTION = 0.991;
+        const PUCK_MAX_SPEED = 25;
+
+        // --- Game State ---
+        let gameState = 'start'; // 'start', 'playing', 'gameOver'
+        let playerScore = 0;
+        let aiScore = 0;
+        let lastTime = 0;
+        let scale = 1;
+
+        // --- Game Objects ---
+        let puck, player, ai;
+
+        // --- Input State ---
+        const keys = {};
+        const mouse = { x: 0, y: 0, down: false };
+
+        // --- Sound Engine (Web Audio API) ---
+        let audioCtx;
+        const sounds = {};
+
+        function initAudio() {
+            if (audioCtx) return;
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+                createSounds();
+            } catch (e) {
+                console.error("Web Audio API is not supported in this browser");
+            }
+        }
+
+        function createSound(type, freq1, freq2, duration, volume) {
+            return () => {
+                if (!audioCtx) return;
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+
+                oscillator.type = type;
+                oscillator.frequency.setValueAtTime(freq1, audioCtx.currentTime);
+                if (freq2) {
+                    oscillator.frequency.exponentialRampToValueAtTime(freq2, audioCtx.currentTime + duration);
+                }
+
+                gainNode.gain.setValueAtTime(volume, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+
+                oscillator.start(audioCtx.currentTime);
+                oscillator.stop(audioCtx.currentTime + duration);
+            };
+        }
+
+        function createSounds() {
+            sounds.hit = createSound('triangle', 700, 400, 0.1, 0.3);
+            sounds.wall = createSound('sine', 300, 150, 0.15, 0.2);
+            sounds.score = createSound('sine', 880, 1200, 0.4, 0.5);
+            sounds.win = createSound('sine', 523, 1046, 0.8, 0.5);
+            sounds.lose = createSound('sawtooth', 300, 100, 1, 0.4);
+        }
+
+        // --- Base Circle Class for Puck and Paddles ---
+        class Circle {
+            constructor(x, y, radius, color) {
+                this.x = x;
+                this.y = y;
+                this.radius = radius;
+                this.color = color;
+                this.vx = 0;
+                this.vy = 0;
+            }
+
+            draw(emoji = null) {
+                ctx.beginPath();
+                const gradient = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius);
+                gradient.addColorStop(0, this.color.inner);
+                gradient.addColorStop(1, this.color.outer);
+                
+                ctx.fillStyle = gradient;
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.strokeStyle = this.color.border;
+                ctx.lineWidth = this.radius * 0.1;
+                ctx.stroke();
+
+                if (emoji) {
+                    ctx.font = `${this.radius * 1.2}px sans-serif`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(emoji, this.x, this.y);
+                }
+            }
+        }
+        
+        // --- Particle System for Effects ---
+        const particles = [];
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.radius = Math.random() * scale * 3 + 1;
+                this.life = 1;
+                this.vx = (Math.random() - 0.5) * 5;
+                this.vy = (Math.random() - 0.5) * 5;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.life -= 0.04;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = this.life;
+                ctx.beginPath();
+                ctx.fillStyle = this.color;
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        function createParticles(x, y, color, count) {
+            for (let i = 0; i < count; i++) {
+                particles.push(new Particle(x, y, color));
+            }
+        }
+
+        function updateAndDrawParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.update();
+                p.draw();
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                }
+            }
+        }
+        
+
+        // --- Game Setup and Sizing ---
+        function resizeCanvas() {
+            const viewportWidth = gameContainer.clientWidth;
+            const viewportHeight = gameContainer.clientHeight;
+            
+            let newWidth, newHeight;
+
+            if (viewportWidth / viewportHeight > TABLE_ASPECT_RATIO) {
+                newHeight = viewportHeight * 0.9;
+                newWidth = newHeight * TABLE_ASPECT_RATIO;
+            } else {
+                newWidth = viewportWidth * 0.9;
+                newHeight = newWidth / TABLE_ASPECT_RATIO;
+            }
+            
+            canvas.width = newWidth;
+            canvas.height = newHeight;
+            scale = canvas.width / 1000; // Base width is 1000 for scaling calculations
+            
+            if (!player) { // Only initialize objects the first time
+                resetGameObjects();
+            }
+        }
+
+        function resetGameObjects() {
+            const paddleRadius = 35 * scale;
+            const puckRadius = 20 * scale;
+
+            player = new Circle(
+                canvas.width / 2,
+                canvas.height * 0.8,
+                paddleRadius,
+                { inner: '#87CEFA', outer: '#00BFFF', border: '#FFFFFF' }
+            );
+
+            ai = new Circle(
+                canvas.width / 2,
+                canvas.height * 0.2,
+                paddleRadius,
+                { inner: '#FF7F7F', outer: '#DC143C', border: '#FFFFFF' }
+            );
+
+            puck = new Circle(
+                canvas.width / 2,
+                canvas.height / 2,
+                puckRadius,
+                { inner: '#666666', outer: '#111111', border: '#CCCCCC' }
+            );
+        }
+
+        // --- Game Logic ---
+        function update(deltaTime) {
+            if (gameState !== 'playing') return;
+
+            updatePlayer(deltaTime);
+            updateAI(deltaTime);
+            updatePuck(deltaTime);
+            
+            checkCollisions();
+        }
+
+        function updatePlayer() {
+            const prevX = player.x;
+            const prevY = player.y;
+
+            // Keyboard controls
+            const speed = 10 * scale;
+            if (keys['w'] || keys['ArrowUp']) player.y -= speed;
+            if (keys['s'] || keys['ArrowDown']) player.y += speed;
+            if (keys['a'] || keys['ArrowLeft']) player.x -= speed;
+            if (keys['d'] || keys['ArrowRight']) player.x += speed;
+
+            // Mouse controls
+            if (mouse.down) {
+                player.x = mouse.x;
+                player.y = mouse.y;
+            }
+            
+            // Boundary constraints
+            player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x));
+            player.y = Math.max(canvas.height / 2 + player.radius, Math.min(canvas.height - player.radius, player.y));
+            
+            // Calculate velocity for collisions
+            player.vx = (player.x - prevX);
+            player.vy = (player.y - prevY);
+        }
+
+        function updateAI() {
+            const maxSpeed = 7 * scale;
+            const reactionDistance = canvas.width * 0.4;
+            let targetX = canvas.width / 2;
+            let targetY = canvas.height * 0.25;
+
+            // Simple defensive/offensive logic
+            if (puck.y < canvas.height / 2) {
+                // Offensive
+                targetX = puck.x;
+                targetY = puck.y;
+            } else if (puck.y < reactionDistance) {
+                // Defensive
+                targetX = puck.x;
+            }
+
+            const dx = targetX - ai.x;
+            const dy = targetY - ai.y;
+            
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            
+            if (dist > 0.1) { // Avoid division by zero and jittering
+                ai.vx = (dx / dist) * maxSpeed;
+                ai.vy = (dy / dist) * maxSpeed;
+            } else {
+                ai.vx = 0;
+                ai.vy = 0;
+            }
+
+            ai.x += ai.vx;
+            ai.y += ai.vy;
+
+            // Boundary constraints
+            ai.x = Math.max(ai.radius, Math.min(canvas.width - ai.radius, ai.x));
+            ai.y = Math.max(ai.radius, Math.min(canvas.height / 2 - ai.radius, ai.y));
+        }
+
+        function updatePuck() {
+            puck.x += puck.vx;
+            puck.y += puck.vy;
+
+            puck.vx *= PUCK_FRICTION;
+            puck.vy *= PUCK_FRICTION;
+            
+            // Cap speed
+            const speed = Math.sqrt(puck.vx * puck.vx + puck.vy * puck.vy);
+            if (speed > PUCK_MAX_SPEED * scale) {
+                puck.vx = (puck.vx / speed) * PUCK_MAX_SPEED * scale;
+                puck.vy = (puck.vy / speed) * PUCK_MAX_SPEED * scale;
+            }
+        }
+        
+        function checkCollisions() {
+            // Puck-Wall Collisions
+            if (puck.x < puck.radius || puck.x > canvas.width - puck.radius) {
+                puck.vx *= -1;
+                puck.x = puck.x < puck.radius ? puck.radius : canvas.width - puck.radius;
+                sounds.wall();
+                createParticles(puck.x, puck.y, '#cccccc', 10);
+            }
+
+            // Goal detection
+            const goalWidth = canvas.width * 0.3;
+            const goalPostLeft = (canvas.width - goalWidth) / 2;
+            const goalPostRight = (canvas.width + goalWidth) / 2;
+
+            if (puck.x > goalPostLeft && puck.x < goalPostRight) {
+                // AI scores (bottom goal)
+                if (puck.y >= canvas.height - puck.radius) {
+                    aiScore++;
+                    sounds.score();
+                    createParticles(puck.x, puck.y, '#FF7F7F', 50);
+                    if (!checkGameOver()) {
+                        resetRound(1); // Player serves
+                    }
+                }
+                // Player scores (top goal)
+                else if (puck.y <= puck.radius) {
+                    playerScore++;
+                    sounds.score();
+                    createParticles(puck.x, puck.y, '#87CEFA', 50);
+                    if (!checkGameOver()) {
+                       resetRound(2); // AI serves
+                    }
+                }
+            } else {
+                 if (puck.y < puck.radius || puck.y > canvas.height - puck.radius) {
+                    puck.vy *= -1;
+                    puck.y = puck.y < puck.radius ? puck.radius : canvas.height - puck.radius;
+                    sounds.wall();
+                    createParticles(puck.x, puck.y, '#cccccc', 10);
+                }
+            }
+            
+            // Puck-Paddle Collisions
+            handlePaddleCollision(player);
+            handlePaddleCollision(ai);
+        }
+
+        function handlePaddleCollision(paddle) {
+            const dx = puck.x - paddle.x;
+            const dy = puck.y - paddle.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const minDistance = puck.radius + paddle.radius;
+
+            if (distance < minDistance) {
+                sounds.hit();
+                createParticles(puck.x, puck.y, paddle.color.inner, 20);
+
+                const angle = Math.atan2(dy, dx);
+                
+                // Separate the objects to prevent sticking
+                const overlap = minDistance - distance;
+                puck.x += Math.cos(angle) * overlap;
+                puck.y += Math.sin(angle) * overlap;
+
+                const normalX = dx / distance;
+                const normalY = dy / distance;
+                
+                const relativeVelX = puck.vx - paddle.vx;
+                const relativeVelY = puck.vy - paddle.vy;
+                
+                const dotProduct = relativeVelX * normalX + relativeVelY * normalY;
+
+                // Only resolve collision if objects are moving towards each other
+                if (dotProduct < 0) {
+                    const impulse = -2 * dotProduct;
+                    puck.vx += (impulse * normalX) * 0.8; // 0.8 is restitution
+                    puck.vy += (impulse * normalY) * 0.8;
+
+                    // Add some of the paddle's velocity for control
+                    puck.vx += paddle.vx * 0.4;
+                    puck.vy += paddle.vy * 0.4;
+                }
+            }
+        }
+        
+        function checkGameOver() {
+            if (playerScore >= WINNING_SCORE || aiScore >= WINNING_SCORE) {
+                gameState = 'gameOver';
+                gameOverScreen.classList.remove('hidden');
+                finalScoreText.textContent = `Final Score: ${playerScore} - ${aiScore}`;
+                if (playerScore > aiScore) {
+                    winnerText.textContent = "You Win!";
+                    winnerEmoji.textContent = '🏆';
+                    sounds.win();
+                } else {
+                    winnerText.textContent = "Computer Wins!";
+                    winnerEmoji.textContent = '🤖';
+                    sounds.lose();
+                }
+                return true;
+            }
+            return false;
+        }
+        
+        function resetRound(server) {
+            resetGameObjects(); // Recalculate positions based on current canvas size
+
+            puck.vx = 0;
+            puck.vy = 0;
+            
+            if (server === 1) { // Player serves
+                puck.y = canvas.height * 0.6;
+            } else { // AI serves
+                puck.y = canvas.height * 0.4;
+            }
+        }
+
+        // --- Drawing Functions ---
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            drawTable();
+            drawScores();
+            
+            updateAndDrawParticles();
+
+            if(player && ai && puck){
+                player.draw('🏒');
+                ai.draw('🤖');
+                puck.draw();
+            }
+            
+            if (gameState === 'playing') {
+                drawOnscreenControls();
+            }
+        }
+        
+        function drawTable() {
+            // Main surface
+            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            gradient.addColorStop(0, '#0d8abc');
+            gradient.addColorStop(1, '#0b6a8f');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Center line
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.lineWidth = 5 * scale;
+            ctx.beginPath();
+            ctx.moveTo(0, canvas.height / 2);
+            ctx.lineTo(canvas.width, canvas.height / 2);
+            ctx.stroke();
+
+            // Center circle
+            ctx.beginPath();
+            ctx.arc(canvas.width / 2, canvas.height / 2, 80 * scale, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // Goals
+            const goalWidth = canvas.width * 0.3;
+            const goalDepth = 20 * scale;
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+            ctx.fillRect((canvas.width - goalWidth) / 2, -1, goalWidth, goalDepth + 1);
+            ctx.fillRect((canvas.width - goalWidth) / 2, canvas.height - goalDepth, goalWidth, goalDepth + 1);
+            ctx.strokeStyle = '#ff4757';
+            ctx.strokeRect((canvas.width - goalWidth) / 2, 0, goalWidth, goalDepth);
+            ctx.strokeRect((canvas.width - goalWidth) / 2, canvas.height - goalDepth, goalWidth, goalDepth);
+        }
+        
+        function drawScores() {
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${60 * scale}px 'Segoe UI', sans-serif`;
+            ctx.textAlign = 'center';
+            
+            // AI Score (top) - rotated
+            ctx.save();
+            ctx.translate(canvas.width / 2, 60 * scale);
+            ctx.rotate(Math.PI);
+            ctx.fillText(aiScore, 0, 0);
+            ctx.restore();
+            
+            // Player Score (bottom)
+            ctx.fillText(playerScore, canvas.width / 2, canvas.height - 30 * scale);
+        }
+        
+        function drawOnscreenControls() {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+            ctx.font = `${14 * scale}px 'Segoe UI', sans-serif`;
+            ctx.textAlign = 'left';
+            ctx.fillText("Controls: Mouse or WASD/Arrows", 20 * scale, canvas.height - 20 * scale);
+        }
+
+        // --- Game Loop ---
+        function gameLoop(timestamp) {
+            if (!lastTime) {
+                lastTime = timestamp;
+            }
+            const deltaTime = timestamp - lastTime;
+            lastTime = timestamp;
+
+            if (gameState === 'playing') {
+                update(deltaTime);
+            }
+            
+            draw();
+            
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // --- Event Listeners and Game Start ---
+        function startGame() {
+            initAudio();
+            playerScore = 0;
+            aiScore = 0;
+            gameState = 'playing';
+            startScreen.classList.add('hidden');
+            gameOverScreen.classList.add('hidden');
+            resetRound(1);
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        
+        window.addEventListener('keydown', e => { keys[e.key] = true; });
+        window.addEventListener('keyup', e => { keys[e.key] = false; });
+        
+        canvas.addEventListener('mousemove', e => {
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = e.clientX - rect.left;
+            mouse.y = e.clientY - rect.top;
+        });
+
+        canvas.addEventListener('mousedown', () => mouse.down = true);
+        canvas.addEventListener('mouseup', () => mouse.down = false);
+        canvas.addEventListener('mouseleave', () => mouse.down = false);
+        
+        canvas.addEventListener('touchstart', e => {
+            e.preventDefault();
+            mouse.down = true;
+            updateTouchPosition(e);
+        }, { passive: false });
+        
+        canvas.addEventListener('touchmove', e => {
+            e.preventDefault();
+            if (mouse.down) {
+                updateTouchPosition(e);
+            }
+        }, { passive: false });
+        
+        canvas.addEventListener('touchend', () => mouse.down = false);
+        
+        function updateTouchPosition(e) {
+            const rect = canvas.getBoundingClientRect();
+            const touch = e.touches[0];
+            mouse.x = touch.clientX - rect.left;
+            mouse.y = touch.clientY - rect.top;
+        }
+
+        startButton.addEventListener('click', startGame);
+        restartButton.addEventListener('click', startGame);
+
+        // --- Initialize ---
+        resizeCanvas();
+        resetGameObjects();
+        requestAnimationFrame(gameLoop);
+    });
+    </script>
+</body>
+</html>
