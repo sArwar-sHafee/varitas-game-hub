@@ -1,0 +1,8 @@
+{
+  "name": "Echo Verse",
+  "type": "text adventure / interactive fiction",
+  "folder": "echo_verse",
+  "description": "Your words don't just tell the story, they shatter and reshape it, creating echoes of the past that become your tools or your enemies. Navigate a fractured reality where every command you type has consequences that ripple across time itself.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

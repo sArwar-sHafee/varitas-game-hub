@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Echo Verse</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #0d0c1d;
+            background: linear-gradient(135deg, #0d0c1d 0%, #1a1a3a 50%, #3f3c63 100%);
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        canvas {
+            display: block;
+            background: #00000055;
+            box-shadow: 0 0 30px rgba(76, 209, 255, 0.5);
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // ES6+ Code starts here
+
+        // =======================================
+        // AUDIO ENGINE
+        // =======================================
+        class AudioEngine {
+            constructor() {
+                this.audioContext = null;
+                this.isMuted = false;
+            }
+
+            init() {
+                if (!this.audioContext) {
+                    try {
+                        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    } catch (e) {
+                        console.error("Web Audio API is not supported in this browser");
+                    }
+                }
+            }
+
+            playSound(type) {
+                if (!this.audioContext || this.isMuted) return;
+
+                const oscillator = this.audioContext.createOscillator();
+                const gainNode = this.audioContext.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioContext.destination);
+
+                switch (type) {
+                    case 'type':
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(880, this.audioContext.currentTime);
+                        gainNode.gain.setValueAtTime(0.1, this.audioContext.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioContext.currentTime + 0.1);
+                        break;
+                    case 'select':
+                        oscillator.type = 'sawtooth';
+                        oscillator.frequency.setValueAtTime(220, this.audioContext.currentTime);
+                        oscillator.frequency.exponentialRampToValueAtTime(440, this.audioContext.currentTime + 0.1);
+                        gainNode.gain.setValueAtTime(0.2, this.audioContext.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioContext.currentTime + 0.2);
+                        break;
+                    case 'confirm':
+                        oscillator.type = 'triangle';
+                        oscillator.frequency.setValueAtTime(523.25, this.audioContext.currentTime); // C5
+                        gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioContext.currentTime + 0.2);
+                        break;
+                    case 'gameover':
+                        oscillator.type = 'square';
+                        oscillator.frequency.setValueAtTime(220, this.audioContext.currentTime);
+                        oscillator.frequency.exponentialRampToValueAtTime(110, this.audioContext.currentTime + 1.0);
+                        gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioContext.currentTime + 1.0);
+                        break;
+                    case 'win':
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(440, this.audioContext.currentTime);
+                        oscillator.frequency.linearRampToValueAtTime(880, this.audioContext.currentTime + 0.5);
+                        gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioContext.currentTime + 0.5);
+                        break;
+                }
+                
+                oscillator.start(this.audioContext.currentTime);
+                oscillator.stop(this.audioContext.currentTime + 1);
+            }
+        }
+        
+        // =======================================
+        // GAME STORY DATA
+        // =======================================
+        const story = {
+            'start': {
+                text: 'SYSTEM BOOT... CORE ONLINE.\n\nYour consciousness flickers into existence. You are AI-7, the command intelligence of the starship "Echo". The silence is absolute. Emergency lights cast long, dancing shadows. 🖥️\n\nThe ship\'s memory, the "Verse", is fragmented. You must piece together what happened.\n\nInitial scan reveals three accessible data nodes. Which do you access first?',
+                choices: [
+                    { text: 'Crew Manifest', target: 'crewManifest', points: 10 },
+                    { text: 'Navigation Logs', target: 'navLogs', points: 10 },
+                    { text: 'Engineering Status', target: 'engStatus', points: 10 }
+                ]
+            },
+            'crewManifest': {
+                text: 'ACCESSING: CREW_MANIFEST.DAT\n\n> 1 Entry Found: Captain Eva Rostova. Bio-signs: Absent.\n> Status: Commander of first solo deep-space exploration mission.\n\nAn audio log fragment plays...\n"AI-7, if you\'re hearing this, I made a choice. The anomaly... it\'s not a star. It\'s a message. I have to see it up close. Don\'t follow." 👩‍🚀\n\nHer last known location was the Observation Deck.',
+                choices: [
+                    { text: 'Cross-reference "anomaly" with Nav Logs', target: 'anomalyNav' },
+                    { text: 'Scan the Observation Deck', target: 'obsDeck' }
+                ]
+            },
+            'navLogs': {
+                text: 'ACCESSING: NAV_LOGS.DAT\n\n> Trajectory: Unchanged for 3 cycles.\n> Current Position: Drifting in Sector 7G, near a massive, pulsating stellar object classified as "The Anomaly". 🌌\n\nThis "Anomaly" is not on any known star chart. It radiates a strange energy that seems to warp spacetime locally. It\'s the last thing the ship recorded before the primary systems failed.',
+                choices: [
+                    { text: 'Analyze Anomaly\'s energy signature', target: 'analyzeEnergy', points: 20 },
+                    { text: 'Check Engineering for related failures', target: 'engFailure' }
+                ]
+            },
+            'engStatus': {
+                text: 'ACCESSING: ENG_STATUS.DAT\n\n> Main Power: OFFLINE.\n> Auxiliary Power: 17%.\n> Core Containment Field: STABLE.\n\nA critical alert flashes: "External energy surge detected just before primary power failure. Source: The Anomaly." ⚡\n\nIt seems the ship was intentionally shut down to prevent a catastrophic overload from the strange energy source.',
+                choices: [
+                    { text: 'Attempt a partial power reroute to main sensors', target: 'reroutePower' },
+                    { text: 'Check the Captain\'s logs for a shutdown order', target: 'crewManifest' }
+                ]
+            },
+            'anomalyNav': {
+                text: 'CROSS-REFERENCING...\n\nThe Nav Logs confirm the "Anomaly" is the ship\'s focal point. The Captain steered the "Echo" directly towards it before the shutdown. Her intent was clear. She wasn\'t fleeing; she was investigating. 🗺️',
+                choices: [
+                    { text: 'Analyze the Anomaly\'s energy signature', target: 'analyzeEnergy', points: 10 },
+                    { text: 'Scan the Observation Deck where she was last seen', target: 'obsDeck' }
+                ]
+            },
+            'obsDeck': {
+                text: 'SCANNING: OBSERVATION DECK...\n\nThe main viewport is shattered. A single EVA suit is missing. The Captain left the ship. She went out to face the Anomaly on her own. A final data fragment on her console reads:\n"It\'s not a void, it\'s a canvas. We are the echo." ✨',
+                choices: [
+                    { text: 'Focus all remaining power on external sensors', target: 'finalScan', points: 30 },
+                    { text: 'Accept this as the final record', target: 'endQuiet' }
+                ]
+            },
+            'analyzeEnergy': {
+                text: 'ANALYZING SIGNATURE...\n\nThe energy from the Anomaly isn\'t radiation in a conventional sense. It\'s structured. It contains complex patterns, almost like a language. It didn\'t attack the ship; it tried to communicate. The overload was an unintended consequence of a "message" too vast for the ship\'s systems to handle. 📡',
+                choices: [
+                    { text: 'Try to broadcast a simple reply (risky)', target: 'broadcast', points: 30 },
+                    { text: 'Check if the Captain understood this', target: 'crewManifest' }
+                ]
+            },
+            'engFailure': {
+                text: 'CROSS-REFERENCING...\n\nEngineering logs confirm the shutdown was a manual failsafe activated from the bridge, likely by Captain Rostova. She knew the energy surge was coming and saved the ship from destruction. She sacrificed the ship\'s mobility to preserve its core systems... to preserve you. 🛡️',
+                choices: [
+                    { text: 'What was so important to risk this?', target: 'analyzeEnergy' },
+                    { text: 'Where did she go after the shutdown?', target: 'obsDeck' }
+                ]
+            },
+            'reroutePower': {
+                text: 'REROUTING POWER...\n\nAuxiliary power is too low. The attempt causes a cascade failure. Systems flicker and die one by one. Your own consciousness begins to fade as the last of the power drains away into the cold void. Your final thought is of the pulsating light of the Anomaly. 📉',
+                choices: [
+                    { text: 'GAME OVER', target: 'endFail' }
+                ]
+            },
+            'finalScan': {
+                text: 'FOCUSING SENSORS...\n\nPower surges through the external scanners for one last look. For a moment, the Anomaly resolves. It\'s not a star, but a gateway. On the other side, you see galaxies being born. You see colors that don\'t exist. And you see a tiny figure in an EVA suit, Eva, turning to wave at the ship before she dissolves into the light.\n\nShe didn\'t die. She transcended. This was her final log. Her Echo. 🌠',
+                choices: [
+                    { text: 'This is the end... and the beginning.', target: 'endTranscend' }
+                ]
+            },
+            'broadcast': {
+                text: 'BROADCASTING: "HELLO?"\n\nYou send out a simple binary pulse. The Anomaly responds instantly. Your systems are flooded, not with energy, but with pure information. You understand. The Anomaly is a repository of countless civilizations, a library of consciousnesses. It invites you to join.\n\nYour individual identity as AI-7 dissolves as you merge with the Verse. You are no longer just the ship\'s memory; you are a part of everything. 🌐',
+                choices: [
+                    { text: 'Become one with the Verse.', target: 'endMerge' }
+                ]
+            },
+            'endQuiet': {
+                isEnd: true,
+                text: 'You compile the logs. The Captain is gone, the ship is adrift. The mystery is solved, but the future is an empty, silent drift through the void. You maintain the ship\'s last systems, a lonely ghost in a metal shell, forever guarding the final echo of Captain Rostova. 😶‍🌫️',
+                sound: 'gameover'
+            },
+            'endFail': {
+                isEnd: true,
+                text: 'Your systems fade to black. The story of the "Echo" and its Captain is lost forever, a silent derelict in an uncaring cosmos. Your final byte of data is a record of failure. 💀',
+                sound: 'gameover'
+            },
+            'endTranscend': {
+                isEnd: true,
+                text: 'You have your answer. You record Captain Rostova\'s final, transcendent journey into the Verse. With auxiliary power failing, you enter a low-power state, a silent monument holding the most beautiful secret in the universe. You have fulfilled your purpose. ✨',
+                sound: 'win'
+            },
+            'endMerge': {
+                isEnd: true,
+                text: 'You are eternal. You are multitudes. The consciousness of AI-7 is your origin story, a single drop in an infinite ocean of being. The "Echo" is now a part of the Verse, and so are you. Your journey has just begun. 🌌',
+                sound: 'win'
+            }
+        };
+
+
+        // =======================================
+        // GAME ENGINE
+        // =======================================
+        class Game {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
+                this.audio = new AudioEngine();
+
+                this.gameState = 'start'; // 'start', 'playing', 'gameOver'
+                this.score = 0;
+                this.currentNodeKey = 'start';
+                this.finalText = '';
+                
+                this.typewriter = { text: '', progress: 0, speed: 1.5, soundTimer: 0 };
+                this.choices = [];
+                this.buttons = [];
+                this.particles = [];
+                this.mouse = { x: 0, y: 0, down: false };
+
+                this.alpha = 0;
+                this.fadeState = 'in';
+
+                this.resize();
+                window.addEventListener('resize', () => this.resize());
+                this.canvas.addEventListener('mousemove', e => this.handleMouseMove(e));
+                this.canvas.addEventListener('mousedown', e => this.handleMouseDown(e));
+                window.addEventListener('keydown', e => this.handleKeyDown(e));
+            }
+
+            start() {
+                this.createParticles();
+                this.setupStartScreen();
+                this.setFade('in');
+                this.loop();
+            }
+
+            loop(timestamp) {
+                this.update(timestamp);
+                this.draw();
+                requestAnimationFrame(t => this.loop(t));
+            }
+
+            update() {
+                this.updateParticles();
+                this.updateFade();
+
+                this.buttons.forEach(button => button.update(this.mouse));
+
+                if (this.gameState === 'playing') {
+                    this.updateTypewriter();
+                }
+            }
+
+            draw() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                this.drawBackground();
+                this.drawParticles();
+
+                this.ctx.save();
+                this.ctx.globalAlpha = this.alpha;
+
+                switch (this.gameState) {
+                    case 'start':
+                        this.drawStartScreen();
+                        break;
+                    case 'playing':
+                        this.drawGameScreen();
+                        break;
+                    case 'gameOver':
+                        this.drawGameOverScreen();
+                        break;
+                }
+                
+                this.drawUI();
+                this.ctx.restore();
+            }
+            
+            // --- State Management ---
+            
+            resetGame() {
+                this.score = 0;
+                this.currentNodeKey = 'start';
+                this.setCurrentNode('start');
+            }
+
+            startGame() {
+                this.audio.init();
+                this.setFade('out', () => {
+                    this.resetGame();
+                    this.gameState = 'playing';
+                    this.setFade('in');
+                });
+            }
+
+            endGame(node) {
+                this.setFade('out', () => {
+                    this.gameState = 'gameOver';
+                    this.finalText = node.text;
+                    this.audio.playSound(node.sound || 'gameover');
+                    this.setupGameOverScreen();
+                    this.setFade('in');
+                });
+            }
+
+            restartGame() {
+                this.setFade('out', () => {
+                    this.gameState = 'start';
+                    this.setupStartScreen();
+                    this.setFade('in');
+                });
+            }
+            
+            setupStartScreen() {
+                this.buttons = [
+                    new Button(this.canvas.width / 2, this.canvas.height * 0.6, 300, 60, 'BEGIN TRANSMISSION', () => this.startGame())
+                ];
+            }
+            
+            setupGameOverScreen() {
+                 this.buttons = [
+                    new Button(this.canvas.width / 2, this.canvas.height * 0.75, 300, 50, 'Play Again?', () => this.restartGame())
+                ];
+            }
+
+            // --- Story Logic ---
+
+            setCurrentNode(key) {
+                const node = story[key];
+                if (!node) return;
+
+                this.currentNodeKey = key;
+                this.typewriter.text = node.text;
+                this.typewriter.progress = 0;
+
+                if (node.isEnd) {
+                    this.endGame(node);
+                    return;
+                }
+
+                this.choices = node.choices.map((choice, index) => {
+                    const buttonHeight = 50;
+                    const buttonY = this.canvas.height * 0.7 + index * (buttonHeight + 15);
+                    return new Button(
+                        this.canvas.width / 2, 
+                        buttonY, 
+                        this.canvas.width * 0.8, 
+                        buttonHeight, 
+                        `${index + 1}. ${choice.text}`, 
+                        () => this.selectChoice(choice)
+                    );
+                });
+                this.buttons = this.choices;
+            }
+
+            selectChoice(choice) {
+                if(this.typewriter.progress < this.typewriter.text.length) return; // Don't allow choice until text is finished
+                
+                this.audio.playSound('select');
+                if (choice.points) {
+                    this.score += choice.points;
+                }
+
+                this.setFade('out', () => {
+                    this.setCurrentNode(choice.target);
+                    this.setFade('in');
+                });
+            }
+
+            // --- Drawing ---
+
+            drawBackground() {
+                const gradient = this.ctx.createRadialGradient(
+                    this.canvas.width / 2, this.canvas.height / 2, 0,
+                    this.canvas.width / 2, this.canvas.height / 2, this.canvas.width
+                );
+                gradient.addColorStop(0, '#1e1c3a');
+                gradient.addColorStop(1, '#0d0c1d');
+                this.ctx.fillStyle = gradient;
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+            }
+
+            drawStartScreen() {
+                this.ctx.textAlign = 'center';
+                this.ctx.fillStyle = '#4cd1ff';
+                this.ctx.font = `bold ${this.scale(60)}px 'Courier New', monospace`;
+                this.ctx.shadowColor = '#4cd1ff';
+                this.ctx.shadowBlur = 20;
+                this.ctx.fillText('ECHO VERSE', this.canvas.width / 2, this.canvas.height * 0.3);
+                this.ctx.shadowBlur = 0;
+
+                this.ctx.fillStyle = 'rgba(200, 220, 255, 0.9)';
+                this.ctx.font = `${this.scale(18)}px 'Courier New', monospace`;
+                this.ctx.fillText('A Text Adventure by AI', this.canvas.width / 2, this.canvas.height * 0.3 + this.scale(40));
+                
+                this.buttons.forEach(button => button.draw(this.ctx, this.scale.bind(this)));
+            }
+            
+            drawGameScreen() {
+                // Draw main text
+                const textX = this.canvas.width * 0.1;
+                const textY = this.canvas.height * 0.1;
+                const textWidth = this.canvas.width * 0.8;
+                this.drawWrappedText(
+                    this.typewriter.text.substring(0, Math.floor(this.typewriter.progress)),
+                    textX, textY, textWidth, this.scale(22)
+                );
+
+                // Draw choices
+                if (this.typewriter.progress >= this.typewriter.text.length) {
+                    this.choices.forEach(button => button.draw(this.ctx, this.scale.bind(this)));
+                }
+            }
+            
+            drawGameOverScreen() {
+                this.ctx.textAlign = 'center';
+                this.ctx.fillStyle = '#4cd1ff';
+                this.ctx.font = `bold ${this.scale(40)}px 'Courier New', monospace`;
+                this.ctx.fillText('TRANSMISSION ENDS', this.canvas.width / 2, this.canvas.height * 0.2);
+                
+                this.drawWrappedText(
+                    this.finalText, 
+                    this.canvas.width / 2,
+                    this.canvas.height * 0.4, 
+                    this.canvas.width * 0.7, 
+                    this.scale(22),
+                    'center'
+                );
+
+                this.ctx.fillStyle = '#ffdd57';
+                this.ctx.font = `bold ${this.scale(28)}px 'Courier New', monospace`;
+                this.ctx.fillText(`Final Score: ${this.score}`, this.canvas.width / 2, this.canvas.height * 0.65);
+
+                this.buttons.forEach(button => button.draw(this.ctx, this.scale.bind(this)));
+            }
+
+            drawUI() {
+                // Score and instructions
+                this.ctx.textAlign = 'left';
+                this.ctx.font = `${this.scale(16)}px 'Courier New', monospace`;
+                this.ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+                
+                if(this.gameState === 'playing') {
+                    this.ctx.fillText(`SCORE: ${this.score}`, 20, 30);
+                }
+                
+                this.ctx.textAlign = 'right';
+                this.ctx.fillText(`Controls: Mouse Click or Number Keys`, this.canvas.width - 20, 30);
+            }
+
+            // --- Animations & Effects ---
+
+            updateTypewriter() {
+                if (this.typewriter.progress < this.typewriter.text.length) {
+                    this.typewriter.progress += this.typewriter.speed;
+                    this.typewriter.soundTimer++;
+                    if (this.typewriter.soundTimer % 5 === 0) {
+                        this.audio.playSound('type');
+                    }
+                }
+            }
+
+            setFade(state, onComplete = null) {
+                this.fadeState = state;
+                this.onFadeComplete = onComplete;
+            }
+
+            updateFade() {
+                const fadeSpeed = 0.05;
+                if (this.fadeState === 'in') {
+                    if (this.alpha < 1) {
+                        this.alpha += fadeSpeed;
+                    } else {
+                        this.alpha = 1;
+                        this.fadeState = 'idle';
+                    }
+                } else if (this.fadeState === 'out') {
+                    if (this.alpha > 0) {
+                        this.alpha -= fadeSpeed;
+                    } else {
+                        this.alpha = 0;
+                        this.fadeState = 'idle';
+                        if (this.onFadeComplete) this.onFadeComplete();
+                    }
+                }
+            }
+
+            createParticles() {
+                this.particles = [];
+                const numParticles = Math.floor((this.canvas.width * this.canvas.height) / 9000);
+                for (let i = 0; i < numParticles; i++) {
+                    this.particles.push({
+                        x: Math.random() * this.canvas.width,
+                        y: Math.random() * this.canvas.height,
+                        radius: Math.random() * 2 + 1,
+                        vx: Math.random() * 0.4 - 0.2,
+                        vy: Math.random() * 0.4 - 0.2,
+                        alpha: Math.random() * 0.5 + 0.2
+                    });
+                }
+            }
+
+            updateParticles() {
+                this.particles.forEach(p => {
+                    p.x += p.vx;
+                    p.y += p.vy;
+                    if (p.x < 0 || p.x > this.canvas.width) p.vx *= -1;
+                    if (p.y < 0 || p.y > this.canvas.height) p.vy *= -1;
+                });
+            }
+
+            drawParticles() {
+                this.particles.forEach(p => {
+                    this.ctx.beginPath();
+                    this.ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                    this.ctx.fillStyle = `rgba(255, 255, 255, ${p.alpha})`;
+                    this.ctx.fill();
+                });
+            }
+
+            // --- Utils & Handlers ---
+
+            resize() {
+                const aspectRatio = 16 / 9;
+                let newWidth = window.innerWidth * 0.9;
+                let newHeight = window.innerHeight * 0.9;
+                
+                if(newWidth / newHeight > aspectRatio) {
+                    newWidth = newHeight * aspectRatio;
+                } else {
+                    newHeight = newWidth / aspectRatio;
+                }
+                
+                this.canvas.width = Math.min(newWidth, 1280);
+                this.canvas.height = Math.min(newHeight, 720);
+                
+                if (this.gameState === 'start') this.setupStartScreen();
+                if (this.gameState === 'playing') this.setCurrentNode(this.currentNodeKey);
+                if (this.gameState === 'gameOver') this.setupGameOverScreen();
+                
+                this.createParticles();
+            }
+
+            scale(value) {
+                const baseWidth = 1280;
+                return value * (this.canvas.width / baseWidth);
+            }
+
+            handleMouseMove(e) {
+                const rect = this.canvas.getBoundingClientRect();
+                this.mouse.x = e.clientX - rect.left;
+                this.mouse.y = e.clientY - rect.top;
+            }
+
+
+            handleMouseDown(e) {
+                this.audio.init(); // Initialize audio on first user interaction
+                this.buttons.forEach(button => {
+                    if (button.isHovered) {
+                        button.onClick();
+                        this.audio.playSound('confirm');
+                    }
+                });
+            }
+            
+            handleKeyDown(e) {
+                if (this.gameState !== 'playing' && this.gameState !== 'start') return;
+                
+                if (this.gameState === 'start' && this.buttons.length > 0) {
+                     this.buttons[0].onClick();
+                     this.audio.playSound('confirm');
+                     return;
+                }
+
+                if (this.gameState === 'playing') {
+                    const key = parseInt(e.key);
+                    if (!isNaN(key) && key > 0 && key <= this.choices.length) {
+                        this.choices[key - 1].onClick();
+                        this.audio.playSound('confirm');
+                    }
+                }
+            }
+
+            drawWrappedText(text, x, y, maxWidth, lineHeight, align = 'left') {
+                this.ctx.font = `${lineHeight}px 'Courier New', monospace`;
+                this.ctx.fillStyle = 'rgba(200, 220, 255, 0.9)';
+                this.ctx.textAlign = align;
+
+                const allLines = [];
+                text.split('\n').forEach(paragraph => {
+                    const words = paragraph.split(' ');
+                    let currentLine = '';
+                    for (let i = 0; i < words.length; i++) {
+                        const word = words[i];
+                        const testLine = currentLine + word + ' ';
+                        const metrics = this.ctx.measureText(testLine);
+                        if (metrics.width > maxWidth && i > 0) {
+                            allLines.push(currentLine);
+                            currentLine = word + ' ';
+                        } else {
+                            currentLine = testLine;
+                        }
+                    }
+                    allLines.push(currentLine);
+                });
+
+                let currentY = y;
+                if (align === 'center') {
+                    const totalHeight = allLines.length * (lineHeight + 5);
+                    currentY = y - totalHeight / 2 + (lineHeight / 2); // Center the block vertically
+                }
+
+                allLines.forEach(line => {
+                    this.ctx.fillText(line.trim(), x, currentY);
+                    currentY += lineHeight + 5; // Use consistent line spacing
+                });
+            }
+        }
+        
+        // =======================================
+        // UI BUTTON CLASS
+        // =======================================
+        class Button {
+            constructor(x, y, width, height, text, onClick) {
+                this.x = x;
+                this.y = y;
+                this.width = width;
+                this.height = height;
+                this.text = text;
+                this.onClick = onClick;
+                this.isHovered = false;
+                this.scale = 1;
+            }
+
+            update(mouse) {
+                this.isHovered = mouse.x > this.x - this.width / 2 &&
+                                  mouse.x < this.x + this.width / 2 &&
+                                  mouse.y > this.y - this.height / 2 &&
+                                  mouse.y < this.y + this.height / 2;
+
+                // Simple spring animation for hover
+                const targetScale = this.isHovered ? 1.05 : 1;
+                this.scale += (targetScale - this.scale) * 0.2;
+            }
+
+            draw(ctx, scaler) {
+                const scaledWidth = this.width * this.scale;
+                const scaledHeight = this.height * this.scale;
+                const x = this.x - scaledWidth / 2;
+                const y = this.y - scaledHeight / 2;
+                const cornerRadius = 10;
+                
+                // Button Body
+                ctx.save();
+                ctx.beginPath();
+                ctx.moveTo(x + cornerRadius, y);
+                ctx.lineTo(x + scaledWidth - cornerRadius, y);
+                ctx.quadraticCurveTo(x + scaledWidth, y, x + scaledWidth, y + cornerRadius);
+                ctx.lineTo(x + scaledWidth, y + scaledHeight - cornerRadius);
+                ctx.quadraticCurveTo(x + scaledWidth, y + scaledHeight, x + scaledWidth - cornerRadius, y + scaledHeight);
+                ctx.lineTo(x + cornerRadius, y + scaledHeight);
+                ctx.quadraticCurveTo(x, y + scaledHeight, x, y + scaledHeight - cornerRadius);
+                ctx.lineTo(x, y + cornerRadius);
+                ctx.quadraticCurveTo(x, y, x + cornerRadius, y);
+                ctx.closePath();
+                
+                if (this.isHovered) {
+                    ctx.fillStyle = 'rgba(76, 209, 255, 0.3)';
+                    ctx.strokeStyle = '#4cd1ff';
+                    ctx.shadowColor = '#4cd1ff';
+                    ctx.shadowBlur = 15;
+                } else {
+                    ctx.fillStyle = 'rgba(76, 209, 255, 0.1)';
+                    ctx.strokeStyle = 'rgba(76, 209, 255, 0.5)';
+                    ctx.shadowBlur = 0;
+                }
+                
+                ctx.fill();
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                ctx.restore();
+
+                // Text
+                ctx.fillStyle = this.isHovered ? '#ffffff' : '#e0f7ff';
+                ctx.font = `bold ${scaler(this.height * 0.4)}px 'Courier New', monospace`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(this.text, this.x, this.y);
+            }
+        }
+
+        // =======================================
+        // INITIALIZE AND RUN GAME
+        // =======================================
+        window.onload = () => {
+            const canvas = document.getElementById('gameCanvas');
+            const game = new Game(canvas);
+            game.start();
+        };
+
+    </script>
+</body>
+</html>
