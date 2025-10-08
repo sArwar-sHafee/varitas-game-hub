@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Logic Loft</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #1a1a2e;
+            color: #e0e0e0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        canvas {
+            display: block;
+            background-color: #16213e;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+    // Logic Loft - A Single-File HTML5 Puzzle Game
+    // © 2023 GPT-4 Project. All rights reserved.
+
+    (function() {
+        'use strict';
+
+        // --- CONFIGURATION ---
+        const TILE_TYPES = {
+            CORNER: 'corner', // ┗
+            STRAIGHT: 'straight', // ┃
+            T_JUNCTION: 't_junction', // ┣
+            CROSS: 'cross' // ╋
+        };
+
+        const COLORS = {
+            BACKGROUND: '#1a1a2e',
+            TILE: '#0f3460',
+            TILE_BORDER: '#16213e',
+            PATH: '#e94560',
+            PATH_LIT: '#f0c808',
+            TEXT: '#e0e0e0',
+            TEXT_ACCENT: '#e94560',
+            UI_BG: 'rgba(22, 33, 62, 0.8)',
+            BUTTON: '#e94560',
+            BUTTON_HOVER: '#f96580'
+        };
+
+        const GAME_SETTINGS = {
+            STARTING_LEVEL: 1,
+            STARTING_TIME: 60,
+            TIME_PER_LEVEL: 15,
+            SCORE_PER_LEVEL: 100
+        };
+
+        // --- AUDIO ENGINE ---
+        // A simple class to handle programmatic sound effects using the Web Audio API.
+        class AudioEngine {
+            constructor() {
+                this.audioCtx = null;
+                this.isMuted = false;
+            }
+
+            init() {
+                if (!this.audioCtx) {
+                    try {
+                        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    } catch (e) {
+                        console.error("Web Audio API is not supported in this browser.");
+                    }
+                }
+            }
+
+            // Must be called after a user interaction (e.g., click)
+            unlock() {
+                if (!this.audioCtx) this.init();
+                if (this.audioCtx && this.audioCtx.state === 'suspended') {
+                    this.audioCtx.resume();
+                }
+            }
+
+            play(type) {
+                if (!this.audioCtx || this.isMuted) return;
+
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+
+                gainNode.gain.setValueAtTime(0.1, this.audioCtx.currentTime);
+
+                switch (type) {
+                    case 'rotate':
+                        oscillator.type = 'triangle';
+                        oscillator.frequency.setValueAtTime(300, this.audioCtx.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + 0.2);
+                        break;
+                    case 'click':
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(440, this.audioCtx.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + 0.1);
+                        break;
+                    case 'level_complete':
+                        this.playNote(523.25, 0); // C5
+                        this.playNote(659.25, 0.1); // E5
+                        this.playNote(783.99, 0.2); // G5
+                        this.playNote(1046.50, 0.3); // C6
+                        return;
+                    case 'game_over':
+                        oscillator.type = 'sawtooth';
+                        oscillator.frequency.setValueAtTime(200, this.audioCtx.currentTime);
+                        oscillator.frequency.exponentialRampToValueAtTime(50, this.audioCtx.currentTime + 1.0);
+                        gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + 1.0);
+                        break;
+                }
+
+                oscillator.start(this.audioCtx.currentTime);
+                oscillator.stop(this.audioCtx.currentTime + 0.5);
+            }
+
+            playNote(frequency, delay) {
+                if (!this.audioCtx) return;
+                const oscillator = this.audioCtx.createOscillator();
+                const gainNode = this.audioCtx.createGain();
+
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioCtx.destination);
+
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(frequency, this.audioCtx.currentTime + delay);
+                gainNode.gain.setValueAtTime(0.1, this.audioCtx.currentTime + delay);
+                gainNode.gain.exponentialRampToValueAtTime(0.0001, this.audioCtx.currentTime + delay + 0.2);
+
+                oscillator.start(this.audioCtx.currentTime + delay);
+                oscillator.stop(this.audioCtx.currentTime + delay + 0.2);
+            }
+        }
+
+        // --- GAME OBJECTS ---
+
+        class Tile {
+            constructor(gridX, gridY, type, solutionRotation) {
+                this.gridX = gridX;
+                this.gridY = gridY;
+                this.type = type;
+                this.solutionRotation = solutionRotation; // 0, 90, 180, 270
+
+                this.currentRotation = [0, 90, 180, 270][Math.floor(Math.random() * 4)];
+                this.targetRotation = this.currentRotation;
+                this.isRotating = false;
+                this.isLit = false;
+            }
+
+            // Defines which directions have connections for a given rotation
+            getConnections(rotation) {
+                const connections = { N: false, E: false, S: false, W: false };
+                const r = (rotation % 360 + 360) % 360; // Normalize rotation
+
+                switch (this.type) {
+                    case TILE_TYPES.CORNER: // Connects S and E at 0 deg
+                        if (r === 0) { connections.S = true; connections.E = true; }
+                        else if (r === 90) { connections.S = true; connections.W = true; }
+                        else if (r === 180) { connections.N = true; connections.W = true; }
+                        else if (r === 270) { connections.N = true; connections.E = true; }
+                        break;
+                    case TILE_TYPES.STRAIGHT: // Connects N and S at 0 deg
+                        if (r === 0 || r === 180) { connections.N = true; connections.S = true; }
+                        else { connections.E = true; connections.W = true; }
+                        break;
+                    case TILE_TYPES.T_JUNCTION: // Connects W, N, E at 0 deg
+                        if (r === 0) { connections.W = true; connections.N = true; connections.E = true; }
+                        else if (r === 90) { connections.N = true; connections.E = true; connections.S = true; }
+                        else if (r === 180) { connections.E = true; connections.S = true; connections.W = true; }
+                        else if (r === 270) { connections.S = true; connections.W = true; connections.N = true; }
+                        break;
+                    case TILE_TYPES.CROSS: // Always connected
+                        connections.N = true; connections.E = true; connections.S = true; connections.W = true;
+                        break;
+                }
+                return connections;
+            }
+
+            rotate() {
+                if (this.isRotating) return;
+                this.isRotating = true;
+                this.targetRotation = (this.currentRotation + 90) % 360;
+            }
+
+            update(deltaTime) {
+                if (this.isRotating) {
+                    const diff = (this.targetRotation - this.currentRotation + 360) % 360;
+                    const speed = 500 * deltaTime;
+                    if (diff <= speed || diff >= 360 - speed) {
+                        this.currentRotation = this.targetRotation;
+                        this.isRotating = false;
+                    } else {
+                        this.currentRotation = (this.currentRotation + speed) % 360;
+                    }
+                }
+            }
+
+            draw(ctx, size) {
+                ctx.save();
+                ctx.translate(size / 2, size / 2);
+                ctx.rotate(this.currentRotation * Math.PI / 180);
+                ctx.translate(-size / 2, -size / 2);
+
+                // Tile background
+                const gradient = ctx.createLinearGradient(0, 0, size, size);
+                gradient.addColorStop(0, COLORS.TILE);
+                gradient.addColorStop(1, '#1f467a');
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, size, size);
+
+                // Draw paths based on type
+                const pathWidth = size * 0.2;
+                ctx.strokeStyle = this.isLit ? COLORS.PATH_LIT : COLORS.PATH;
+                ctx.lineWidth = pathWidth;
+                ctx.lineCap = 'round';
+
+                ctx.beginPath();
+                switch (this.type) {
+                    case TILE_TYPES.CORNER: // S-E
+                        ctx.moveTo(size / 2, size);
+                        ctx.lineTo(size / 2, size / 2);
+                        ctx.lineTo(size, size / 2);
+                        break;
+                    case TILE_TYPES.STRAIGHT: // N-S
+                        ctx.moveTo(size / 2, 0);
+                        ctx.lineTo(size / 2, size);
+                        break;
+                    case TILE_TYPES.T_JUNCTION: // W-N-E
+                        ctx.moveTo(0, size / 2);
+                        ctx.lineTo(size, size / 2);
+                        ctx.moveTo(size / 2, size / 2);
+                        ctx.lineTo(size / 2, 0);
+                        break;
+                    case TILE_TYPES.CROSS: // All
+                        ctx.moveTo(0, size / 2);
+                        ctx.lineTo(size, size / 2);
+                        ctx.moveTo(size / 2, 0);
+                        ctx.lineTo(size / 2, size);
+                        break;
+                }
+                ctx.stroke();
+
+                ctx.restore();
+            }
+        }
+
+        class Grid {
+            constructor(size) {
+                this.size = size;
+                this.tiles = [];
+                this.generate();
+            }
+
+            generate() {
+                this.tiles = Array(this.size).fill(null).map(() => Array(this.size).fill(null));
+                let connections = Array(this.size).fill(null).map(() => Array(this.size).fill(null).map(() => ({ N: false, E: false, S: false, W: false })));
+                let visited = Array(this.size).fill(null).map(() => Array(this.size).fill(false));
+
+                // Create a guaranteed path using randomized DFS (spanning tree)
+                let stack = [];
+                let startX = Math.floor(Math.random() * this.size);
+                let startY = Math.floor(Math.random() * this.size);
+                stack.push({ x: startX, y: startY });
+                visited[startY][startX] = true;
+
+                while (stack.length > 0) {
+                    let current = stack[stack.length - 1];
+                    let neighbors = [];
+                    // Check North
+                    if (current.y > 0 && !visited[current.y - 1][current.x]) neighbors.push({ x: current.x, y: current.y - 1, dir: 'N' });
+                    // Check East
+                    if (current.x < this.size - 1 && !visited[current.y][current.x + 1]) neighbors.push({ x: current.x + 1, y: current.y, dir: 'E' });
+                    // Check South
+                    if (current.y < this.size - 1 && !visited[current.y + 1][current.x]) neighbors.push({ x: current.x, y: current.y + 1, dir: 'S' });
+                    // Check West
+                    if (current.x > 0 && !visited[current.y][current.x - 1]) neighbors.push({ x: current.x - 1, y: current.y, dir: 'W' });
+
+                    if (neighbors.length > 0) {
+                        let next = neighbors[Math.floor(Math.random() * neighbors.length)];
+                        
+                        // Carve path
+                        if (next.dir === 'N') { connections[current.y][current.x].N = true; connections[next.y][next.x].S = true; }
+                        else if (next.dir === 'E') { connections[current.y][current.x].E = true; connections[next.y][next.x].W = true; }
+                        else if (next.dir === 'S') { connections[current.y][current.x].S = true; connections[next.y][next.x].N = true; }
+                        else if (next.dir === 'W') { connections[current.y][current.x].W = true; connections[next.y][next.x].E = true; }
+                        
+                        visited[next.y][next.x] = true;
+                        stack.push(next);
+                    } else {
+                        stack.pop();
+                    }
+                }
+                
+                // Add extra connections to create loops, making it more interesting
+                const extraConnections = Math.floor(this.size * this.size * 0.2);
+                for(let i=0; i < extraConnections; i++) {
+                    let x = Math.floor(Math.random() * this.size);
+                    let y = Math.floor(Math.random() * this.size);
+                    let dirs = ['N', 'E', 'S', 'W'];
+                    let dir = dirs[Math.floor(Math.random() * 4)];
+                    
+                    if (dir === 'N' && y > 0) { connections[y][x].N = true; connections[y-1][x].S = true; }
+                    if (dir === 'E' && x < this.size - 1) { connections[y][x].E = true; connections[y][x+1].W = true; }
+                    if (dir === 'S' && y < this.size - 1) { connections[y][x].S = true; connections[y+1][x].N = true; }
+                    if (dir === 'W' && x > 0) { connections[y][x].W = true; connections[y][x-1].E = true; }
+                }
+
+                // Create tiles based on connections
+                for (let y = 0; y < this.size; y++) {
+                    for (let x = 0; x < this.size; x++) {
+                        const conns = connections[y][x];
+                        const count = Object.values(conns).filter(Boolean).length;
+                        let type, rotation = 0;
+
+                        if (count <= 1) { // A dead end in the maze, count is 1. (0 is not possible with this generator)
+                            type = TILE_TYPES.CORNER;
+                            // Pick a corner rotation that satisfies the single connection.
+                            // The other arm of the corner will point to a wall, which is correct for a dead end.
+                            if (conns.N) rotation = 180;      // N-W corner, N is connected
+                            else if (conns.E) rotation = 270; // N-E corner, E is connected
+                            else if (conns.S) rotation = 0;   // S-E corner, S is connected
+                            else if (conns.W) rotation = 90;  // S-W corner, W is connected
+                            else { // Should not happen, but as a fallback for an isolated tile (count=0)
+                                type = TILE_TYPES.STRAIGHT;
+                                rotation = 0;
+                            }
+                        } else if (count === 2) {
+                            if (conns.N && conns.S) { type = TILE_TYPES.STRAIGHT; rotation = 0; }
+                            else if (conns.E && conns.W) { type = TILE_TYPES.STRAIGHT; rotation = 90; }
+                            else { 
+                                type = TILE_TYPES.CORNER;
+                                if (conns.S && conns.E) rotation = 0; else if (conns.S && conns.W) rotation = 90; else if (conns.N && conns.W) rotation = 180; else rotation = 270;
+                            }
+                        } else if (count === 3) {
+                            type = TILE_TYPES.T_JUNCTION;
+                            if (!conns.S) rotation = 0; else if (!conns.W) rotation = 90; else if (!conns.N) rotation = 180; else rotation = 270;
+                        } else {
+                            type = TILE_TYPES.CROSS;
+                            rotation = 0;
+                        }
+                        this.tiles[y][x] = new Tile(x, y, type, rotation);
+                    }
+                }
+            }
+
+            checkSolved() {
+                for (let y = 0; y < this.size; y++) {
+                    for (let x = 0; x < this.size; x++) {
+                        const tile = this.tiles[y][x];
+                        const connections = tile.getConnections(tile.currentRotation);
+
+                        // Check North
+                        if (connections.N !== (y > 0 && this.tiles[y-1][x].getConnections(this.tiles[y-1][x].currentRotation).S)) return false;
+                        // Check East
+                        if (connections.E !== (x < this.size - 1 && this.tiles[y][x+1].getConnections(this.tiles[y][x+1].currentRotation).W)) return false;
+                        // Check South - not needed, North check covers it
+                        // Check West - not needed, East check covers it
+                    }
+                }
+                this.lightUp();
+                return true;
+            }
+            
+            lightUp() {
+                 // Propagate a "lit" state through the connected grid for a visual effect.
+                const toVisit = [{x: 0, y: 0}];
+                const visited = new Set();
+                
+                while(toVisit.length > 0) {
+                    const current = toVisit.pop();
+                    const key = `${current.x},${current.y}`;
+                    if(visited.has(key) || !this.tiles[current.y] || !this.tiles[current.y][current.x]) continue;
+                    
+                    visited.add(key);
+                    this.tiles[current.y][current.x].isLit = true;
+                    
+                    const connections = this.tiles[current.y][current.x].getConnections(this.tiles[current.y][current.x].currentRotation);
+                    
+                    if (connections.N && current.y > 0) toVisit.push({x: current.x, y: current.y - 1});
+                    if (connections.E && current.x < this.size - 1) toVisit.push({x: current.x + 1, y: current.y});
+                    if (connections.S && current.y < this.size - 1) toVisit.push({x: current.x, y: current.y + 1});
+                    if (connections.W && current.x > 0) toVisit.push({x: current.x - 1, y: current.y});
+                }
+            }
+        }
+        
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.size = Math.random() * 5 + 2;
+                this.life = 1;
+                this.vx = (Math.random() - 0.5) * 4;
+                this.vy = (Math.random() - 0.5) * 4;
+            }
+
+            update(deltaTime) {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vy += 0.1; // Gravity
+                this.life -= deltaTime;
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = this.life > 0 ? this.life : 0;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+
+        // --- MAIN GAME CLASS ---
+        class Game {
+            constructor(canvasId) {
+                this.canvas = document.getElementById(canvasId);
+                this.ctx = this.canvas.getContext('2d');
+                this.audio = new AudioEngine();
+
+                this.gameState = 'start';
+                this.level = GAME_SETTINGS.STARTING_LEVEL;
+                this.score = 0;
+                this.timer = GAME_SETTINGS.STARTING_TIME;
+                this.grid = null;
+                this.particles = [];
+                
+                this.lastTime = 0;
+                this.levelCompleteTime = 0;
+                
+                this.mouse = { x: 0, y: 0, down: false, clicked: false };
+
+                this.handleResize();
+                window.addEventListener('resize', () => this.handleResize());
+                this.canvas.addEventListener('mousedown', (e) => this.handleMouse(e, true));
+                this.canvas.addEventListener('mouseup', (e) => this.handleMouse(e, false));
+                this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+                
+                this.canvas.addEventListener('touchstart', (e) => this.handleTouch(e, true), { passive: false });
+                this.canvas.addEventListener('touchend', (e) => this.handleTouch(e, false), { passive: false });
+                this.canvas.addEventListener('touchmove', (e) => this.handleTouchMove(e), { passive: false });
+                
+                document.addEventListener('keydown', (e) => this.handleKey(e));
+                
+                this.gameLoop(0);
+            }
+            
+            handleKey(e) {
+                if (this.gameState === 'start' || this.gameState === 'gameOver') {
+                    if (e.code === 'Space' || e.code === 'Enter') {
+                        this.startGame();
+                    }
+                }
+            }
+            
+            getMousePos(e) {
+                const rect = this.canvas.getBoundingClientRect();
+                return {
+                    x: e.clientX - rect.left,
+                    y: e.clientY - rect.top
+                };
+            }
+            
+            getTouchPos(e) {
+                 const rect = this.canvas.getBoundingClientRect();
+                 return {
+                    x: e.touches[0].clientX - rect.left,
+                    y: e.touches[0].clientY - rect.top
+                 };
+            }
+            
+            handleTouch(e, isDown) {
+                e.preventDefault();
+                this.audio.unlock();
+                if (isDown) {
+                    const pos = this.getTouchPos(e);
+                    this.mouse.x = pos.x;
+                    this.mouse.y = pos.y;
+                    this.mouse.down = true;
+                } else {
+                    this.mouse.down = false;
+                    this.mouse.clicked = true;
+                }
+            }
+            
+            handleTouchMove(e) {
+                e.preventDefault();
+                if (this.mouse.down) {
+                    const pos = this.getTouchPos(e);
+                    this.mouse.x = pos.x;
+                    this.mouse.y = pos.y;
+                }
+            }
+
+            handleMouse(e, isDown) {
+                this.audio.unlock();
+                const pos = this.getMousePos(e);
+                this.mouse.x = pos.x;
+                this.mouse.y = pos.y;
+                this.mouse.down = isDown;
+                if (!isDown) {
+                     this.mouse.clicked = true;
+                }
+            }
+            
+            handleMouseMove(e) {
+                const pos = this.getMousePos(e);
+                this.mouse.x = pos.x;
+                this.mouse.y = pos.y;
+            }
+
+            handleResize() {
+                const aspectRatio = 16 / 9;
+                let newWidth = window.innerWidth;
+                let newHeight = window.innerHeight;
+                const windowRatio = newWidth / newHeight;
+                
+                if (windowRatio > aspectRatio) {
+                    newWidth = newHeight * aspectRatio;
+                } else {
+                    newHeight = newWidth / aspectRatio;
+                }
+
+                this.canvas.width = newWidth;
+                this.canvas.height = newHeight;
+
+                this.scale = this.canvas.width / 1280; // Base resolution
+            }
+            
+            startGame() {
+                this.audio.unlock();
+                this.audio.play('click');
+                this.level = GAME_SETTINGS.STARTING_LEVEL;
+                this.score = 0;
+                this.timer = GAME_SETTINGS.STARTING_TIME;
+                this.startLevel();
+            }
+
+            startLevel() {
+                const gridSize = Math.min(Math.floor(this.level / 2) + 3, 10); // Grid size from 3 to 10
+                this.grid = new Grid(gridSize);
+                this.gameState = 'playing';
+            }
+            
+            nextLevel() {
+                this.audio.play('click');
+                this.score += GAME_SETTINGS.SCORE_PER_LEVEL + Math.floor(this.timer);
+                this.level++;
+                this.timer += GAME_SETTINGS.TIME_PER_LEVEL;
+                this.startLevel();
+            }
+
+            gameOver() {
+                this.audio.play('game_over');
+                this.gameState = 'gameOver';
+            }
+
+            gameLoop(timestamp) {
+                const deltaTime = (timestamp - this.lastTime) / 1000;
+                this.lastTime = timestamp;
+
+                this.update(deltaTime || 0);
+                this.draw();
+
+                this.mouse.clicked = false;
+                requestAnimationFrame((t) => this.gameLoop(t));
+            }
+
+            update(deltaTime) {
+                this.particles.forEach(p => p.update(deltaTime));
+                this.particles = this.particles.filter(p => p.life > 0);
+
+                if (this.gameState === 'playing') {
+                    this.timer -= deltaTime;
+                    if (this.timer <= 0) {
+                        this.timer = 0;
+                        this.gameOver();
+                    }
+                    
+                    if(this.grid) this.grid.tiles.flat().forEach(tile => tile.update(deltaTime));
+
+                    if (this.mouse.clicked && this.grid) {
+                        const { tileSize, gridX, gridY } = this.getGridRenderInfo();
+                        const clickX = Math.floor((this.mouse.x - gridX) / tileSize);
+                        const clickY = Math.floor((this.mouse.y - gridY) / tileSize);
+
+                        if (clickX >= 0 && clickX < this.grid.size && clickY >= 0 && clickY < this.grid.size) {
+                            this.grid.tiles[clickY][clickX].rotate();
+                            this.audio.play('rotate');
+                            // Small delay to allow rotation animation to start before checking
+                            setTimeout(() => {
+                                if (this.gameState === 'playing' && this.grid.checkSolved()) {
+                                    this.audio.play('level_complete');
+                                    this.gameState = 'levelComplete';
+                                    this.levelCompleteTime = 2; // 2 seconds celebration
+                                    this.createWinParticles();
+                                }
+                            }, 50);
+                        }
+                    }
+                } else if (this.gameState === 'levelComplete') {
+                    this.levelCompleteTime -= deltaTime;
+                    if (this.levelCompleteTime <= 0) {
+                        this.nextLevel();
+                    }
+                }
+            }
+
+            draw() {
+                // Clear canvas with background color
+                this.ctx.fillStyle = COLORS.BACKGROUND;
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                this.drawBackgroundEffect();
+
+                switch (this.gameState) {
+                    case 'start': this.drawStartScreen(); break;
+                    case 'playing': this.drawGame(); break;
+                    case 'levelComplete': this.drawGame(); break; // Continue drawing game during celebration
+                    case 'gameOver': this.drawGameOverScreen(); break;
+                }
+                
+                this.particles.forEach(p => p.draw(this.ctx));
+            }
+            
+            drawBackgroundEffect() {
+                const t = Date.now() / 5000;
+                const gradient = this.ctx.createRadialGradient(
+                    this.canvas.width / 2 + Math.sin(t) * 100 * this.scale,
+                    this.canvas.height / 2 + Math.cos(t) * 100 * this.scale,
+                    0,
+                    this.canvas.width / 2,
+                    this.canvas.height / 2,
+                    this.canvas.width
+                );
+                gradient.addColorStop(0, '#1f467a');
+                gradient.addColorStop(1, COLORS.BACKGROUND);
+                this.ctx.fillStyle = gradient;
+                this.ctx.globalAlpha = 0.5;
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                this.ctx.globalAlpha = 1;
+            }
+
+            getGridRenderInfo() {
+                const gridAreaSize = Math.min(this.canvas.width, this.canvas.height * (16/9) * 0.8);
+                const totalMargin = this.canvas.width * 0.15;
+                const gridSizePixels = Math.min(this.canvas.width - totalMargin, this.canvas.height - (80 * this.scale));
+                const tileSize = gridSizePixels / (this.grid ? this.grid.size : 1);
+                const gridX = (this.canvas.width - gridSizePixels) / 2;
+                const gridY = (this.canvas.height - gridSizePixels) / 2 + (30 * this.scale);
+                return { tileSize, gridX, gridY };
+            }
+
+            drawGame() {
+                if (!this.grid) return;
+                const { tileSize, gridX, gridY } = this.getGridRenderInfo();
+
+                // Draw tiles
+                for (let y = 0; y < this.grid.size; y++) {
+                    for (let x = 0; x < this.grid.size; x++) {
+                        this.ctx.save();
+                        this.ctx.translate(gridX + x * tileSize, gridY + y * tileSize);
+                        this.grid.tiles[y][x].draw(this.ctx, tileSize);
+                        this.ctx.strokeStyle = COLORS.TILE_BORDER;
+                        this.ctx.lineWidth = 2 * this.scale;
+                        this.ctx.strokeRect(0, 0, tileSize, tileSize);
+                        this.ctx.restore();
+                    }
+                }
+                
+                this.drawUI();
+            }
+            
+            drawUI() {
+                const padding = 20 * this.scale;
+                
+                // Top UI bar
+                this.ctx.fillStyle = COLORS.UI_BG;
+                this.ctx.fillRect(0, 0, this.canvas.width, 60 * this.scale);
+                
+                // Score
+                this.ctx.fillStyle = COLORS.TEXT;
+                this.ctx.font = `${24 * this.scale}px 'Segoe UI', sans-serif`;
+                this.ctx.textAlign = 'left';
+                this.ctx.textBaseline = 'middle';
+                this.ctx.fillText(`Score: ${this.score}`, padding, 30 * this.scale);
+                
+                // Level
+                this.ctx.textAlign = 'center';
+                this.ctx.fillText(`Level: ${this.level}`, this.canvas.width / 2, 30 * this.scale);
+                
+                // Timer
+                this.ctx.fillStyle = this.timer < 10 ? COLORS.TEXT_ACCENT : COLORS.TEXT;
+                this.ctx.textAlign = 'right';
+                this.ctx.fillText(`Time: ${Math.ceil(this.timer)}`, this.canvas.width - padding, 30 * this.scale);
+            }
+            
+            drawButton(text, x, y, width, height) {
+                const isHovered = this.mouse.x > x && this.mouse.x < x + width && this.mouse.y > y && this.mouse.y < y + height;
+                
+                this.ctx.fillStyle = isHovered ? COLORS.BUTTON_HOVER : COLORS.BUTTON;
+                this.ctx.fillRect(x, y, width, height);
+
+                this.ctx.fillStyle = COLORS.TEXT;
+                this.ctx.font = `bold ${height * 0.5}px 'Segoe UI', sans-serif`;
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                this.ctx.fillText(text, x + width / 2, y + height / 2);
+                
+                if (isHovered && this.mouse.clicked) {
+                    return true;
+                }
+                return false;
+            }
+
+            drawStartScreen() {
+                this.drawTextScreen(
+                    "Logic Loft",
+                    "Rotate tiles to connect all the paths.",
+                    "Click or Tap to Rotate",
+                    "Start Game ▶️",
+                    () => { this.startGame(); }
+                );
+            }
+            
+            drawGameOverScreen() {
+                this.drawTextScreen(
+                    "Game Over",
+                    `Your final score is ${this.score}`,
+                    `You reached level ${this.level}`,
+                    "Restart 🔄",
+                    () => { this.startGame(); }
+                );
+            }
+
+            drawTextScreen(title, subtitle1, subtitle2, buttonText, buttonAction) {
+                const centerX = this.canvas.width / 2;
+                
+                // Title
+                this.ctx.fillStyle = COLORS.TEXT;
+                this.ctx.font = `bold ${80 * this.scale}px 'Segoe UI', sans-serif`;
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                this.ctx.fillText(title, centerX, this.canvas.height * 0.3);
+                
+                // Subtitles
+                this.ctx.fillStyle = COLORS.TEXT;
+                this.ctx.font = `${30 * this.scale}px 'Segoe UI', sans-serif`;
+                this.ctx.fillText(subtitle1, centerX, this.canvas.height * 0.45);
+                
+                this.ctx.fillStyle = COLORS.TEXT_ACCENT;
+                this.ctx.font = `italic ${24 * this.scale}px 'Segoe UI', sans-serif`;
+                this.ctx.fillText(subtitle2, centerX, this.canvas.height * 0.55);
+
+                const btnWidth = 300 * this.scale;
+                const btnHeight = 70 * this.scale;
+                const btnX = centerX - btnWidth / 2;
+                const btnY = this.canvas.height * 0.7;
+
+                if(this.drawButton(buttonText, btnX, btnY, btnWidth, btnHeight)) {
+                    buttonAction();
+                }
+            }
+
+            createWinParticles() {
+                if(!this.grid) return;
+                const { tileSize, gridX, gridY } = this.getGridRenderInfo();
+                for (let y = 0; y < this.grid.size; y++) {
+                    for (let x = 0; x < this.grid.size; x++) {
+                        const tileCenterX = gridX + x * tileSize + tileSize / 2;
+                        const tileCenterY = gridY + y * tileSize + tileSize / 2;
+                        for(let i = 0; i < 5; i++) {
+                            this.particles.push(new Particle(tileCenterX, tileCenterY, COLORS.PATH_LIT));
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- INITIALIZATION ---
+        window.addEventListener('load', () => {
+            const game = new Game('gameCanvas');
+        });
+
+    })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "name": "Logic Loft",
+  "type": "puzzle game",
+  "folder": "logic_loft",
+  "description": "Challenge your mind by manipulating architecture and reshaping entire rooms in a series of clever spatial puzzles. Each satisfying solution lets you ascend higher, building a true masterpiece of logic and design.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
