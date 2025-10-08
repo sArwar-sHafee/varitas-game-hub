@@ -1,0 +1,8 @@
+{
+  "name": "Pulse Rider",
+  "type": "endless runner",
+  "folder": "pulse_rider",
+  "description": "Surf an electrifying wave of pure energy that beats and shifts with an incredible soundtrack. Match the pulse to phase through obstacles and accelerate to impossible, adrenaline-fueled speeds.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}

@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Pulse Rider</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100%;
+            background-color: #0c001f;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        canvas {
+            display: block;
+            background-color: #000;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+
+            let gameState = 'start'; // 'start', 'playing', 'gameOver'
+            let score = 0;
+            let highScore = localStorage.getItem('pulseRiderHighScore') || 0;
+            let gameSpeed;
+            let lastTime = 0;
+
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            let audioEnabled = false;
+
+            // --- Game Configuration ---
+            const PLAYER_CONFIG = {
+                size: 0.06, // relative to canvas width
+                laneChangeSpeed: 0.5, // seconds to change lane
+            };
+
+            const TRACK_CONFIG = {
+                lanes: 3,
+                laneWidth: 0.25, // relative to canvas width
+                perspective: 0.6, // 0 to 1, how much the lanes converge
+            };
+
+            const GAME_CONFIG = {
+                initialSpeed: 0.3, // units per second
+                speedIncrease: 0.01, // units per second^2
+                spawnInterval: 1.2, // seconds
+                collectibleChance: 0.3,
+            };
+            
+            let spawnTimer = GAME_CONFIG.spawnInterval;
+
+            // --- Utility Functions ---
+            const rand = (min, max) => Math.random() * (max - min) + min;
+
+            // --- Sound Engine ---
+            function playSound(type, ...args) {
+                if (!audioEnabled || !audioCtx) return;
+                
+                const now = audioCtx.currentTime;
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                gainNode.connect(audioCtx.destination);
+                oscillator.connect(gainNode);
+
+                switch (type) {
+                    case 'move':
+                        oscillator.type = 'triangle';
+                        oscillator.frequency.setValueAtTime(200, now);
+                        oscillator.frequency.linearRampToValueAtTime(400, now + 0.1);
+                        gainNode.gain.setValueAtTime(0.2, now);
+                        gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
+                        break;
+                    case 'collect':
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(523.25, now); // C5
+                        gainNode.gain.setValueAtTime(0.3, now);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+                        oscillator.frequency.setValueAtTime(659.25, now + 0.05); // E5
+                        break;
+                    case 'gameOver':
+                        oscillator.type = 'sawtooth';
+                        oscillator.frequency.setValueAtTime(300, now);
+                        oscillator.frequency.exponentialRampToValueAtTime(50, now + 0.5);
+                        gainNode.gain.setValueAtTime(0.4, now);
+                        gainNode.gain.linearRampToValueAtTime(0, now + 0.5);
+                        break;
+                }
+                
+                oscillator.start(now);
+                oscillator.stop(now + 0.5);
+            }
+            
+            function userInteraction() {
+                if (!audioEnabled && audioCtx.state === 'suspended') {
+                    audioCtx.resume().then(() => {
+                        audioEnabled = true;
+                    });
+                }
+                document.removeEventListener('keydown', userInteraction);
+                document.removeEventListener('mousedown', userInteraction);
+                document.removeEventListener('touchstart', userInteraction);
+            }
+
+            document.addEventListener('keydown', userInteraction);
+            document.addEventListener('mousedown', userInteraction);
+            document.addEventListener('touchstart', userInteraction);
+            
+
+            // --- Game Entities ---
+            class Player {
+                constructor() {
+                    this.targetLane = 1;
+                    this.currentLane = 1;
+                    this.laneProgress = 1;
+                    this.size = canvas.width * PLAYER_CONFIG.size;
+                    this.y = canvas.height * 0.8;
+                }
+
+                move(direction) {
+                    if (this.laneProgress < 1) return; // can't move while moving
+                    const newLane = this.targetLane + direction;
+                    if (newLane >= 0 && newLane < TRACK_CONFIG.lanes) {
+                        this.targetLane = newLane;
+                        this.laneProgress = 0;
+                        playSound('move');
+                    }
+                }
+
+                update(deltaTime) {
+                    if (this.laneProgress < 1) {
+                        this.laneProgress += deltaTime / PLAYER_CONFIG.laneChangeSpeed;
+                        if (this.laneProgress >= 1) {
+                            this.laneProgress = 1;
+                            this.currentLane = this.targetLane;
+                        }
+                    }
+                    // Recalculate size and position every frame to be responsive
+                    this.y = canvas.height * 0.8;
+                    this.size = canvas.width * PLAYER_CONFIG.size;
+                }
+                
+                getX() {
+                    const fromLaneX = getLaneCenterX(this.currentLane);
+                    const toLaneX = getLaneCenterX(this.targetLane);
+                    const easedProgress = 0.5 - 0.5 * Math.cos(this.laneProgress * Math.PI);
+                    return fromLaneX + (toLaneX - fromLaneX) * easedProgress;
+                }
+
+                draw() {
+                    const x = this.getX();
+                    ctx.font = `${this.size}px Arial`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('🚀', x, this.y);
+                }
+            }
+
+            class Entity {
+                constructor(lane) {
+                    this.lane = lane;
+                    this.y = -canvas.height * 0.1;
+                    this.size = canvas.width * 0.05;
+                    this.offscreen = false;
+                }
+
+                update(deltaTime) {
+                    // Recalculate base size every frame to handle window resizing
+                    this.size = canvas.width * 0.05;
+                    const perspectiveScale = (this.y / canvas.height) * (1 - TRACK_CONFIG.perspective) + TRACK_CONFIG.perspective;
+                    this.y += gameSpeed * deltaTime * perspectiveScale;
+                    if (this.y > canvas.height + this.size) {
+                        this.offscreen = true;
+                    }
+                }
+
+                draw() {
+                    const x = getLaneCenterX(this.lane);
+                    const perspectiveScale = (this.y / canvas.height) * (1 - TRACK_CONFIG.perspective) + TRACK_CONFIG.perspective;
+                    const scaledSize = this.size * perspectiveScale;
+                    const perspectiveX = canvas.width / 2 + (x - canvas.width / 2) * perspectiveScale;
+                    
+                    this.drawShape(perspectiveX, this.y, scaledSize);
+                }
+            }
+
+            class Obstacle extends Entity {
+                constructor(lane) {
+                    super(lane);
+                    this.type = 'obstacle';
+                    this.color = `hsl(${rand(0, 50)}, 100%, 50%)`;
+                }
+
+                drawShape(x, y, size) {
+                    ctx.fillStyle = this.color;
+                    ctx.shadowColor = this.color;
+                    ctx.shadowBlur = 15;
+                    ctx.fillRect(x - size / 2, y - size / 2, size, size);
+                    ctx.shadowBlur = 0;
+                }
+            }
+
+            class Collectible extends Entity {
+                constructor(lane) {
+                    super(lane);
+                    this.type = 'collectible';
+                }
+
+                drawShape(x, y, size) {
+                    ctx.font = `${size}px Arial`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.shadowColor = '#ffff00';
+                    ctx.shadowBlur = 20;
+                    ctx.fillText('⭐', x, y);
+                    ctx.shadowBlur = 0;
+                }
+            }
+
+            class Particle {
+                constructor(x, y, color) {
+                    this.x = x;
+                    this.y = y;
+                    this.vx = rand(-2, 2);
+                    this.vy = rand(-2, 2);
+                    this.life = 1;
+                    this.size = rand(2, 6);
+                    this.color = color;
+                }
+
+                update(deltaTime) {
+                    this.x += this.vx;
+                    this.y += this.vy;
+                    this.life -= deltaTime * 2;
+                }
+
+                draw() {
+                    ctx.globalAlpha = Math.max(0, this.life);
+                    ctx.fillStyle = this.color;
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.globalAlpha = 1;
+                }
+            }
+            
+            class Starfield {
+                constructor(count) {
+                    this.stars = [];
+                    for(let i = 0; i < count; i++) {
+                        this.stars.push({
+                            x: rand(0, canvas.width),
+                            y: rand(0, canvas.height),
+                            z: rand(1, 5)
+                        });
+                    }
+                }
+
+                update(deltaTime) {
+                    this.stars.forEach(star => {
+                        star.y += gameSpeed * deltaTime * 0.05 * star.z;
+                        if (star.y > canvas.height) {
+                            star.y = 0;
+                            star.x = rand(0, canvas.width);
+                        }
+                    });
+                }
+                
+                draw() {
+                    ctx.fillStyle = '#fff';
+                    this.stars.forEach(star => {
+                        const size = star.z * 0.5;
+                        ctx.globalAlpha = star.z / 5;
+                        ctx.fillRect(star.x - size/2, star.y - size/2, size, size);
+                    });
+                    ctx.globalAlpha = 1;
+                }
+            }
+
+            // --- Game Objects ---
+            let player;
+            let entities;
+            let particles;
+            let starfield;
+            let pulseAnimation = 0;
+
+            // --- Canvas & Sizing ---
+            function resizeCanvas() {
+                const dpr = window.devicePixelRatio || 1;
+                const rect = canvas.getBoundingClientRect();
+                canvas.width = rect.width * dpr;
+                canvas.height = rect.height * dpr;
+                ctx.scale(dpr, dpr);
+            }
+            
+            function setupSizing() {
+                const setCanvasDimensions = () => {
+                    canvas.style.width = `${window.innerWidth}px`;
+                    canvas.style.height = `${window.innerHeight}px`;
+                    resizeCanvas();
+                };
+                setCanvasDimensions();
+                window.addEventListener('resize', setCanvasDimensions);
+            }
+            setupSizing();
+
+            // --- Game Logic ---
+            function getLaneCenterX(lane) {
+                const totalTrackWidth = TRACK_CONFIG.laneWidth * canvas.width * TRACK_CONFIG.lanes;
+                const trackStart = (canvas.width - totalTrackWidth) / 2;
+                return trackStart + (lane + 0.5) * (TRACK_CONFIG.laneWidth * canvas.width);
+            }
+
+            function spawnEntity() {
+                const lane = Math.floor(rand(0, TRACK_CONFIG.lanes));
+                if (Math.random() < GAME_CONFIG.collectibleChance) {
+                    entities.push(new Collectible(lane));
+                } else {
+                    entities.push(new Obstacle(lane));
+                }
+            }
+            
+            function checkCollisions() {
+                const playerX = player.getX();
+                const playerY = player.y;
+                const playerSize = player.size * 0.6; // Smaller hitbox
+
+                entities.forEach(entity => {
+                    const perspectiveScale = (entity.y / canvas.height) * (1 - TRACK_CONFIG.perspective) + TRACK_CONFIG.perspective;
+                    const entitySize = entity.size * perspectiveScale;
+                    const entityX = canvas.width / 2 + (getLaneCenterX(entity.lane) - canvas.width / 2) * perspectiveScale;
+
+
+                    if (Math.abs(playerY - entity.y) < playerSize/2 + entitySize/2 &&
+                        Math.abs(playerX - entityX) < playerSize/2 + entitySize/2)
+                    {
+                        if (entity.type === 'obstacle') {
+                            endGame();
+                        } else if (entity.type === 'collectible' && !entity.collected) {
+                            entity.collected = true;
+                            entity.offscreen = true;
+                            score += 100;
+                            createExplosion(entityX, entity.y, '#ffd700');
+                            playSound('collect');
+                        }
+                    }
+                });
+            }
+            
+            function createExplosion(x, y, color) {
+                for (let i = 0; i < 30; i++) {
+                    particles.push(new Particle(x, y, color));
+                }
+            }
+
+            function resetGame() {
+                player = new Player();
+                entities = [];
+                particles = [];
+                if(!starfield) starfield = new Starfield(100);
+                score = 0;
+                gameSpeed = GAME_CONFIG.initialSpeed;
+                spawnTimer = GAME_CONFIG.spawnInterval;
+            }
+
+            function startGame() {
+                resetGame();
+                gameState = 'playing';
+            }
+
+            function endGame() {
+                gameState = 'gameOver';
+                if (score > highScore) {
+                    highScore = score;
+                    localStorage.setItem('pulseRiderHighScore', highScore);
+                }
+                createExplosion(player.getX(), player.y, '#ff4444');
+                playSound('gameOver');
+            }
+
+            // --- Drawing ---
+            function drawTrack() {
+                ctx.strokeStyle = '#6a0dad';
+                ctx.lineWidth = 3;
+                
+                pulseAnimation += 0.05;
+                const pulse = (Math.sin(pulseAnimation) + 1) / 2; // 0 to 1
+                ctx.shadowColor = `rgba(224, 11, 224, ${0.5 + pulse * 0.5})`;
+                ctx.shadowBlur = 20;
+
+                const horizonY = canvas.height * 0.4;
+                for (let i = 0; i <= TRACK_CONFIG.lanes; i++) {
+                    const totalTrackWidth = TRACK_CONFIG.laneWidth * canvas.width * TRACK_CONFIG.lanes;
+                    const trackStart = (canvas.width - totalTrackWidth) / 2;
+                    const xBottom = trackStart + i * (TRACK_CONFIG.laneWidth * canvas.width);
+                    const xTop = canvas.width / 2 + (xBottom - canvas.width / 2) * TRACK_CONFIG.perspective;
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(xBottom, canvas.height);
+                    ctx.lineTo(xTop, horizonY);
+                    ctx.stroke();
+                }
+                ctx.shadowBlur = 0;
+            }
+
+            function drawUI() {
+                ctx.fillStyle = '#fff';
+                ctx.font = '24px "Segoe UI", sans-serif';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'top';
+                ctx.fillText(`Score: ${score}`, 20, 20);
+                ctx.textAlign = 'right';
+                ctx.fillText(`High Score: ${highScore}`, canvas.width - 20, 20);
+            }
+            
+            function drawStartScreen() {
+                ctx.fillStyle = 'rgba(0,0,0,0.5)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                
+                ctx.fillStyle = '#fff';
+                ctx.font = `bold ${canvas.width * 0.1}px "Segoe UI", sans-serif`;
+                ctx.shadowColor = '#f0f';
+                ctx.shadowBlur = 20;
+                ctx.fillText('Pulse Rider', canvas.width / 2, canvas.height * 0.3);
+                ctx.shadowBlur = 0;
+
+                ctx.font = `${canvas.width * 0.03}px "Segoe UI", sans-serif`;
+                ctx.fillText('Press Enter or Click to Start', canvas.width / 2, canvas.height * 0.5);
+
+                ctx.font = `${canvas.width * 0.025}px "Segoe UI", sans-serif`;
+                ctx.fillText('Controls:', canvas.width / 2, canvas.height * 0.65);
+                ctx.fillText('← / → Arrow Keys to Move', canvas.width / 2, canvas.height * 0.72);
+                ctx.fillText('Click/Tap on Left/Right side of screen', canvas.width / 2, canvas.height * 0.79);
+
+            }
+            
+            function drawGameOverScreen() {
+                ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+
+                ctx.fillStyle = '#ff4444';
+                ctx.font = `bold ${canvas.width * 0.12}px "Segoe UI", sans-serif`;
+                ctx.shadowColor = '#f00';
+                ctx.shadowBlur = 20;
+                ctx.fillText('GAME OVER', canvas.width / 2, canvas.height * 0.35);
+                ctx.shadowBlur = 0;
+                
+                ctx.fillStyle = '#fff';
+                ctx.font = `${canvas.width * 0.05}px "Segoe UI", sans-serif`;
+                ctx.fillText(`Your Score: ${score}`, canvas.width / 2, canvas.height * 0.5);
+
+                ctx.font = `${canvas.width * 0.03}px "Segoe UI", sans-serif`;
+                ctx.fillText('Press Enter or Click to Restart', canvas.width / 2, canvas.height * 0.65);
+            }
+
+
+            // --- Main Game Loop ---
+            function gameLoop(timestamp) {
+                if (!lastTime) {
+                    lastTime = timestamp;
+                }
+                const deltaTime = (timestamp - lastTime) / 1000;
+                lastTime = timestamp;
+
+                // Clear canvas
+                const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                gradient.addColorStop(0, '#0c001f');
+                gradient.addColorStop(1, '#1f003b');
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                if (gameState === 'start') {
+                    if(starfield) starfield.draw();
+                    drawTrack();
+                    drawStartScreen();
+                } else if (gameState === 'playing') {
+                    // Update
+                    gameSpeed += GAME_CONFIG.speedIncrease * deltaTime;
+                    score += Math.floor(gameSpeed * deltaTime * 10);
+                    spawnTimer -= deltaTime;
+                    if (spawnTimer <= 0) {
+                        spawnEntity();
+                        spawnTimer = GAME_CONFIG.spawnInterval / (gameSpeed / GAME_CONFIG.initialSpeed);
+                    }
+
+                    player.update(deltaTime);
+                    starfield.update(deltaTime);
+                    entities.forEach(e => e.update(deltaTime));
+                    particles.forEach(p => p.update(deltaTime));
+                    
+                    entities = entities.filter(e => !e.offscreen);
+                    particles = particles.filter(p => p.life > 0);
+
+                    checkCollisions();
+
+                    // Draw
+                    starfield.draw();
+                    drawTrack();
+                    entities.forEach(e => e.draw());
+                    player.draw();
+                    particles.forEach(p => p.draw());
+                    drawUI();
+                } else if (gameState === 'gameOver') {
+                    starfield.draw();
+                    drawTrack();
+                    entities.forEach(e => e.draw());
+                    particles.forEach(p => p.update(deltaTime));
+                    particles = particles.filter(p => p.life > 0);
+                    particles.forEach(p => p.draw());
+                    drawGameOverScreen();
+                }
+
+                requestAnimationFrame(gameLoop);
+            }
+
+            // --- Input Handling ---
+            function handleKeyDown(e) {
+                if (gameState === 'playing') {
+                    if (e.key === 'ArrowLeft') player.move(-1);
+                    if (e.key === 'ArrowRight') player.move(1);
+                } else if ((gameState === 'start' || gameState === 'gameOver') && e.key === 'Enter') {
+                    startGame();
+                }
+            }
+
+            function handleMouseInput(e) {
+                if (gameState === 'start' || gameState === 'gameOver') {
+                    startGame();
+                    return;
+                }
+                if (gameState === 'playing') {
+                    let clickX;
+                    if (e.touches && e.touches.length > 0) {
+                        clickX = e.touches[0].clientX;
+                    } else {
+                        clickX = e.clientX;
+                    }
+
+                    if (clickX < window.innerWidth / 2) {
+                        player.move(-1);
+                    } else {
+                        player.move(1);
+                    }
+                }
+            }
+            
+            window.addEventListener('keydown', handleKeyDown);
+            canvas.addEventListener('mousedown', handleMouseInput);
+            canvas.addEventListener('touchstart', handleMouseInput, { passive: true });
+
+            // --- Start the game ---
+            resetGame();
+            requestAnimationFrame(gameLoop);
+        });
+    </script>
+</body>
+</html>
