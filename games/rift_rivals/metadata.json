@@ -1,0 +1,8 @@
+{
+  "name": "Rift Rivals",
+  "type": "platform fighting game",
+  "folder": "rift_rivals",
+  "description": "Rip open dimensional rifts to teleport, attack, and manipulate the very stage beneath your rivals' feet. Master the chaos of an ever-changing battlefield to deliver reality-shattering combos and claim victory.",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
