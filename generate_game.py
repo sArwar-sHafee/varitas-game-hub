@@ -8,7 +8,7 @@ import colorsys
 import requests
 from io import BytesIO
 import os
-from game_type import GAME_TYPES
+from game_types import GAME_TYPES
 
 # Configure Gemini API
 API_KEY = os.environ.get('GEMINI_API_KEY')
