@@ -8,59 +8,11 @@ import colorsys
 import requests
 from io import BytesIO
 import os
+from game_type import GAME_TYPES
 
 # Configure Gemini API
 API_KEY = os.environ.get('GEMINI_API_KEY')
 genai.configure(api_key=API_KEY)
-
-# Game types to randomly choose from
-GAME_TYPES = [
-    "2D platformer",
-    "puzzle game",
-    "memory card game",
-    "snake game",
-    "breakout/brick breaker",
-    "tic-tac-toe with AI",
-    "space shooter",
-    "maze game",
-    "whack-a-mole",
-    "simon says memory game",
-    "color matching game",
-    "number guessing game",
-    "rock paper scissors",
-    "bubble shooter",
-    "word scramble game",
-    "hangman",
-    "chess",
-    "checkers",
-    "sudoku",
-    "crossword puzzle",
-    "minesweeper",
-    "flappy bird clone",
-    "endless runner",
-    "racing game (top-down or side-view)",
-    "platform fighting game",
-    "tower defense",
-    "clicker/idle game",
-    "2048 number merge",
-    "connect four",
-    "battleship",
-    "typing speed game",
-    "trivia quiz game",
-    "doodle jump clone",
-    "pong",
-    "air hockey",
-    "pinball",
-    "platform adventure (Metroidvania-lite)",
-    "stealth/avoidance game",
-    "word search",
-    "hidden object game",
-    "turn-based RPG battle",
-    "text adventure / interactive fiction",
-    "roguelike dungeon crawler",
-    "city builder (simplified)",
-    "card battle game (like Hearthstone-lite)"
-]
 
 def generate_cover_image_with_ai(game_name, game_type, game_description, output_path, model):
     """Generate a cover image using Gemini's Imagen model"""
@@ -83,7 +35,10 @@ def generate_cover_image_with_ai(game_name, game_type, game_description, output_
 
         # Try to use Imagen 3 for image generation
         try:
-            imagen = genai.ImageGenerationModel("imagen-3.0-generate-001")
+            try:
+                imagen = genai.ImageGenerationModel("imagen-4.0-generate-001")
+            except:    
+                imagen = genai.ImageGenerationModel("imagen-3.0-generate-001")
             response = imagen.generate_images(
                 prompt=image_prompt,
                 number_of_images=1,
@@ -235,7 +190,7 @@ def generate_game():
     print(f"Generating {game_type}...")
 
     # Initialize Gemini model
-    model = genai.GenerativeModel('gemini-2.5-pro')
+    model = genai.GenerativeModel('gemini-3-pro-preview')
 
     # Generate game name
     name_prompt = f"""Generate a creative, catchy, and unique name for a {game_type} game.
