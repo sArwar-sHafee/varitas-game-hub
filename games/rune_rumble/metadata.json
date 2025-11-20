@@ -1,0 +1,8 @@
+{
+  "name": "Rune Rumble",
+  "type": "gesture-drawing action games",
+  "folder": "rune_rumble",
+  "description": "Unleash magical chaos with a flick of your finger as you frantically sketch runes to blast away relentless hordes. **Rune Rumble** turns your screen into a high-speed battlefield where every swipe summons spectacular spells in an electrifying test of arcane mastery!",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
