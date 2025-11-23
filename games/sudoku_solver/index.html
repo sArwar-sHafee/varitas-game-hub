@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sudoku</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        #game-container {
+            text-align: center;
+        }
+        #sudoku-grid {
+            display: grid;
+            grid-template-columns: repeat(9, 50px);
+            grid-template-rows: repeat(9, 50px);
+            border: 3px solid #333;
+        }
+        .cell {
+            width: 50px;
+            height: 50px;
+            border: 1px solid #ccc;
+            text-align: center;
+            font-size: 24px;
+            line-height: 50px;
+            -moz-user-select: none;
+            -webkit-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+        }
+        .cell.fixed {
+            background-color: #eee;
+            font-weight: bold;
+        }
+        .cell.selected {
+            background-color: #a2d2ff;
+        }
+        .cell.highlight {
+            background-color: #e0e0e0;
+        }
+        .cell.error {
+            color: red;
+        }
+        #controls {
+            margin-top: 20px;
+        }
+        #controls button, #controls select {
+            padding: 10px;
+            font-size: 16px;
+        }
+        #timer {
+            margin-top: 10px;
+            font-size: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <h1>Sudoku</h1>
+        <div id="sudoku-grid"></div>
+        <div id="controls">
+            <select id="difficulty">
+                <option value="easy">Easy</option>
+                <option value="medium">Medium</option>
+                <option value="hard">Hard</option>
+            </select>
+            <button id="new-game">New Game</button>
+        </div>
+        <div id="timer">00:00</div>
+    </div>
+
+    <script>
+        const grid = document.getElementById('sudoku-grid');
+        const newGameBtn = document.getElementById('new-game');
+        const difficultySelect = document.getElementById('difficulty');
+        const timerDisplay = document.getElementById('timer');
+
+        let timer;
+        let seconds = 0;
+        let board = [];
+        let solution = [];
+        let selectedCell = null;
+        let userBoard = [];
+        let gameWon = false;
+
+        function generatePuzzle(difficulty) {
+            let base = 3;
+            let side = base * base;
+
+            function shuffle(array) {
+                let currentIndex = array.length, randomIndex;
+                while (currentIndex !== 0) {
+                    randomIndex = Math.floor(Math.random() * currentIndex);
+                    currentIndex--;
+                    [array[currentIndex], array[randomIndex]] = [
+                        array[randomIndex], array[currentIndex]];
+                }
+                return array;
+            }
+
+            function pattern(r, c) {
+                return (base * (r % base) + Math.floor(r / base) + c) % side;
+            }
+
+            let rBase = shuffle([...Array(base).keys()]);
+            let rowGroups = shuffle([...Array(base).keys()]);
+            let colGroups = shuffle([...Array(base).keys()]);
+
+            let nums = shuffle([...Array(side).keys()].map(x => x + 1));
+
+            board = Array(side).fill(0).map(() => Array(side).fill(0));
+
+            for (let r = 0; r < side; r++) {
+                for (let c = 0; c < side; c++) {
+                    board[r][c] = nums[pattern(rowGroups[Math.floor(r / base)] * base + rBase[r % base], colGroups[Math.floor(c / base)] * base + (c % base))];
+                }
+            }
+
+            solution = JSON.parse(JSON.stringify(board));
+
+            let cellsToRemove;
+            if (difficulty === 'easy') cellsToRemove = 40;
+            else if (difficulty === 'medium') cellsToRemove = 50;
+            else cellsToRemove = 60;
+
+            let attempts = cellsToRemove;
+            while(attempts > 0) {
+                let row = Math.floor(Math.random() * side);
+                let col = Math.floor(Math.random() * side);
+
+                if(board[row][col] !== 0) {
+                    board[row][col] = 0;
+                    attempts--;
+                }
+            }
+            userBoard = JSON.parse(JSON.stringify(board));
+        }
+
+        function createGrid() {
+            grid.innerHTML = '';
+            for (let r = 0; r < 9; r++) {
+                for (let c = 0; c < 9; c++) {
+                    const cell = document.createElement('div');
+                    cell.classList.add('cell');
+                    cell.dataset.row = r;
+                    cell.dataset.col = c;
+                    if (board[r][c] !== 0) {
+                        cell.textContent = board[r][c];
+                        cell.classList.add('fixed');
+                    } else {
+                        cell.addEventListener('click', () => {
+                             if (selectedCell) selectedCell.classList.remove('selected');
+                             selectedCell = cell;
+                             selectedCell.classList.add('selected');
+                             highlightRelatedCells(r,c);
+                        });
+                    }
+                    grid.appendChild(cell);
+                }
+            }
+        }
+
+        function startTimer() {
+            seconds = 0;
+            gameWon = false;
+            clearInterval(timer);
+            timer = setInterval(() => {
+                if (gameWon) return;
+                seconds++;
+                const minutes = Math.floor(seconds / 60).toString().padStart(2, '0');
+                const secs = (seconds % 60).toString().padStart(2, '0');
+                timerDisplay.textContent = `${minutes}:${secs}`;
+            }, 1000);
+        }
+
+        function newGame() {
+            const difficulty = difficultySelect.value;
+            generatePuzzle(difficulty);
+            createGrid();
+            startTimer();
+        }
+
+        function highlightRelatedCells(row, col) {
+            document.querySelectorAll('.cell.highlight').forEach(c => c.classList.remove('highlight'));
+
+            for(let i=0; i<9; i++) {
+                grid.querySelector(`[data-row='${row}'][data-col='${i}']`).classList.add('highlight');
+                grid.querySelector(`[data-row='${i}'][data-col='${col}']`).classList.add('highlight');
+            }
+
+            const startRow = Math.floor(row / 3) * 3;
+            const startCol = Math.floor(col / 3) * 3;
+            for (let r = 0; r < 3; r++) {
+                for (let c = 0; c < 3; c++) {
+                    grid.querySelector(`[data-row='${startRow + r}'][data-col='${startCol + c}']`).classList.add('highlight');
+                }
+            }
+        }
+
+        function checkWin() {
+            for (let r = 0; r < 9; r++) {
+                for (let c = 0; c < 9; c++) {
+                    if (userBoard[r][c] !== solution[r][c]) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        window.addEventListener('keydown', (e) => {
+            if (gameWon || !selectedCell) return;
+
+            const row = selectedCell.dataset.row;
+            const col = selectedCell.dataset.col;
+
+            if (e.key >= '1' && e.key <= '9') {
+                selectedCell.textContent = e.key;
+                userBoard[row][col] = parseInt(e.key);
+
+                if (solution[row][col] !== userBoard[row][col]) {
+                   selectedCell.classList.add('error');
+                } else {
+                   selectedCell.classList.remove('error');
+                }
+
+                if (checkWin()) {
+                    gameWon = true;
+                    clearInterval(timer);
+                    setTimeout(() => alert('Congratulations! You solved the puzzle!'), 100);
+                }
+            } else if (e.key === 'Backspace' || e.key === 'Delete') {
+                selectedCell.textContent = '';
+                userBoard[row][col] = 0;
+                selectedCell.classList.remove('error');
+            }
+        });
+
+
+        newGameBtn.addEventListener('click', newGame);
+        newGame();
+    </script>
+</body>
+</html>

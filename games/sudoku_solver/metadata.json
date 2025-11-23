@@ -1,0 +1,8 @@
+{
+  "name": "Sudoku Solver",
+  "type": "puzzle game",
+  "folder": "sudoku_solver",
+  "description": "A classic Sudoku game with multiple difficulty levels. Train your brain and solve the puzzle!",
+  "cover": "cover.png",
+  "main_file": "index.html"
+}
