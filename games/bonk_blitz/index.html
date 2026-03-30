@@ -139,6 +139,9 @@
     <script>
         const canvas = document.getElementById('game-canvas');
         const ctx = canvas.getContext('2d');
+        const rootStyles = getComputedStyle(document.documentElement);
+        const HOLE_COLOR_1 = rootStyles.getPropertyValue('--hole-color-1').trim();
+        const HOLE_COLOR_2 = rootStyles.getPropertyValue('--hole-color-2').trim();
 
         const startScreen = document.getElementById('start-screen');
         const gameOverScreen = document.getElementById('game-over-screen');
@@ -523,13 +526,13 @@
             const holeSize = Math.min(canvas.width, canvas.height) / 9;
             holePositions.forEach(pos => {
                 // Hole shadow/depth
-                ctx.fillStyle = 'var(--hole-color-2)';
+                ctx.fillStyle = HOLE_COLOR_2;
                 ctx.beginPath();
                 ctx.ellipse(pos.x, pos.y, holeSize / 1.8, holeSize / 4, 0, 0, Math.PI * 2);
                 ctx.fill();
 
                 // Hole lip
-                ctx.fillStyle = 'var(--hole-color-1)';
+                ctx.fillStyle = HOLE_COLOR_1;
                 ctx.beginPath();
                 ctx.ellipse(pos.x, pos.y - holeSize / 20, holeSize / 1.7, holeSize / 3.5, 0, 0, Math.PI * 2);
                 ctx.fill();

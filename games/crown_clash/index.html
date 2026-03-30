@@ -360,8 +360,10 @@
 
             function drawPieces() {
                 for (let row = 0; row < BOARD_SIZE; row++) {
+                    const boardRow = board[row];
+                    if (!boardRow) continue;
                     for (let col = 0; col < BOARD_SIZE; col++) {
-                        const piece = board[row][col];
+                        const piece = boardRow[col];
                         // Don't draw pieces that are currently being animated
                         if (piece !== Piece.EMPTY && !animatedPieces.some(p => p.from.row === row && p.from.col === col)) {
                             drawPiece(col, row, piece);
@@ -372,33 +374,34 @@
             
             function drawPiece(col, row, piece, x = col * tileSize + tileSize / 2, y = row * tileSize + tileSize / 2) {
                 const radius = tileSize * 0.4;
+                const isPlayer1 = piece === Piece.PLAYER1 || piece === Piece.PLAYER1_KING;
+                const isKing = piece === Piece.PLAYER1_KING || piece === Piece.PLAYER2_KING;
                 
                 // Base piece color
-                if (piece === Piece.PLAYER1 || piece === Piece.PLAYER1_KING) {
-                    ctx.fillStyle = '#c82b1d'; // Red
-                } else if (piece === Piece.PLAYER2 || piece === Piece.PLAYER2_KING) {
-                    ctx.fillStyle = '#1e1e1e'; // Black
-                }
+                ctx.fillStyle = isPlayer1 ? '#c82b1d' : '#2f3d4d';
                 
                 // Draw piece circle
                 ctx.beginPath();
                 ctx.arc(x, y, radius, 0, Math.PI * 2);
                 ctx.fill();
+                ctx.lineWidth = Math.max(2, tileSize * 0.05);
+                ctx.strokeStyle = isPlayer1 ? 'rgba(255, 235, 230, 0.9)' : 'rgba(230, 236, 245, 0.95)';
+                ctx.stroke();
                 
                 // Add a subtle gradient for 3D effect
                 const gradient = ctx.createRadialGradient(x - radius/3, y - radius/3, radius/5, x, y, radius);
-                if (piece === Piece.PLAYER1 || piece === Piece.PLAYER1_KING) {
+                if (isPlayer1) {
                     gradient.addColorStop(0, 'rgba(255, 150, 150, 0.9)');
                     gradient.addColorStop(1, 'rgba(200, 43, 29, 0)');
                 } else {
-                    gradient.addColorStop(0, 'rgba(150, 150, 150, 0.7)');
-                    gradient.addColorStop(1, 'rgba(30, 30, 30, 0)');
+                    gradient.addColorStop(0, 'rgba(215, 225, 240, 0.95)');
+                    gradient.addColorStop(1, 'rgba(47, 61, 77, 0)');
                 }
                 ctx.fillStyle = gradient;
                 ctx.fill();
                 
                 // Draw king symbol
-                if (piece === Piece.PLAYER1_KING || piece === Piece.PLAYER2_KING) {
+                if (isKing) {
                     ctx.font = `${tileSize * 0.5}px Arial`;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';

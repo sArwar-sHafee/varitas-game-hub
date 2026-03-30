@@ -56,6 +56,16 @@
         // --- GAME SETUP ---
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
+        const rootStyles = getComputedStyle(document.documentElement);
+        const THEME_COLORS = {
+            bgGradStart: rootStyles.getPropertyValue('--bg-grad-start').trim(),
+            bgGradEnd: rootStyles.getPropertyValue('--bg-grad-end').trim(),
+            cardBackGradStart: rootStyles.getPropertyValue('--card-back-grad-start').trim(),
+            cardBackGradEnd: rootStyles.getPropertyValue('--card-back-grad-end').trim(),
+            cardFace: rootStyles.getPropertyValue('--card-face-color').trim(),
+            shadow: rootStyles.getPropertyValue('--shadow-color').trim(),
+            glow: rootStyles.getPropertyValue('--glow-color').trim()
+        };
 
         // --- GAME STATE & CONSTANTS ---
         const GAME_STATE = {
@@ -208,7 +218,7 @@
                 ctx.closePath();
                 
                 if (this.isFlipped || this.isMatched) {
-                    ctx.fillStyle = this.isMatched ? '#a8e6cf' : 'var(--card-face-color)';
+                    ctx.fillStyle = this.isMatched ? '#a8e6cf' : THEME_COLORS.cardFace;
                     ctx.fill();
                     
                     ctx.shadowColor = 'transparent';
@@ -219,8 +229,8 @@
                     ctx.fillText(this.emoji, this.x + this.size / 2, this.y + this.size / 2 + (this.size * 0.05));
                 } else {
                     const gradient = ctx.createLinearGradient(this.x, this.y, this.x + this.size, this.y + this.size);
-                    gradient.addColorStop(0, 'var(--card-back-grad-start)');
-                    gradient.addColorStop(1, 'var(--card-back-grad-end)');
+                    gradient.addColorStop(0, THEME_COLORS.cardBackGradStart);
+                    gradient.addColorStop(1, THEME_COLORS.cardBackGradEnd);
                     ctx.fillStyle = gradient;
                     ctx.fill();
 
@@ -317,20 +327,20 @@
         }
 
         // --- DRAWING FUNCTIONS ---
-        function drawBackground() {
-            const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-            gradient.addColorStop(0, 'var(--bg-grad-start)');
-            gradient.addColorStop(1, 'var(--bg-grad-end)');
-            ctx.fillStyle = gradient;
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-        }
+            function drawBackground() {
+                const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+                gradient.addColorStop(0, THEME_COLORS.bgGradStart);
+                gradient.addColorStop(1, THEME_COLORS.bgGradEnd);
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
 
         function drawTextWithGlow(text, x, y, fontSize, color, align = 'center') {
             ctx.font = `${fontSize}px Arial`;
             ctx.textAlign = align;
             ctx.textBaseline = 'middle';
             
-            ctx.shadowColor = 'var(--glow-color)';
+            ctx.shadowColor = THEME_COLORS.glow;
             ctx.shadowBlur = 15;
             ctx.fillStyle = color;
             ctx.fillText(text, x, y);
@@ -355,10 +365,10 @@
             
             ctx.save();
             if (isHovered) {
-                ctx.shadowColor = 'var(--glow-color)';
+                ctx.shadowColor = THEME_COLORS.glow;
                 ctx.shadowBlur = 20;
             } else {
-                ctx.shadowColor = 'var(--shadow-color)';
+                ctx.shadowColor = THEME_COLORS.shadow;
                 ctx.shadowBlur = 10;
                 ctx.shadowOffsetX = 2;
                 ctx.shadowOffsetY = 4;

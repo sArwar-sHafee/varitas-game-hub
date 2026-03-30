@@ -17,6 +17,7 @@
             display: block;
             background: #16213e; /* Slightly lighter game area */
             background-image: radial-gradient(circle, #1a1a2e, #16213e, #0f3460);
+            touch-action: none;
         }
     </style>
 </head>
@@ -346,9 +347,9 @@
     }
 
     class Game {
-        constructor(canvas) {
-            this.canvas = canvas;
-            this.ctx = canvas.getContext('2d');
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
             this.width = 0;
             this.height = 0;
             this.scale = 1;
@@ -366,15 +367,16 @@
             this.dragOffsetY = 0;
             
             this.selectedCard = null;
-            this.effects = []; // For particles, damage numbers, etc.
+                this.effects = []; // For particles, damage numbers, etc.
 
-            this.resize();
-            window.addEventListener('resize', () => this.resize());
-            this.canvas.addEventListener('mousedown', (e) => this.onMouseDown(e));
-            this.canvas.addEventListener('mouseup', (e) => this.onMouseUp(e));
-            this.canvas.addEventListener('mousemove', (e) => this.onMouseMove(e));
-            window.addEventListener('keydown', (e) => this.onKeyDown(e));
-        }
+                this.resize();
+                window.addEventListener('resize', () => this.resize());
+                this.canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
+                window.addEventListener('pointerup', (e) => this.onPointerUp(e));
+                window.addEventListener('pointermove', (e) => this.onPointerMove(e));
+                window.addEventListener('pointercancel', () => this.cancelPointer());
+                window.addEventListener('keydown', (e) => this.onKeyDown(e));
+            }
 
         resize() {
             const dpr = window.devicePixelRatio || 1;
@@ -409,12 +411,15 @@
             this.nextTurn();
         }
         
-        onMouseDown(e) {
-            sound.init(); // Initialize audio on first user interaction
-            
+        updatePointerPosition(e) {
             const rect = this.canvas.getBoundingClientRect();
             this.mouse.x = e.clientX - rect.left;
             this.mouse.y = e.clientY - rect.top;
+        }
+
+        onPointerDown(e) {
+            sound.init(); // Initialize audio on first user interaction
+            this.updatePointerPosition(e);
             this.mouse.down = true;
 
             if (this.state === 'PLAYING' && this.currentPlayer === this.player) {
@@ -442,10 +447,11 @@
                 }
             }
         }
-        
-        onMouseUp(e) {
+
+        onPointerUp(e) {
+            this.updatePointerPosition(e);
             this.mouse.down = false;
-            
+
             if (this.state === 'PLAYING') {
                 if (this.draggingCard) {
                     // Try to play card
@@ -491,10 +497,8 @@
             }
         }
 
-        onMouseMove(e) {
-            const rect = this.canvas.getBoundingClientRect();
-            this.mouse.x = e.clientX - rect.left;
-            this.mouse.y = e.clientY - rect.top;
+        onPointerMove(e) {
+            this.updatePointerPosition(e);
 
             if (this.draggingCard) {
                 this.draggingCard.targetX = this.mouse.x - this.dragOffsetX;
@@ -504,6 +508,12 @@
                     card.isHovered = this.isMouseOver(card);
                 });
             }
+        }
+
+        cancelPointer() {
+            this.mouse.down = false;
+            this.draggingCard = null;
+            this.selectedCard = null;
         }
         
         onKeyDown(e) {
